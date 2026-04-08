@@ -10,6 +10,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
@@ -24,7 +27,7 @@ jobs:
       - name: Rust tests
         run: cargo test --workspace
       - name: Build wasm package
-        run: wasm-pack build crates/pdf_wasm --target bundler --out-dir ../../packages/ts-sdk/vendor/pdf-wasm
+        run: node scripts/build-wasm.mjs
   web:
     runs-on: ubuntu-latest
     steps:
@@ -38,4 +41,3 @@ jobs:
       - run: pnpm install --frozen-lockfile=false
       - run: pnpm -r build
       - run: pnpm -r test
-

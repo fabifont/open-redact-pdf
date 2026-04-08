@@ -45,6 +45,11 @@ type RawTextMatch = {
 
 let wasmModule: WasmModule | null = null;
 
+/**
+ * Loads the generated WebAssembly module used by the browser-facing SDK.
+ *
+ * Call this once before opening PDFs.
+ */
 export async function initWasm(): Promise<void> {
   if (wasmModule) {
     return;
@@ -60,32 +65,39 @@ function requireWasm(): WasmModule {
   return wasmModule;
 }
 
+/** Opens a PDF from raw bytes and returns an opaque handle. */
 export function openPdf(input: Uint8Array): PdfHandle {
   return requireWasm().openPdf(input);
 }
 
+/** Returns the number of pages in the opened PDF. */
 export function getPageCount(handle: PdfHandle): number {
   return requireWasm().getPageCount(handle);
 }
 
+/** Returns the normalized page size for a zero-based page index. */
 export function getPageSize(handle: PdfHandle, pageIndex: number): PageSize {
   return requireWasm().getPageSize(handle, pageIndex);
 }
 
+/** Extracts page text and geometry for the supported subset. */
 export function extractText(handle: PdfHandle, pageIndex: number): PageText {
   return normalizePageText(requireWasm().extractText(handle, pageIndex));
 }
 
+/** Searches page text in visual order and returns page-space match quads. */
 export function searchText(handle: PdfHandle, pageIndex: number, query: string): TextMatch[] {
   return requireWasm()
     .searchText(handle, pageIndex, query)
     .map(normalizeTextMatch);
 }
 
+/** Applies a redaction plan to the opened handle in place. */
 export function applyRedactions(handle: PdfHandle, plan: RedactionPlan): ApplyReport {
   return requireWasm().applyRedactions(handle, plan);
 }
 
+/** Saves the current document state as a new PDF byte array. */
 export function savePdf(handle: PdfHandle): Uint8Array {
   return requireWasm().savePdf(handle);
 }

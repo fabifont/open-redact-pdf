@@ -1,0 +1,11 @@
+title: Open Redact PDF
+description: Browser-first PDF redaction documentation for Rust, WebAssembly, and TypeScript integrators
+theme: minima
+markdown: kramdown
+permalink: pretty
+
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: default

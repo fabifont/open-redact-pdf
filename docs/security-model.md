@@ -1,3 +1,7 @@
+---
+title: Security Model
+---
+
 # Security Model
 
 ## What counts as redaction
@@ -17,3 +21,8 @@ For this project, redaction means the output PDF no longer contains the redacted
 - Image redaction is conservative and removes whole image draws when they intersect a target.
 - Metadata and attachment stripping are opt-in and limited to supported object layouts.
 
+## Non-goals in the MVP
+
+- pretending to sanitize PDFs outside the supported subset
+- whole-page rasterization as a default fallback
+- UI-only overlays that leave text searchable underneath

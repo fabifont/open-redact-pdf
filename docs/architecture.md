@@ -1,3 +1,7 @@
+---
+title: Architecture
+---
+
 # Architecture
 
 The engine is organized as a Rust workspace with narrow internal crates and a single public facade crate.
@@ -12,10 +16,37 @@ The engine is organized as a Rust workspace with narrow internal crates and a si
 6. `pdf_writer` rewrites the document as a deterministic full save.
 7. `pdf_wasm` exposes the same API to browser code.
 
-## Design Rules
+## Layer boundaries
+
+### Authoring layer
+
+Examples:
+
+- drag rectangles
+- text selections
+- search results
+- future regex or OCR matches
+
+This layer belongs in UI code or higher-level orchestration.
+
+### Canonical target layer
+
+All authoring tools are compiled into page-space geometry targets:
+
+- rectangles
+- quads
+- quad groups
+
+This keeps the apply pipeline independent from specific UI concepts.
+
+### Apply layer
+
+The apply pipeline works from geometry and page content. It does not care whether a target came from a drag interaction or a text search term.
+
+## Design rules
 
 - Page-space geometry is the canonical input to redaction application.
 - UI authoring concepts are kept outside the engine.
 - Unsupported features fail explicitly when they affect correctness.
 - Output preserves unredacted text when content can be safely rewritten.
-
+- Browser integrations should treat preview rendering as separate from redaction logic.

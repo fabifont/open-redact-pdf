@@ -1,3 +1,7 @@
+---
+title: Roadmap
+---
+
 # Roadmap
 
 ## Implemented MVP
@@ -21,3 +25,12 @@
 - Optional-content and hidden-layer sanitization
 - Overlay text stamping
 - Incremental-save preservation
+
+## Documentation policy
+
+When one of these priorities lands, the following docs should be updated in the same change:
+
+- `README.md`
+- `docs/reference/supported-subset.md`
+- the relevant API reference page under `docs/reference/`
+- any affected workflow guide under `docs/guides/`

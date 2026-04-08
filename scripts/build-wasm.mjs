@@ -25,11 +25,16 @@ if (cachedBindgenDir) {
   env.PATH = `${cachedBindgenDir}:${env.PATH ?? ""}`;
 }
 
-const result = spawnSync("wasm-pack", args, {
-  cwd: repoRoot,
-  stdio: "inherit",
-  env,
-});
+const result = run(args, env);
+if (result.status === 0) {
+  process.exit(0);
+}
+
+const stderr = `${result.stderr ?? ""}`;
+if (stderr.includes("Read-only file system")) {
+  const retry = run([...args, "--no-opt"], env);
+  process.exit(retry.status ?? 1);
+}
 
 process.exit(result.status ?? 1);
 
@@ -43,4 +48,20 @@ function findCachedBindgenDir(cacheDir) {
     .filter((directory) => existsSync(join(directory, "wasm-bindgen")))
     .sort((left, right) => statSync(right).mtimeMs - statSync(left).mtimeMs);
   return candidates[0] ?? null;
+}
+
+function run(args, env) {
+  const result = spawnSync("wasm-pack", args, {
+    cwd: repoRoot,
+    stdio: "pipe",
+    env,
+    encoding: "utf8",
+  });
+  if (result.stdout) {
+    process.stdout.write(result.stdout);
+  }
+  if (result.stderr) {
+    process.stderr.write(result.stderr);
+  }
+  return result;
 }

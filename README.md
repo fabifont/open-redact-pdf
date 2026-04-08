@@ -2,6 +2,21 @@
 
 Open Redact PDF is a browser-first PDF redaction engine built in Rust and exposed to the browser through WebAssembly. It works on PDF structure rather than flattening whole pages into images, preserves searchable text outside redacted regions where supported, and removes targeted content inside redactions for a constrained but real subset of unencrypted PDFs.
 
+## Documentation
+
+The repository now includes:
+
+- a root [AGENTS.md](AGENTS.md) file for coding-agent workflow guidance
+- a publishable documentation site under [`docs/`](docs/index.md)
+- code-level API docs in the Rust facade crate and TS SDK source
+
+Key entry points:
+
+- [Documentation home](docs/index.md)
+- [Rust API reference](docs/reference/rust-api.md)
+- [TypeScript and WASM API reference](docs/reference/ts-sdk.md)
+- [Publishing and Context7 guidance](docs/publishing.md)
+
 ## Status
 
 This repository currently targets a deliberately narrow MVP:
