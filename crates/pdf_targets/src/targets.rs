@@ -193,7 +193,7 @@ pub fn normalize_plan(
     Ok(NormalizedRedactionPlan {
         targets,
         fill_color: plan.fill_color.unwrap_or_default().into(),
-        remove_intersecting_annotations: plan.remove_intersecting_annotations.unwrap_or(false),
+        remove_intersecting_annotations: plan.remove_intersecting_annotations.unwrap_or(true),
         strip_metadata: plan.strip_metadata.unwrap_or(false),
         strip_attachments: plan.strip_attachments.unwrap_or(false),
     })

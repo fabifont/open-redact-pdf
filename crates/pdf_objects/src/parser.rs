@@ -98,8 +98,11 @@ fn parse_xref_table(
             let flag = fields
                 .next()
                 .ok_or_else(|| PdfError::Parse("invalid xref flag".to_string()))?;
+            let object_number = start
+                .checked_add(index)
+                .ok_or_else(|| PdfError::Parse("xref object number overflow".to_string()))?;
             entries.insert(
-                ObjectRef::new(start + index, generation),
+                ObjectRef::new(object_number, generation),
                 XrefEntry {
                     offset,
                     generation,
@@ -357,10 +360,11 @@ impl<'a> Cursor<'a> {
                                     _ => break,
                                 }
                             }
+                            // PDF spec: octal value is taken modulo 256
                             let value =
-                                u8::from_str_radix(std::str::from_utf8(&octal).unwrap_or("0"), 8)
+                                u16::from_str_radix(std::str::from_utf8(&octal).unwrap_or("0"), 8)
                                     .unwrap_or(0);
-                            output.push(value);
+                            output.push((value % 256) as u8);
                         }
                         other => output.push(other),
                     }

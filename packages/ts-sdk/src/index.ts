@@ -19,7 +19,7 @@ type WasmModule = {
   getPageSize(handle: PdfHandle, pageIndex: number): PageSize;
   extractText(handle: PdfHandle, pageIndex: number): RawPageText;
   searchText(handle: PdfHandle, pageIndex: number, query: string): RawTextMatch[];
-  applyRedactions(handle: PdfHandle, plan: RedactionPlan): ApplyReport;
+  applyRedactions(handle: PdfHandle, plan: RedactionPlan): RawApplyReport;
   savePdf(handle: PdfHandle): Uint8Array;
 };
 
@@ -44,18 +44,21 @@ type RawTextMatch = {
 };
 
 let wasmModule: WasmModule | null = null;
+let initPromise: Promise<void> | null = null;
 
 /**
  * Loads the generated WebAssembly module used by the browser-facing SDK.
  *
- * Call this once before opening PDFs.
+ * Call this once before opening PDFs. Safe to call concurrently — the module
+ * is loaded only once.
  */
-export async function initWasm(): Promise<void> {
-  if (wasmModule) {
-    return;
+export function initWasm(): Promise<void> {
+  if (!initPromise) {
+    initPromise = import("../vendor/pdf-wasm/pdf_wasm").then((module) => {
+      wasmModule = module as unknown as WasmModule;
+    });
   }
-  const module = await import("../vendor/pdf-wasm/pdf_wasm");
-  wasmModule = module as unknown as WasmModule;
+  return initPromise;
 }
 
 function requireWasm(): WasmModule {
@@ -92,9 +95,18 @@ export function searchText(handle: PdfHandle, pageIndex: number, query: string):
     .map(normalizeTextMatch);
 }
 
+type RawApplyReport = {
+  pages_touched: number;
+  text_glyphs_removed: number;
+  path_paints_removed: number;
+  image_draws_removed: number;
+  annotations_removed: number;
+  warnings: string[];
+};
+
 /** Applies a redaction plan to the opened handle in place. */
 export function applyRedactions(handle: PdfHandle, plan: RedactionPlan): ApplyReport {
-  return requireWasm().applyRedactions(handle, plan);
+  return normalizeApplyReport(requireWasm().applyRedactions(handle, plan));
 }
 
 /** Saves the current document state as a new PDF byte array. */
@@ -128,4 +140,15 @@ function normalizeQuad(
   quad: RawQuad,
 ): [RawPoint, RawPoint, RawPoint, RawPoint] {
   return Array.isArray(quad) ? quad : quad.points;
+}
+
+function normalizeApplyReport(raw: RawApplyReport): ApplyReport {
+  return {
+    pagesTouched: raw.pages_touched,
+    textGlyphsRemoved: raw.text_glyphs_removed,
+    pathPaintsRemoved: raw.path_paints_removed,
+    imageDrawsRemoved: raw.image_draws_removed,
+    annotationsRemoved: raw.annotations_removed,
+    warnings: raw.warnings,
+  };
 }

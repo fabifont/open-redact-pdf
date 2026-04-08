@@ -47,6 +47,14 @@ fn rectangle_redaction_removes_target_text_but_preserves_other_text() {
         .expect("reopened text extraction should succeed");
     assert!(!extracted.text.contains("Secret"));
     assert!(extracted.text.contains("Beta Gamma"));
+
+    // Verify that old content stream objects are removed from the output:
+    // the raw bytes of the saved PDF must not contain the original unredacted text.
+    let raw = String::from_utf8_lossy(&saved);
+    assert!(
+        !raw.contains("Secret Alpha"),
+        "original content stream survived in saved PDF"
+    );
 }
 
 #[test]
@@ -139,11 +147,16 @@ fn can_strip_metadata_and_attachments() {
         .file
         .get_dictionary(root_ref)
         .expect("catalog should exist");
-    if let Some(pdf_objects::PdfValue::Reference(names_ref)) = root.get("Names") {
-        let names = parsed
-            .file
-            .get_dictionary(*names_ref)
-            .expect("names dictionary should exist");
-        assert!(names.get("EmbeddedFiles").is_none());
-    }
+    // Names key should be removed from catalog after stripping attachments
+    assert!(
+        root.get("Names").is_none(),
+        "Names key should be removed from catalog"
+    );
+    // Verify that metadata and attachment content are not in the raw output bytes.
+    // The Info dictionary contained "Fixture Generator" and "Metadata Fixture".
+    let raw = String::from_utf8_lossy(&saved);
+    assert!(
+        !raw.contains("Fixture Generator"),
+        "Info dictionary content survived in saved PDF"
+    );
 }

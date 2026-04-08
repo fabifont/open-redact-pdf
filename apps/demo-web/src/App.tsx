@@ -21,6 +21,7 @@ import {
   type QuadGroupTarget,
   type RectTarget,
   type RedactionPlan,
+  type ApplyReport,
 } from "@open-redact-pdf/sdk";
 import { GlobalWorkerOptions, getDocument, type PDFDocumentProxy } from "pdfjs-dist";
 
@@ -64,14 +65,7 @@ export function App() {
   const [searchMatches, setSearchMatches] = useState<UiTextMatch[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [downloadBytes, setDownloadBytes] = useState<Uint8Array | null>(null);
-  const [applyReport, setApplyReport] = useState<null | {
-    pages_touched: number;
-    text_glyphs_removed: number;
-    path_paints_removed: number;
-    image_draws_removed: number;
-    annotations_removed: number;
-    warnings: string[];
-  }>(null);
+  const [applyReport, setApplyReport] = useState<null | ApplyReport>(null);
   const [pageTexts, setPageTexts] = useState<Array<{ text: string; error: string | null }>>([]);
   const [renderErrors, setRenderErrors] = useState<Record<number, string>>({});
   const [previewDocument, setPreviewDocument] = useState<PDFDocumentProxy | null>(null);
@@ -324,10 +318,10 @@ export function App() {
           {error ? <p className="error">{error}</p> : null}
           {applyReport ? (
             <div className="report">
-              <p>{applyReport.text_glyphs_removed} glyphs removed</p>
-              <p>{applyReport.path_paints_removed} vector paints removed</p>
-              <p>{applyReport.image_draws_removed} image draws removed</p>
-              <p>{applyReport.annotations_removed} annotations removed</p>
+              <p>{applyReport.textGlyphsRemoved} glyphs removed</p>
+              <p>{applyReport.pathPaintsRemoved} vector paints removed</p>
+              <p>{applyReport.imageDrawsRemoved} image draws removed</p>
+              <p>{applyReport.annotationsRemoved} annotations removed</p>
               {applyReport.warnings.map((warning) => (
                 <p key={warning} className="warning">
                   {warning}

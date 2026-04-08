@@ -24,12 +24,6 @@ pub struct TextMatch {
 }
 
 #[derive(Debug, Clone)]
-pub struct GlyphRange {
-    pub start: usize,
-    pub end: usize,
-}
-
-#[derive(Debug, Clone)]
 pub enum GlyphLocation {
     Direct {
         operand_index: usize,
@@ -793,7 +787,7 @@ fn decode_font_glyphs(font: &LoadedFont, bytes: &[u8]) -> PdfResult<Vec<DecodedG
             .map(|(byte_index, byte)| {
                 let width_units = font
                     .widths
-                    .get(byte.saturating_sub(font.first_char as u8) as usize)
+                    .get(u16::from(byte).saturating_sub(font.first_char) as usize)
                     .copied()
                     .unwrap_or(600.0);
                 DecodedGlyph {
@@ -874,8 +868,11 @@ fn parse_cid_widths(value: &PdfValue) -> PdfResult<BTreeMap<u16, f64>> {
             .ok_or_else(|| PdfError::Corrupt("CID width entry is truncated".to_string()))?;
         if let Some(width_array) = next.as_array() {
             for (offset, width) in width_array.iter().enumerate() {
+                let cid = start_cid.checked_add(offset as u16).ok_or_else(|| {
+                    PdfError::Corrupt("CID width index overflow".to_string())
+                })?;
                 widths.insert(
-                    start_cid + offset as u16,
+                    cid,
                     width.as_number().ok_or_else(|| {
                         PdfError::Corrupt("CID width array contains a non-number".to_string())
                     })?,
@@ -976,7 +973,7 @@ fn parse_bfrange_line(line: &str, mapping: &mut BTreeMap<u16, String>) -> PdfRes
     let end = parse_cid_token(&tokens[1])?;
     if line.contains('[') {
         for (offset, destination) in tokens.iter().skip(2).enumerate() {
-            let cid = start + offset as u16;
+            let cid = start.saturating_add(offset as u16);
             if cid > end {
                 break;
             }

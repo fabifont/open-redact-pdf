@@ -69,10 +69,10 @@ export type TextMatch = {
 
 /** Summary of work performed by a redaction apply pass. */
 export type ApplyReport = {
-  pages_touched: number;
-  text_glyphs_removed: number;
-  path_paints_removed: number;
-  image_draws_removed: number;
-  annotations_removed: number;
+  pagesTouched: number;
+  textGlyphsRemoved: number;
+  pathPaintsRemoved: number;
+  imageDrawsRemoved: number;
+  annotationsRemoved: number;
   warnings: string[];
 };

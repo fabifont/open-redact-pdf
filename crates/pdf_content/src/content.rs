@@ -286,10 +286,11 @@ impl<'a> ContentParser<'a> {
                                     _ => break,
                                 }
                             }
+                            // PDF spec: octal value is taken modulo 256
                             let value =
-                                u8::from_str_radix(std::str::from_utf8(&octal).unwrap_or("0"), 8)
+                                u16::from_str_radix(std::str::from_utf8(&octal).unwrap_or("0"), 8)
                                     .unwrap_or(0);
-                            output.push(value);
+                            output.push((value % 256) as u8);
                         }
                         other => output.push(other),
                     }

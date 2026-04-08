@@ -3,8 +3,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use pdf_content::{Operation, PaintOperator, PathSegment, parse_page_contents};
 use pdf_graphics::{Color, Matrix, Point, Rect};
 use pdf_objects::{
-    PageInfo, PdfDictionary, PdfError, PdfFile, PdfObject, PdfResult, PdfStream, PdfString,
-    PdfValue, serialize_value,
+    ObjectRef, PageInfo, PdfDictionary, PdfError, PdfFile, PdfObject, PdfResult, PdfStream,
+    PdfString, PdfValue, serialize_value,
 };
 use pdf_targets::{NormalizedPageTarget, NormalizedRedactionPlan};
 use pdf_text::{Glyph, GlyphLocation, analyze_page_text};
@@ -61,7 +61,7 @@ pub fn apply_redactions(
             neutralize_vector_operations(&mut operations, &targets, page_transform)?;
         report.path_paints_removed += vector_removed;
 
-        let image_removed =
+        let (image_removed, neutralized_xobjects) =
             neutralize_image_operations(&mut operations, &targets, page_transform, &xobjects)?;
         report.image_draws_removed += image_removed;
         if image_removed > 0 {
@@ -69,6 +69,9 @@ pub fn apply_redactions(
                 "page {page_index}: intersecting images were removed at invocation level"
             ));
         }
+
+        // Remove neutralized XObject stream objects so image data does not survive
+        remove_neutralized_xobjects(file, &page.resources, &neutralized_xobjects)?;
 
         let annotation_removed = if plan.remove_intersecting_annotations {
             remove_annotations(file, &page, &targets, page_transform)?
@@ -104,13 +107,35 @@ fn group_targets(plan: &NormalizedRedactionPlan) -> BTreeMap<usize, Vec<&Normali
 }
 
 fn strip_metadata(file: &mut PdfFile) -> PdfResult<()> {
+    // Resolve the Info reference before removing it so we can delete the object
+    let info_ref = match file.trailer.get("Info") {
+        Some(PdfValue::Reference(object_ref)) => Some(*object_ref),
+        _ => None,
+    };
     file.trailer.remove("Info");
+    if let Some(info_ref) = info_ref {
+        file.objects.remove(&info_ref);
+    }
+
     let root_ref = match file.trailer.get("Root") {
         Some(PdfValue::Reference(object_ref)) => *object_ref,
         _ => return Err(PdfError::Corrupt("trailer Root is missing".to_string())),
     };
+
+    // Resolve the Metadata stream reference before removing it
+    let metadata_ref = file
+        .get_dictionary(root_ref)?
+        .get("Metadata")
+        .and_then(|v| match v {
+            PdfValue::Reference(r) => Some(*r),
+            _ => None,
+        });
+
     if let PdfObject::Value(PdfValue::Dictionary(dictionary)) = file.get_object_mut(root_ref)? {
         dictionary.remove("Metadata");
+    }
+    if let Some(metadata_ref) = metadata_ref {
+        file.objects.remove(&metadata_ref);
     }
     Ok(())
 }
@@ -124,13 +149,99 @@ fn strip_attachments(file: &mut PdfFile) -> PdfResult<()> {
         Some(PdfValue::Reference(names_ref)) => Some(*names_ref),
         _ => None,
     };
-    if let PdfObject::Value(PdfValue::Dictionary(dictionary)) = file.get_object_mut(root_ref)? {
-        let _ = dictionary;
-    }
+
+    // Collect all object refs reachable from EmbeddedFiles so we can remove them
+    let mut refs_to_remove = Vec::new();
     if let Some(names_ref) = names_ref {
-        if let PdfObject::Value(PdfValue::Dictionary(names)) = file.get_object_mut(names_ref)? {
+        if let Ok(names_dict) = file.get_dictionary(names_ref) {
+            if let Some(ef_value) = names_dict.get("EmbeddedFiles").cloned() {
+                collect_reachable_refs(file, &ef_value, &mut refs_to_remove, &mut BTreeSet::new());
+            }
+        }
+    }
+
+    // Remove Names key from the root catalog
+    if let PdfObject::Value(PdfValue::Dictionary(dictionary)) = file.get_object_mut(root_ref)? {
+        dictionary.remove("Names");
+    }
+
+    // Also remove EmbeddedFiles from the Names dictionary itself
+    if let Some(names_ref) = names_ref {
+        if let Ok(PdfObject::Value(PdfValue::Dictionary(names))) =
+            file.get_object_mut(names_ref)
+        {
             names.remove("EmbeddedFiles");
         }
+    }
+
+    // Remove all collected attachment objects from the file
+    for obj_ref in refs_to_remove {
+        file.objects.remove(&obj_ref);
+    }
+    Ok(())
+}
+
+/// Recursively collects all ObjectRefs reachable from a PdfValue tree.
+fn collect_reachable_refs(
+    file: &PdfFile,
+    value: &PdfValue,
+    refs: &mut Vec<ObjectRef>,
+    visited: &mut BTreeSet<ObjectRef>,
+) {
+    match value {
+        PdfValue::Reference(object_ref) => {
+            if visited.insert(*object_ref) {
+                refs.push(*object_ref);
+                if let Ok(object) = file.get_object(*object_ref) {
+                    match object.clone() {
+                        PdfObject::Value(v) => {
+                            collect_reachable_refs(file, &v, refs, visited);
+                        }
+                        PdfObject::Stream(s) => {
+                            for v in s.dict.values() {
+                                collect_reachable_refs(file, v, refs, visited);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        PdfValue::Array(items) => {
+            for item in items {
+                collect_reachable_refs(file, item, refs, visited);
+            }
+        }
+        PdfValue::Dictionary(dict) => {
+            for v in dict.values() {
+                collect_reachable_refs(file, v, refs, visited);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Removes the underlying stream objects for neutralized XObjects.
+fn remove_neutralized_xobjects(
+    file: &mut PdfFile,
+    resources: &PdfDictionary,
+    neutralized_names: &[String],
+) -> PdfResult<()> {
+    if neutralized_names.is_empty() {
+        return Ok(());
+    }
+    let Some(xobjects_value) = resources.get("XObject") else {
+        return Ok(());
+    };
+    let xobjects = file.resolve_dict(xobjects_value)?;
+    let refs_to_remove: Vec<ObjectRef> = neutralized_names
+        .iter()
+        .filter_map(|name| match xobjects.get(name) {
+            Some(PdfValue::Reference(object_ref)) => Some(*object_ref),
+            _ => None,
+        })
+        .collect();
+    for obj_ref in refs_to_remove {
+        file.objects.remove(&obj_ref);
     }
     Ok(())
 }
@@ -445,13 +556,15 @@ fn neutralize_vector_operations(
     Ok(removed)
 }
 
+/// Returns (count_removed, list_of_neutralized_xobject_names).
 fn neutralize_image_operations(
     operations: &mut [Operation],
     targets: &[&NormalizedPageTarget],
     page_transform: Matrix,
     xobjects: &BTreeMap<String, XObjectKind>,
-) -> PdfResult<usize> {
+) -> PdfResult<(usize, Vec<String>)> {
     let mut removed = 0usize;
+    let mut neutralized_names = Vec::new();
     let mut ctm = Matrix::identity();
     let mut ctm_stack = Vec::new();
     for operation in operations.iter_mut() {
@@ -472,6 +585,7 @@ fn neutralize_image_operations(
                         .to_quad()
                         .transform(ctm.multiply(page_transform));
                         if targets.iter().any(|target| target.intersects_quad(&quad)) {
+                            neutralized_names.push(name.to_string());
                             operation.operator = "n".to_string();
                             operation.operands.clear();
                             removed += 1;
@@ -482,13 +596,17 @@ fn neutralize_image_operations(
                             "Form XObjects are not supported on redacted pages".to_string(),
                         ));
                     }
-                    None => {}
+                    None => {
+                        return Err(PdfError::Unsupported(format!(
+                            "Do operator references unknown XObject /{name}"
+                        )));
+                    }
                 }
             }
             _ => {}
         }
     }
-    Ok(removed)
+    Ok((removed, neutralized_names))
 }
 
 fn remove_annotations(
@@ -506,13 +624,15 @@ fn remove_annotations(
             .map(parse_rect)
             .transpose()?
             .map(|rect| page_transform.transform_rect(rect));
-        let intersects = rect
-            .map(|rect| targets.iter().any(|target| target.intersects_rect(&rect)))
-            .unwrap_or(false);
         let subtype = dict
             .get("Subtype")
             .and_then(PdfValue::as_name)
             .unwrap_or("");
+        let intersects = rect
+            .map(|rect| targets.iter().any(|target| target.intersects_rect(&rect)))
+            // Annotations without a Rect are conservatively treated as intersecting
+            // unless they are known-harmless subtypes (Link navigation only).
+            .unwrap_or(subtype != "Link");
         let is_attachment = subtype == "FileAttachment";
         if intersects || is_attachment {
             removed += 1;
@@ -545,6 +665,13 @@ fn write_page_contents(
     let page = pages
         .get_mut(page_index)
         .ok_or(PdfError::InvalidPageIndex(page_index))?;
+
+    // Remove old content stream objects so original unredacted data does not survive
+    let old_refs = std::mem::take(&mut page.content_refs);
+    for old_ref in &old_refs {
+        file.objects.remove(old_ref);
+    }
+
     let content_ref = file.allocate_object_ref();
     file.insert_object(
         content_ref,

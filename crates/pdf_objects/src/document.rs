@@ -10,15 +10,6 @@ pub struct DocumentCatalog {
 }
 
 #[derive(Debug, Clone)]
-pub struct PageNode {
-    pub page_ref: ObjectRef,
-    pub resources: PdfDictionary,
-    pub page_box: PageBox,
-    pub content_refs: Vec<ObjectRef>,
-    pub annotation_refs: Vec<ObjectRef>,
-}
-
-#[derive(Debug, Clone)]
 pub struct PageInfo {
     pub page_ref: ObjectRef,
     pub resources: PdfDictionary,
@@ -64,7 +55,8 @@ pub fn build_document(file: PdfFile) -> PdfResult<ParsedDocument> {
     };
 
     let mut pages = Vec::new();
-    collect_pages(&file, pages_ref, &mut pages, None, None, None)?;
+    let mut visited = std::collections::BTreeSet::new();
+    collect_pages(&file, pages_ref, &mut pages, None, None, None, 0, &mut visited)?;
 
     Ok(ParsedDocument {
         file,
@@ -73,6 +65,9 @@ pub fn build_document(file: PdfFile) -> PdfResult<ParsedDocument> {
     })
 }
 
+const MAX_PAGE_TREE_DEPTH: usize = 64;
+
+#[allow(clippy::too_many_arguments)]
 fn collect_pages(
     file: &PdfFile,
     node_ref: ObjectRef,
@@ -80,7 +75,15 @@ fn collect_pages(
     inherited_resources: Option<&PdfDictionary>,
     inherited_media_box: Option<Rect>,
     inherited_rotate: Option<i32>,
+    depth: usize,
+    visited: &mut std::collections::BTreeSet<ObjectRef>,
 ) -> PdfResult<()> {
+    if depth > MAX_PAGE_TREE_DEPTH {
+        return Err(PdfError::Corrupt("page tree exceeds maximum depth".to_string()));
+    }
+    if !visited.insert(node_ref) {
+        return Err(PdfError::Corrupt("cycle detected in page tree".to_string()));
+    }
     let dictionary = file.get_dictionary(node_ref)?;
     match dictionary.get("Type").and_then(PdfValue::as_name) {
         Some("Pages") => {
@@ -112,7 +115,7 @@ fn collect_pages(
                         ));
                     }
                 };
-                collect_pages(file, kid_ref, output, resources, media_box, rotate)?;
+                collect_pages(file, kid_ref, output, resources, media_box, rotate, depth + 1, visited)?;
             }
         }
         Some("Page") => {
