@@ -1,0 +1,15 @@
+[package]
+name = "pdf_objects"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+flate2.workspace = true
+pdf_graphics = { path = "../pdf_graphics" }
+serde.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

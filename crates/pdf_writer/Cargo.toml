@@ -1,0 +1,11 @@
+[package]
+name = "pdf_writer"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+pdf_objects = { path = "../pdf_objects" }
+

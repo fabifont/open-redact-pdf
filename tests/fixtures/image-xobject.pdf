@@ -1,0 +1,48 @@
+%PDF-1.4
+%ÿÿÿÿ
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Count 1 /Kids [3 0 R] >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> /XObject << /Im1 6 0 R >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 78 >>
+stream
+q
+100 0 0 100 72 600 cm
+/Im1 Do
+Q
+BT
+/F1 20 Tf
+72 700 Td
+(Image Secret) Tj
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+6 0 obj
+<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 1 >>
+stream
+ÿ
+endstream
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000121 00000 n 
+0000000273 00000 n 
+0000000400 00000 n 
+0000000497 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+641
+%%EOF

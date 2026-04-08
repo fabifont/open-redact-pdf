@@ -1,0 +1,14 @@
+[package]
+name = "pdf_text"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+pdf_content = { path = "../pdf_content" }
+pdf_graphics = { path = "../pdf_graphics" }
+pdf_objects = { path = "../pdf_objects" }
+serde.workspace = true
+

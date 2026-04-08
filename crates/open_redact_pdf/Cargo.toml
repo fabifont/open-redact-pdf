@@ -1,0 +1,24 @@
+[package]
+name = "open_redact_pdf"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+pdf_content = { path = "../pdf_content" }
+pdf_graphics = { path = "../pdf_graphics" }
+pdf_objects = { path = "../pdf_objects" }
+pdf_redact = { path = "../pdf_redact" }
+pdf_targets = { path = "../pdf_targets" }
+pdf_text = { path = "../pdf_text" }
+pdf_writer = { path = "../pdf_writer" }
+serde.workspace = true
+
+[dev-dependencies]
+pdf_objects = { path = "../pdf_objects" }
+
+[[test]]
+name = "integration_end_to_end"
+path = "../../tests/integration/end_to_end.rs"

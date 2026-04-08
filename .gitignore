@@ -1,0 +1,14 @@
+target/
+dist/
+node_modules/
+coverage/
+playwright-report/
+test-results/
+packages/ts-sdk/vendor/
+.DS_Store
+.idea/
+.vscode/
+*.log
+.pnpm-store/
+.codex
+

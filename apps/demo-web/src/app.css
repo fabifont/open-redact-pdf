@@ -1,0 +1,214 @@
+:root {
+  font-family: Georgia, "Iowan Old Style", "Palatino Linotype", serif;
+  color: #18222c;
+  background:
+    radial-gradient(circle at top, rgba(211, 152, 93, 0.22), transparent 34%),
+    linear-gradient(180deg, #f6efe5 0%, #ebe0cf 100%);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+.app-shell {
+  display: grid;
+  grid-template-columns: minmax(320px, 360px) 1fr;
+  min-height: 100vh;
+}
+
+.control-panel {
+  border-right: 1px solid rgba(24, 34, 44, 0.12);
+  padding: 1.5rem;
+  background: rgba(255, 249, 241, 0.92);
+  backdrop-filter: blur(14px);
+  overflow-y: auto;
+}
+
+.page-stage {
+  padding: 1.5rem;
+  display: grid;
+  gap: 1.25rem;
+  align-content: start;
+}
+
+.panel-header h1,
+.panel-block h2,
+.page-card h3 {
+  margin: 0;
+  font-family: "Avenir Next Condensed", "Gill Sans", "Trebuchet MS", sans-serif;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.panel-header h1 {
+  font-size: 2rem;
+  margin-top: 0.4rem;
+}
+
+.eyebrow {
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  font-size: 0.72rem;
+  color: #a35417;
+}
+
+.lede,
+.muted,
+.panel-block p,
+.page-card p,
+pre {
+  line-height: 1.45;
+}
+
+.file-picker,
+.panel-block,
+.page-card {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: 0 20px 48px rgba(62, 47, 23, 0.08);
+}
+
+.panel-block,
+.file-picker {
+  margin-top: 1rem;
+}
+
+.search-row,
+.button-row {
+  display: flex;
+  gap: 0.75rem;
+}
+
+input[type="file"],
+.search-row input {
+  width: 100%;
+}
+
+.search-row input {
+  padding: 0.7rem 0.85rem;
+  border-radius: 12px;
+  border: 1px solid rgba(24, 34, 44, 0.2);
+  background: #fffaf4;
+}
+
+button,
+.download-link {
+  border: none;
+  border-radius: 999px;
+  padding: 0.72rem 1.05rem;
+  background: #18222c;
+  color: #f9f4ee;
+  text-decoration: none;
+  cursor: pointer;
+  transition: transform 160ms ease, box-shadow 160ms ease;
+}
+
+button:hover,
+.download-link:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 24px rgba(24, 34, 44, 0.18);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+  transform: none;
+  box-shadow: none;
+}
+
+button.ghost {
+  background: rgba(24, 34, 44, 0.12);
+  color: #18222c;
+}
+
+.error {
+  color: #9a1f1f;
+}
+
+.warning {
+  color: #8c4a14;
+}
+
+.page-card header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.page-canvas-wrap {
+  position: relative;
+  width: fit-content;
+  max-width: 100%;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid rgba(24, 34, 44, 0.14);
+}
+
+.page-canvas {
+  display: block;
+  max-width: 100%;
+}
+
+.page-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
+
+.manual-target,
+.draft-target {
+  fill: rgba(20, 24, 29, 0.22);
+  stroke: #11161b;
+  stroke-width: 1.5;
+}
+
+.search-target {
+  fill: rgba(163, 84, 23, 0.22);
+  stroke: #a35417;
+  stroke-width: 1.5;
+}
+
+.empty-state {
+  min-height: 60vh;
+  display: grid;
+  place-items: center;
+  padding: 2rem;
+  border: 1px dashed rgba(24, 34, 44, 0.2);
+  border-radius: 24px;
+  background: rgba(255, 252, 247, 0.72);
+}
+
+pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: "IBM Plex Mono", "SFMono-Regular", "Consolas", monospace;
+}
+
+@media (max-width: 980px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .control-panel {
+    border-right: none;
+    border-bottom: 1px solid rgba(24, 34, 44, 0.12);
+  }
+}
+

@@ -1,0 +1,16 @@
+{
+  "name": "open-redact-pdf",
+  "private": true,
+  "version": "0.1.0",
+  "license": "MIT OR Apache-2.0",
+  "packageManager": "pnpm@10.33.0",
+  "scripts": {
+    "build": "pnpm -r build",
+    "check": "pnpm -r typecheck && cargo check --workspace",
+    "lint": "pnpm -r lint && cargo clippy --workspace --all-targets -- -D warnings",
+    "test": "cargo test --workspace && pnpm -r test",
+    "fmt": "cargo fmt --all && pnpm -r format",
+    "wasm:build": "wasm-pack build crates/pdf_wasm --target bundler --out-dir ../../packages/ts-sdk/vendor/pdf-wasm --release"
+  }
+}
+
