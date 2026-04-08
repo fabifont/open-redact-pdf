@@ -478,6 +478,11 @@ function PagePreview({
     };
   }, [drag, viewport]);
 
+  const displaySearchQuads = useMemo(
+    () => searchTargets.flatMap((target) => coalesceDisplayQuads(target.quads)),
+    [searchTargets],
+  );
+
   function beginDrag(event: PointerEvent<SVGSVGElement>) {
     if (!viewport || !overlayRef.current) {
       return;
@@ -547,22 +552,15 @@ function PagePreview({
                 height={target.height * viewport.scale}
               />
             ))}
-            {searchTargets.flatMap((target, targetIndex) =>
-              target.quads.flatMap((quad: QuadGroupTarget["quads"][number], quadIndex: number) => {
-                if (!isQuadPoints(quad)) {
-                  return [];
-                }
-                return (
-                  <polygon
-                    key={`search-${targetIndex}-${quadIndex}`}
-                    className="search-target"
-                    points={quad
-                      .map((point: Point) => toSvgPoint(point, size.height, viewport.scale))
-                      .join(" ")}
-                  />
-                );
-              }),
-            )}
+            {displaySearchQuads.map((quad, index) => (
+              <polygon
+                key={`search-${pageIndex}-${index}`}
+                className="search-target"
+                points={quad
+                  .map((point: Point) => toSvgPoint(point, size.height, viewport.scale))
+                  .join(" ")}
+              />
+            ))}
             {draftRect ? (
               <rect
                 className="draft-target"
@@ -654,4 +652,84 @@ function readQuadPoints(
   quad: [Point, Point, Point, Point] | { points: [Point, Point, Point, Point] },
 ): [Point, Point, Point, Point] {
   return Array.isArray(quad) ? quad : quad.points;
+}
+
+function coalesceDisplayQuads(
+  quads: Array<[Point, Point, Point, Point]>,
+): Array<[Point, Point, Point, Point]> {
+  const rects = quads
+    .map((quad) => quadToRect(quad))
+    .sort((left, right) => {
+      const yDelta = Math.abs(left.y - right.y);
+      if (yDelta > 1.5) {
+        return right.y - left.y;
+      }
+      return left.x - right.x;
+    });
+
+  const merged: Array<{ x: number; y: number; width: number; height: number }> = [];
+  for (const rect of rects) {
+    const previous = merged.at(-1);
+    if (!previous || !shouldMergeDisplayRects(previous, rect)) {
+      merged.push({ ...rect });
+      continue;
+    }
+    const nextX = Math.min(previous.x, rect.x);
+    const nextY = Math.min(previous.y, rect.y);
+    const nextMaxX = Math.max(previous.x + previous.width, rect.x + rect.width);
+    const nextMaxY = Math.max(previous.y + previous.height, rect.y + rect.height);
+    previous.x = nextX;
+    previous.y = nextY;
+    previous.width = nextMaxX - nextX;
+    previous.height = nextMaxY - nextY;
+  }
+
+  return merged.map((rect) => rectToQuad(expandDisplayRect(rect)));
+}
+
+function quadToRect(quad: [Point, Point, Point, Point]) {
+  const xs = quad.map((point) => point.x);
+  const ys = quad.map((point) => point.y);
+  const minX = Math.min(...xs);
+  const minY = Math.min(...ys);
+  const maxX = Math.max(...xs);
+  const maxY = Math.max(...ys);
+  return {
+    x: minX,
+    y: minY,
+    width: maxX - minX,
+    height: maxY - minY,
+  };
+}
+
+function shouldMergeDisplayRects(
+  left: { x: number; y: number; width: number; height: number },
+  right: { x: number; y: number; width: number; height: number },
+): boolean {
+  const leftTop = left.y + left.height;
+  const rightTop = right.y + right.height;
+  const verticalOverlap = Math.min(leftTop, rightTop) - Math.max(left.y, right.y);
+  const minimumHeight = Math.max(1, Math.min(left.height, right.height));
+  const horizontalGap = right.x - (left.x + left.width);
+  return verticalOverlap >= minimumHeight * 0.45 && horizontalGap <= minimumHeight * 0.65;
+}
+
+function expandDisplayRect(rect: { x: number; y: number; width: number; height: number }) {
+  const paddingX = Math.max(0.8, rect.height * 0.12);
+  const paddingY = Math.max(0.6, rect.height * 0.08);
+  return {
+    x: rect.x - paddingX,
+    y: rect.y - paddingY,
+    width: rect.width + paddingX * 2,
+    height: rect.height + paddingY * 2,
+  };
+}
+
+function rectToQuad(rect: { x: number; y: number; width: number; height: number }): [Point, Point, Point, Point] {
+  return [
+    { x: rect.x, y: rect.y },
+    { x: rect.x + rect.width, y: rect.y },
+    { x: rect.x + rect.width, y: rect.y + rect.height },
+    { x: rect.x, y: rect.y + rect.height },
+  ];
 }
