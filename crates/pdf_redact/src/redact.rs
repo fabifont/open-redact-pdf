@@ -169,6 +169,12 @@ fn ensure_supported_operators(operations: &[Operation]) -> PdfResult<()> {
                 | "b*"
                 | "n"
                 | "w"
+                | "J"
+                | "j"
+                | "M"
+                | "d"
+                | "ri"
+                | "i"
                 | "rg"
                 | "RG"
                 | "g"
@@ -732,5 +738,43 @@ fn format_number(value: f64) -> String {
             string.pop();
         }
         string
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ensure_supported_operators;
+    use pdf_content::Operation;
+
+    #[test]
+    fn accepts_common_graphics_state_operators() {
+        let operations = vec![
+            Operation {
+                operator: "j".to_string(),
+                operands: vec![],
+            },
+            Operation {
+                operator: "J".to_string(),
+                operands: vec![],
+            },
+            Operation {
+                operator: "M".to_string(),
+                operands: vec![],
+            },
+            Operation {
+                operator: "d".to_string(),
+                operands: vec![],
+            },
+            Operation {
+                operator: "ri".to_string(),
+                operands: vec![],
+            },
+            Operation {
+                operator: "i".to_string(),
+                operands: vec![],
+            },
+        ];
+
+        ensure_supported_operators(&operations).expect("operators should be supported");
     }
 }

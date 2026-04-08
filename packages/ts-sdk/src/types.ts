@@ -45,14 +45,14 @@ export type TextItem = {
 };
 
 export type PageText = {
-  page_index: number;
+  pageIndex: number;
   text: string;
   items: TextItem[];
 };
 
 export type TextMatch = {
   text: string;
-  page_index: number;
+  pageIndex: number;
   quads: Array<[Point, Point, Point, Point]>;
 };
 

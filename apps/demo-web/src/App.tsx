@@ -21,7 +21,6 @@ import {
   type QuadGroupTarget,
   type RectTarget,
   type RedactionPlan,
-  type TextMatch,
 } from "@openredact/ts-sdk";
 import { GlobalWorkerOptions, getDocument, type PDFDocumentProxy } from "pdfjs-dist";
 
@@ -48,6 +47,12 @@ type DragState = {
   currentY: number;
 };
 
+type UiTextMatch = {
+  text: string;
+  pageIndex: number;
+  quads: Array<[Point, Point, Point, Point]>;
+};
+
 export function App() {
   const [status, setStatus] = useState("Load a local PDF to start.");
   const [error, setError] = useState<string | null>(null);
@@ -56,7 +61,7 @@ export function App() {
   const [pageSizes, setPageSizes] = useState<Array<{ width: number; height: number }>>([]);
   const [manualTargets, setManualTargets] = useState<RectTarget[]>([]);
   const [searchTargets, setSearchTargets] = useState<QuadGroupTarget[]>([]);
-  const [searchMatches, setSearchMatches] = useState<TextMatch[]>([]);
+  const [searchMatches, setSearchMatches] = useState<UiTextMatch[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
   const [applyReport, setApplyReport] = useState<null | {
@@ -182,11 +187,18 @@ export function App() {
       return;
     }
     try {
-      const matches: TextMatch[] = [];
+      const matches: UiTextMatch[] = [];
       const failures: string[] = [];
       for (let pageIndex = 0; pageIndex < pageSizes.length; pageIndex += 1) {
         try {
-          matches.push(...searchText(handle, pageIndex, searchQuery));
+          for (const match of searchText(handle, pageIndex, searchQuery)) {
+            const normalized = normalizeSearchMatch(match);
+            if (normalized) {
+              matches.push(normalized);
+            } else {
+              failures.push(`Page ${pageIndex + 1}: search result geometry was invalid`);
+            }
+          }
         } catch (caught) {
           const message = caught instanceof Error ? caught.message : String(caught);
           failures.push(`Page ${pageIndex + 1}: ${message}`);
@@ -194,7 +206,7 @@ export function App() {
       }
       const targets = matches.map<QuadGroupTarget>((match) => ({
         kind: "quadGroup",
-        pageIndex: match.page_index,
+        pageIndex: match.pageIndex,
         quads: match.quads,
       }));
       setSearchMatches(matches);
@@ -354,8 +366,8 @@ export function App() {
           <div className="panel-block">
             <h2>Search Matches</h2>
             {searchMatches.map((match, index) => (
-              <p key={`${match.page_index}-${index}`}>
-                Page {match.page_index + 1}: {match.text}
+              <p key={`${match.pageIndex}-${index}`}>
+                Page {match.pageIndex + 1}: {match.text}
               </p>
             ))}
           </div>
@@ -536,15 +548,20 @@ function PagePreview({
               />
             ))}
             {searchTargets.flatMap((target, targetIndex) =>
-              target.quads.map((quad: QuadGroupTarget["quads"][number], quadIndex: number) => (
-                <polygon
-                  key={`search-${targetIndex}-${quadIndex}`}
-                  className="search-target"
-                  points={quad
-                    .map((point: Point) => toSvgPoint(point, size.height, viewport.scale))
-                    .join(" ")}
-                />
-              )),
+              target.quads.flatMap((quad: QuadGroupTarget["quads"][number], quadIndex: number) => {
+                if (!isQuadPoints(quad)) {
+                  return [];
+                }
+                return (
+                  <polygon
+                    key={`search-${targetIndex}-${quadIndex}`}
+                    className="search-target"
+                    points={quad
+                      .map((point: Point) => toSvgPoint(point, size.height, viewport.scale))
+                      .join(" ")}
+                  />
+                );
+              }),
             )}
             {draftRect ? (
               <rect
@@ -575,4 +592,66 @@ function clientToOverlay(
 
 function toSvgPoint(point: Point, pageHeight: number, scale: number): string {
   return `${point.x * scale},${(pageHeight - point.y) * scale}`;
+}
+
+function isQuadPoints(quad: unknown): quad is [Point, Point, Point, Point] {
+  return Array.isArray(quad) && quad.length === 4 && quad.every(isPoint);
+}
+
+function isPoint(point: unknown): point is Point {
+  if (!point || typeof point !== "object") {
+    return false;
+  }
+  const candidate = point as Record<string, unknown>;
+  return (
+    typeof candidate.x === "number"
+    && Number.isFinite(candidate.x)
+    && typeof candidate.y === "number"
+    && Number.isFinite(candidate.y)
+  );
+}
+
+function normalizeSearchMatch(match: unknown): UiTextMatch | null {
+  if (!match || typeof match !== "object") {
+    return null;
+  }
+  const candidate = match as Record<string, unknown>;
+  const pageIndex = readPageIndex(candidate);
+  const quads = Array.isArray(candidate.quads)
+    ? candidate.quads.filter(isQuadCandidate).map((quad) => readQuadPoints(quad))
+    : [];
+
+  if (pageIndex === null || quads.length === 0 || typeof candidate.text !== "string") {
+    return null;
+  }
+
+  return {
+    text: candidate.text,
+    pageIndex,
+    quads,
+  };
+}
+
+function readPageIndex(candidate: Record<string, unknown>): number | null {
+  const pageIndex = candidate.pageIndex ?? candidate.page_index;
+  return typeof pageIndex === "number" && Number.isInteger(pageIndex) && pageIndex >= 0
+    ? pageIndex
+    : null;
+}
+
+function isQuadCandidate(
+  quad: unknown,
+): quad is [Point, Point, Point, Point] | { points: [Point, Point, Point, Point] } {
+  return isQuadPoints(quad) || (
+    !!quad
+    && typeof quad === "object"
+    && "points" in quad
+    && isQuadPoints((quad as { points?: unknown }).points)
+  );
+}
+
+function readQuadPoints(
+  quad: [Point, Point, Point, Point] | { points: [Point, Point, Point, Point] },
+): [Point, Point, Point, Point] {
+  return Array.isArray(quad) ? quad : quad.points;
 }
