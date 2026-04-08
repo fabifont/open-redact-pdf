@@ -11,4 +11,6 @@ packages/ts-sdk/vendor/
 *.log
 .pnpm-store/
 .codex
-
+apps/demo-web/src/*.js
+apps/demo-web/vite.config.js
+apps/demo-web/tsconfig.tsbuildinfo
