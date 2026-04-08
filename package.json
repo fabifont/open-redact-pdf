@@ -2,7 +2,16 @@
   "name": "open-redact-pdf",
   "private": true,
   "version": "0.1.0",
+  "author": "Fabio Fontana <me@fabifont.dev>",
   "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fabifont/open-redact-pdf.git"
+  },
+  "bugs": {
+    "url": "https://github.com/fabifont/open-redact-pdf/issues"
+  },
+  "homepage": "https://fabifont.github.io/open-redact-pdf/",
   "packageManager": "pnpm@10.33.0",
   "scripts": {
     "build": "pnpm wasm:build && pnpm -r build",

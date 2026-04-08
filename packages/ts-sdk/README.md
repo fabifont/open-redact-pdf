@@ -20,5 +20,5 @@ const count = getPageCount(handle);
 
 For the full API and integration guidance, see:
 
-- https://openredact.github.io/open-redact-pdf/reference/ts-sdk.html
-- https://openredact.github.io/open-redact-pdf/guides/browser-integration.html
+- https://fabifont.github.io/open-redact-pdf/reference/ts-sdk.html
+- https://fabifont.github.io/open-redact-pdf/guides/browser-integration.html

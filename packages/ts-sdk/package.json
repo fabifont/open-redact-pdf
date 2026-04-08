@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": false,
   "description": "Browser-first PDF redaction SDK for open-redact-pdf.",
+  "author": "Fabio Fontana <me@fabifont.dev>",
   "license": "MIT OR Apache-2.0",
   "type": "module",
   "main": "./dist/index.js",
@@ -22,12 +23,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/openredact/open-redact-pdf.git",
+    "url": "git+https://github.com/fabifont/open-redact-pdf.git",
     "directory": "packages/ts-sdk"
   },
-  "homepage": "https://openredact.github.io/open-redact-pdf/",
+  "homepage": "https://fabifont.github.io/open-redact-pdf/",
   "bugs": {
-    "url": "https://github.com/openredact/open-redact-pdf/issues"
+    "url": "https://github.com/fabifont/open-redact-pdf/issues"
   },
   "publishConfig": {
     "access": "public"
