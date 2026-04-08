@@ -82,13 +82,13 @@ export function App() {
     setError(null);
     setStatus("Initializing WebAssembly...");
     await initWasm();
-    const nextHandle = openPdf(bytes);
+    const nextHandle = openPdf(Uint8Array.from(bytes));
     const count = getPageCount(nextHandle);
     const sizes = Array.from({ length: count }, (_, pageIndex) =>
       getPageSize(nextHandle, pageIndex),
     );
     setHandle(nextHandle);
-    setPdfBytes(bytes);
+    setPdfBytes(Uint8Array.from(bytes));
     setPageSizes(sizes);
     setRenderErrors({});
     setManualTargets([]);
@@ -373,7 +373,9 @@ function PagePreview({
     let cancelled = false;
     let documentRef: PDFDocumentProxy | null = null;
     async function renderPage() {
-      const document = await getDocument({ data: bytes }).promise;
+      // PDF.js may transfer ownership of the typed array to its worker.
+      // Use a fresh clone per load so app state does not end up holding a detached buffer.
+      const document = await getDocument({ data: Uint8Array.from(bytes) }).promise;
       documentRef = document;
       const page = await document.getPage(pageIndex + 1);
       const targetWidth = 720;
