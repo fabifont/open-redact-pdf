@@ -17,6 +17,15 @@ Key entry points:
 - [TypeScript and WASM API reference](docs/reference/ts-sdk.md)
 - [Publishing and Context7 guidance](docs/publishing.md)
 
+## Release Automation
+
+This repository includes a release workflow that publishes:
+
+- `@open-redact-pdf/sdk` to npm
+- the Rust crate set needed by `open-redact-pdf` to crates.io
+
+Release publishing is triggered by pushing a version tag such as `v0.1.0`.
+
 ## Status
 
 This repository currently targets a deliberately narrow MVP:

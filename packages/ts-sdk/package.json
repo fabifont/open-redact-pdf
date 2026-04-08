@@ -1,15 +1,36 @@
 {
   "name": "@open-redact-pdf/sdk",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
+  "description": "Browser-first PDF redaction SDK for open-redact-pdf.",
+  "license": "MIT OR Apache-2.0",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "src",
+    "vendor/pdf-wasm",
+    "README.md"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/openredact/open-redact-pdf.git",
+    "directory": "packages/ts-sdk"
+  },
+  "homepage": "https://openredact.github.io/open-redact-pdf/",
+  "bugs": {
+    "url": "https://github.com/openredact/open-redact-pdf/issues"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

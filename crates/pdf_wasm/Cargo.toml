@@ -1,17 +1,19 @@
 [package]
 name = "pdf_wasm"
+description = "Internal wasm-bindgen wrapper crate for open-redact-pdf."
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
+publish = false
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 js-sys.workspace = true
-open_redact_pdf = { package = "open-redact-pdf", path = "../open_redact_pdf" }
+open_redact_pdf = { package = "open-redact-pdf", path = "../open_redact_pdf", version = "0.1.0" }
 serde.workspace = true
 serde-wasm-bindgen.workspace = true
 wasm-bindgen.workspace = true

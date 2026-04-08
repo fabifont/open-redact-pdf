@@ -1,5 +1,6 @@
 [package]
 name = "pdf_writer"
+description = "Deterministic full-save PDF rewrite support for open-redact-pdf."
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -7,5 +8,4 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
-pdf_objects = { path = "../pdf_objects" }
-
+pdf_objects = { path = "../pdf_objects", version = "0.1.0" }

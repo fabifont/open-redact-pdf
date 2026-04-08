@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -6,6 +6,7 @@ import { spawnSync } from "node:child_process";
 const repoRoot = resolve(import.meta.dirname, "..");
 const cacheRoot = join(homedir(), ".cache", ".wasm-pack");
 const cachedBindgenDir = findCachedBindgenDir(cacheRoot);
+const outDir = resolve(repoRoot, "packages/ts-sdk/vendor/pdf-wasm");
 
 const args = [
   "build",
@@ -27,12 +28,16 @@ if (cachedBindgenDir) {
 
 const result = run(args, env);
 if (result.status === 0) {
+  normalizeWasmOutput();
   process.exit(0);
 }
 
 const stderr = `${result.stderr ?? ""}`;
 if (stderr.includes("Read-only file system")) {
   const retry = run([...args, "--no-opt"], env);
+  if (retry.status === 0) {
+    normalizeWasmOutput();
+  }
   process.exit(retry.status ?? 1);
 }
 
@@ -64,4 +69,13 @@ function run(args, env) {
     process.stderr.write(result.stderr);
   }
   return result;
+}
+
+function normalizeWasmOutput() {
+  for (const relativePath of [".gitignore", "package.json"]) {
+    const path = join(outDir, relativePath);
+    if (existsSync(path)) {
+      rmSync(path);
+    }
+  }
 }

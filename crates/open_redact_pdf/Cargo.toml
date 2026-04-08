@@ -1,5 +1,6 @@
 [package]
 name = "open-redact-pdf"
+description = "Browser-first PDF redaction engine facade for structured, non-overlay PDF redaction."
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -10,17 +11,17 @@ version.workspace = true
 name = "open_redact_pdf"
 
 [dependencies]
-pdf_content = { path = "../pdf_content" }
-pdf_graphics = { path = "../pdf_graphics" }
-pdf_objects = { path = "../pdf_objects" }
-pdf_redact = { path = "../pdf_redact" }
-pdf_targets = { path = "../pdf_targets" }
-pdf_text = { path = "../pdf_text" }
-pdf_writer = { path = "../pdf_writer" }
+pdf_content = { path = "../pdf_content", version = "0.1.0" }
+pdf_graphics = { path = "../pdf_graphics", version = "0.1.0" }
+pdf_objects = { path = "../pdf_objects", version = "0.1.0" }
+pdf_redact = { path = "../pdf_redact", version = "0.1.0" }
+pdf_targets = { path = "../pdf_targets", version = "0.1.0" }
+pdf_text = { path = "../pdf_text", version = "0.1.0" }
+pdf_writer = { path = "../pdf_writer", version = "0.1.0" }
 serde.workspace = true
 
 [dev-dependencies]
-pdf_objects = { path = "../pdf_objects" }
+pdf_objects = { path = "../pdf_objects", version = "0.1.0" }
 
 [[test]]
 name = "integration_end_to_end"

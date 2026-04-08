@@ -1,5 +1,6 @@
 [package]
 name = "pdf_graphics"
+description = "PDF page-space geometry and transform helpers for open-redact-pdf."
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -8,4 +9,3 @@ version.workspace = true
 
 [dependencies]
 serde.workspace = true
-
