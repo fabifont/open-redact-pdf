@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use pdf_content::{Operation, ParsedPageContent, parse_page_contents};
 use pdf_graphics::{Matrix, Quad, Rect};
@@ -65,7 +65,9 @@ pub struct ExtractedPageText {
 #[derive(Debug, Clone)]
 pub struct PageSearchIndex {
     normalized_text: String,
-    normalized_to_raw: Vec<usize>,
+    normalized_to_display: Vec<usize>,
+    display_chars: Vec<char>,
+    display_to_glyph: Vec<Option<usize>>,
 }
 
 pub fn analyze_page_text(
@@ -93,29 +95,38 @@ pub fn search_page_text(page: &ExtractedPageText, query: &str) -> Vec<TextMatch>
     while let Some(position) = index.normalized_text[search_offset..].find(&normalized_query) {
         let normalized_start = search_offset + position;
         let normalized_end = normalized_start + normalized_query.len();
-        let raw_start = *index.normalized_to_raw.get(normalized_start).unwrap_or(&0);
-        let raw_end = index
-            .normalized_to_raw
+        let display_start = *index
+            .normalized_to_display
+            .get(normalized_start)
+            .unwrap_or(&0);
+        let display_end = index
+            .normalized_to_display
             .get(normalized_end.saturating_sub(1))
             .copied()
-            .unwrap_or(raw_start)
+            .unwrap_or(display_start)
             + 1;
+        let glyph_indices = (display_start..display_end)
+            .filter_map(|display_index| index.normalized_to_glyph(display_index))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
         let quads = coalesce_match_quads(
-            &page
-            .glyphs
-            .iter()
-            .filter(|glyph| glyph.page_char_index >= raw_start && glyph.page_char_index < raw_end)
-            .map(|glyph| glyph.quad)
-            .collect::<Vec<_>>(),
+            &glyph_indices
+                .iter()
+                .filter_map(|glyph_index| page.glyphs.get(*glyph_index))
+                .map(|glyph| glyph.quad)
+                .collect::<Vec<_>>(),
         );
         if !quads.is_empty() {
             matches.push(TextMatch {
-                text: page
-                    .text
-                    .chars()
-                    .skip(raw_start)
-                    .take(raw_end.saturating_sub(raw_start))
-                    .collect(),
+                text: index
+                    .display_chars
+                    .iter()
+                    .skip(display_start)
+                    .take(display_end.saturating_sub(display_start))
+                    .collect::<String>()
+                    .trim()
+                    .to_string(),
                 page_index: page.page_index,
                 quads,
             });
@@ -195,28 +206,156 @@ fn expand_match_rect(rect: Rect) -> Rect {
 }
 
 fn build_search_index(page: &ExtractedPageText) -> PageSearchIndex {
+    let (display_chars, display_to_glyph) = build_visual_display(page);
     let mut normalized_text = String::new();
-    let mut normalized_to_raw = Vec::new();
+    let mut normalized_to_display = Vec::new();
     let mut previous_was_whitespace = false;
-    for (raw_index, character) in page.text.chars().enumerate() {
+    for (display_index, character) in display_chars.iter().copied().enumerate() {
         if character.is_whitespace() {
             if !previous_was_whitespace {
                 normalized_text.push(' ');
-                normalized_to_raw.push(raw_index);
+                normalized_to_display.push(display_index);
                 previous_was_whitespace = true;
             }
         } else {
             for folded in character.to_lowercase() {
                 normalized_text.push(folded);
-                normalized_to_raw.push(raw_index);
+                normalized_to_display.push(display_index);
             }
             previous_was_whitespace = false;
         }
     }
     PageSearchIndex {
         normalized_text,
-        normalized_to_raw,
+        normalized_to_display,
+        display_chars,
+        display_to_glyph,
     }
+}
+
+impl PageSearchIndex {
+    fn normalized_to_glyph(&self, display_index: usize) -> Option<usize> {
+        self.display_to_glyph
+            .get(display_index)
+            .copied()
+            .flatten()
+    }
+}
+
+fn build_visual_display(page: &ExtractedPageText) -> (Vec<char>, Vec<Option<usize>>) {
+    let mut lines = build_visual_lines(page);
+    for line in &mut lines {
+        line.sort_by(|left, right| {
+            page.glyphs[*left]
+                .bbox
+                .x
+                .partial_cmp(&page.glyphs[*right].bbox.x)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    }
+    lines.sort_by(|left, right| {
+        let left_y = average_line_center_y(page, left);
+        let right_y = average_line_center_y(page, right);
+        right_y
+            .partial_cmp(&left_y)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let mut display_chars = Vec::new();
+    let mut display_to_glyph = Vec::new();
+    for (line_index, line) in lines.iter().enumerate() {
+        if line_index > 0 {
+            display_chars.push('\n');
+            display_to_glyph.push(None);
+        }
+        let mut previous_rect: Option<Rect> = None;
+        for glyph_index in line {
+            let glyph = &page.glyphs[*glyph_index];
+            if let Some(previous) = previous_rect {
+                let gap = glyph.bbox.x - previous.max_x();
+                let threshold = previous.height.min(glyph.bbox.height).max(1.0) * 0.3;
+                if gap > threshold {
+                    display_chars.push(' ');
+                    display_to_glyph.push(None);
+                }
+            }
+            display_chars.push(glyph.text);
+            display_to_glyph.push(Some(*glyph_index));
+            previous_rect = Some(glyph.bbox);
+        }
+    }
+    (display_chars, display_to_glyph)
+}
+
+fn build_visual_lines(page: &ExtractedPageText) -> Vec<Vec<usize>> {
+    let mut indices = (0..page.glyphs.len()).collect::<Vec<_>>();
+    indices.sort_by(|left, right| {
+        let left_center = glyph_center_y(&page.glyphs[*left]);
+        let right_center = glyph_center_y(&page.glyphs[*right]);
+        let y_delta = (left_center - right_center).abs();
+        if y_delta > 1.5 {
+            right_center
+                .partial_cmp(&left_center)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        } else {
+            page.glyphs[*left]
+                .bbox
+                .x
+                .partial_cmp(&page.glyphs[*right].bbox.x)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }
+    });
+
+    let mut lines: Vec<Vec<usize>> = Vec::new();
+    for glyph_index in indices {
+        let Some(target_line) = lines
+            .iter_mut()
+            .find(|line| glyph_belongs_to_line(page, glyph_index, line))
+        else {
+            lines.push(vec![glyph_index]);
+            continue;
+        };
+        target_line.push(glyph_index);
+    }
+    lines
+}
+
+fn glyph_belongs_to_line(page: &ExtractedPageText, glyph_index: usize, line: &[usize]) -> bool {
+    let glyph = &page.glyphs[glyph_index];
+    let glyph_center = glyph_center_y(glyph);
+    let line_center = average_line_center_y(page, line);
+    let line_height = average_line_height(page, line).max(glyph.bbox.height).max(1.0);
+    let overlap = line_vertical_overlap(page, glyph, line);
+    (glyph_center - line_center).abs() <= line_height * 0.55 || overlap >= line_height * 0.35
+}
+
+fn average_line_center_y(page: &ExtractedPageText, line: &[usize]) -> f64 {
+    let total = line
+        .iter()
+        .map(|glyph_index| glyph_center_y(&page.glyphs[*glyph_index]))
+        .sum::<f64>();
+    total / line.len().max(1) as f64
+}
+
+fn average_line_height(page: &ExtractedPageText, line: &[usize]) -> f64 {
+    let total = line
+        .iter()
+        .map(|glyph_index| page.glyphs[*glyph_index].bbox.height)
+        .sum::<f64>();
+    total / line.len().max(1) as f64
+}
+
+fn line_vertical_overlap(page: &ExtractedPageText, glyph: &Glyph, line: &[usize]) -> f64 {
+    line.iter()
+        .map(|glyph_index| {
+            let candidate = &page.glyphs[*glyph_index];
+            glyph.bbox.max_y().min(candidate.bbox.max_y()) - glyph.bbox.y.max(candidate.bbox.y)
+        })
+        .fold(0.0, f64::max)
+}
+
+fn glyph_center_y(glyph: &Glyph) -> f64 {
+    glyph.bbox.y + glyph.bbox.height / 2.0
 }
 
 fn normalize_search_text(input: &str) -> String {
