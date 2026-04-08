@@ -1,6 +1,6 @@
 import {
+  useCallback,
   useEffect,
-  useEffectEvent,
   useMemo,
   useRef,
   useState,
@@ -10,6 +10,7 @@ import {
 import {
   applyRedactions,
   extractText,
+  freePdf,
   getPageCount,
   getPageSize,
   initWasm,
@@ -106,6 +107,10 @@ export function App() {
     setError(null);
     setStatus("Initializing WebAssembly...");
     await initWasm();
+    setHandle((prev) => {
+      if (prev) freePdf(prev);
+      return null;
+    });
     const nextHandle = openPdf(Uint8Array.from(bytes));
     const count = getPageCount(nextHandle);
     const sizes = Array.from({ length: count }, (_, pageIndex) =>
@@ -252,7 +257,7 @@ export function App() {
 
   const targetCount = manualTargets.length + searchTargets.length;
 
-  const setRenderError = useEffectEvent((pageIndex: number, message: string | null) => {
+  const setRenderError = useCallback((pageIndex: number, message: string | null) => {
     setRenderErrors((current) => {
       const next = { ...current };
       if (message) {
@@ -262,7 +267,7 @@ export function App() {
       }
       return next;
     });
-  });
+  }, []);
 
   return (
     <div className="app-shell">

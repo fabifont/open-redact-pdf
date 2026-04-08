@@ -46,6 +46,10 @@ pub struct Glyph {
     pub page_char_index: usize,
     pub operation_index: usize,
     pub location: GlyphLocation,
+    /// False when the glyph was rendered with Tr=3 (invisible mode).
+    /// Invisible glyphs are still included for redaction but excluded from
+    /// search results and extracted text items.
+    pub visible: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -282,7 +286,9 @@ fn build_visual_display(page: &ExtractedPageText) -> (Vec<char>, Vec<Option<usiz
 }
 
 fn build_visual_lines(page: &ExtractedPageText) -> Vec<Vec<usize>> {
-    let mut indices = (0..page.glyphs.len()).collect::<Vec<_>>();
+    let mut indices = (0..page.glyphs.len())
+        .filter(|i| page.glyphs[*i].visible)
+        .collect::<Vec<_>>();
     indices.sort_by(|left, right| {
         let left_center = glyph_center_y(&page.glyphs[*left]);
         let right_center = glyph_center_y(&page.glyphs[*right]);
@@ -431,6 +437,13 @@ fn interpret_page_text(
             "Tc" => text_state.character_spacing = operand_number(operation, 0)?,
             "Tw" => text_state.word_spacing = operand_number(operation, 0)?,
             "TL" => text_state.leading = operand_number(operation, 0)?,
+            "Tr" => {
+                text_state.text_render_mode = operation
+                    .operands
+                    .first()
+                    .and_then(PdfValue::as_integer)
+                    .unwrap_or(0);
+            }
             "Ts" => text_state.text_rise = operand_number(operation, 0)?,
             "Tz" => text_state.horizontal_scaling = operand_number(operation, 0)?,
             "Tj" => {
@@ -584,6 +597,8 @@ struct RuntimeTextState {
     horizontal_scaling: f64,
     leading: f64,
     font: Option<String>,
+    /// PDF text rendering mode. Mode 3 = invisible (used in OCR/PDF-A).
+    text_render_mode: i64,
 }
 
 impl Default for RuntimeTextState {
@@ -598,6 +613,7 @@ impl Default for RuntimeTextState {
             horizontal_scaling: 100.0,
             leading: 0.0,
             font: None,
+            text_render_mode: 0,
         }
     }
 }
@@ -721,6 +737,7 @@ fn show_text(
         });
         for character in decoded.text.chars() {
             let page_char_index = context.text.chars().count();
+            let visible = text_state.text_render_mode != 3;
             context.glyphs.push(Glyph {
                 text: character,
                 bbox,
@@ -743,9 +760,12 @@ fn show_text(
                         byte_end: decoded.byte_end,
                     },
                 },
+                visible,
             });
-            context.text.push(character);
-            item_text.push(character);
+            if visible {
+                context.text.push(character);
+                item_text.push(character);
+            }
         }
         text_state.text_matrix = text_state
             .text_matrix

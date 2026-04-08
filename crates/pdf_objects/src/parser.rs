@@ -143,9 +143,39 @@ fn parse_indirect_object(bytes: &[u8], offset: usize) -> PdfResult<PdfObject> {
         cursor.expect_keyword("stream")?;
         cursor.consume_stream_line_break();
         let stream_start = cursor.position;
-        let endstream_pos = find_keyword(bytes, stream_start, b"endstream")
-            .ok_or_else(|| PdfError::Parse("stream missing endstream".to_string()))?;
-        let data = bytes[stream_start..endstream_pos].to_vec();
+        // Prefer the Length entry from the stream dictionary to determine the
+        // data boundary.  This prevents binary stream data that happens to
+        // contain the literal bytes "endstream" from being truncated.
+        // Fall back to scanning for `endstream` when Length is absent,
+        // an indirect reference (can't resolve yet), or past EOF.
+        let length_hint = dict
+            .get("Length")
+            .and_then(PdfValue::as_integer)
+            .filter(|&len| len >= 0)
+            .map(|len| len as usize);
+        let (data, endstream_pos) = match length_hint {
+            Some(len) if stream_start + len <= bytes.len() => {
+                // Verify the endstream keyword follows at the expected offset.
+                // Tolerate trailing EOL between data and keyword per PDF spec.
+                let mut check = stream_start + len;
+                while check < bytes.len() && matches!(bytes[check], b'\r' | b'\n') {
+                    check += 1;
+                }
+                if bytes.get(check..check + 9) == Some(b"endstream") {
+                    (bytes[stream_start..stream_start + len].to_vec(), check)
+                } else {
+                    // Length is wrong; fall back to scanning
+                    let pos = find_keyword(bytes, stream_start, b"endstream")
+                        .ok_or_else(|| PdfError::Parse("stream missing endstream".to_string()))?;
+                    (bytes[stream_start..pos].to_vec(), pos)
+                }
+            }
+            _ => {
+                let pos = find_keyword(bytes, stream_start, b"endstream")
+                    .ok_or_else(|| PdfError::Parse("stream missing endstream".to_string()))?;
+                (bytes[stream_start..pos].to_vec(), pos)
+            }
+        };
         cursor.position = endstream_pos;
         cursor.expect_keyword("endstream")?;
         cursor.skip_ws_and_comments();
@@ -312,15 +342,36 @@ impl<'a> Cursor<'a> {
 
     fn parse_name(&mut self) -> PdfResult<PdfValue> {
         self.position += 1;
-        let start = self.position;
+        let mut raw = Vec::new();
         while let Some(byte) = self.current() {
             if is_delimiter(byte) || is_whitespace(byte) {
                 break;
             }
-            self.position += 1;
+            if byte == b'#' {
+                let high = self
+                    .bytes
+                    .get(self.position + 1)
+                    .copied()
+                    .ok_or_else(|| PdfError::Parse("truncated #XX escape in name".to_string()))?;
+                let low = self
+                    .bytes
+                    .get(self.position + 2)
+                    .copied()
+                    .ok_or_else(|| PdfError::Parse("truncated #XX escape in name".to_string()))?;
+                let decoded = u8::from_str_radix(
+                    &format!("{}{}", high as char, low as char),
+                    16,
+                )
+                .map_err(|_| PdfError::Parse("invalid #XX hex escape in name".to_string()))?;
+                raw.push(decoded);
+                self.position += 3;
+            } else {
+                raw.push(byte);
+                self.position += 1;
+            }
         }
         Ok(PdfValue::Name(
-            String::from_utf8_lossy(&self.bytes[start..self.position]).to_string(),
+            String::from_utf8_lossy(&raw).to_string(),
         ))
     }
 

@@ -82,7 +82,21 @@ pub fn serialize_value(value: &PdfValue) -> String {
                 number
             }
         }
-        PdfValue::Name(name) => format!("/{name}"),
+        PdfValue::Name(name) => {
+            let mut encoded = String::from("/");
+            for byte in name.bytes() {
+                if byte == b'#'
+                    || byte <= b' '
+                    || byte >= 0x7F
+                    || matches!(byte, b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'{' | b'}' | b'/' | b'%')
+                {
+                    encoded.push_str(&format!("#{:02X}", byte));
+                } else {
+                    encoded.push(byte as char);
+                }
+            }
+            encoded
+        }
         PdfValue::String(string) => serialize_string(string),
         PdfValue::Array(values) => format!(
             "[{}]",

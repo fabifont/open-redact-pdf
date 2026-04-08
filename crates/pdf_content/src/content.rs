@@ -238,15 +238,39 @@ impl<'a> ContentParser<'a> {
 
     fn parse_name(&mut self) -> PdfResult<PdfValue> {
         self.position += 1;
-        let start = self.position;
+        let mut raw = Vec::new();
         while let Some(byte) = self.current() {
             if is_whitespace(byte) || is_delimiter(byte) {
                 break;
             }
-            self.position += 1;
+            if byte == b'#' {
+                let high = self
+                    .bytes
+                    .get(self.position + 1)
+                    .copied()
+                    .unwrap_or(b'0');
+                let low = self
+                    .bytes
+                    .get(self.position + 2)
+                    .copied()
+                    .unwrap_or(b'0');
+                if let Ok(decoded) = u8::from_str_radix(
+                    &format!("{}{}", high as char, low as char),
+                    16,
+                ) {
+                    raw.push(decoded);
+                    self.position += 3;
+                } else {
+                    raw.push(byte);
+                    self.position += 1;
+                }
+            } else {
+                raw.push(byte);
+                self.position += 1;
+            }
         }
         Ok(PdfValue::Name(
-            String::from_utf8_lossy(&self.bytes[start..self.position]).to_string(),
+            String::from_utf8_lossy(&raw).to_string(),
         ))
     }
 
