@@ -1,10 +1,13 @@
 [package]
-name = "open_redact_pdf"
+name = "open-redact-pdf"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
+
+[lib]
+name = "open_redact_pdf"
 
 [dependencies]
 pdf_content = { path = "../pdf_content" }

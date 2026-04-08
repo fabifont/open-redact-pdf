@@ -1,5 +1,5 @@
 {
-  "name": "demo-web",
+  "name": "open-redact-pdf-demo-web",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -15,7 +15,7 @@
     "format": "node -e \"\""
   },
   "dependencies": {
-    "@openredact/ts-sdk": "workspace:*",
+    "@open-redact-pdf/sdk": "workspace:*",
     "pdfjs-dist": "^5.4.394",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"

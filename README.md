@@ -64,8 +64,8 @@ Unsupported features fail explicitly instead of being silently ignored.
 cargo test --workspace
 pnpm install
 pnpm wasm:build
-pnpm --filter @openredact/ts-sdk build
-pnpm --filter demo-web dev
+pnpm --filter @open-redact-pdf/sdk build
+pnpm --filter open-redact-pdf-demo-web dev
 ```
 
 ## Security Model

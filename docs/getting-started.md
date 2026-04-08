@@ -24,15 +24,15 @@ pnpm install
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 pnpm wasm:build
-pnpm --filter @openredact/ts-sdk build
-pnpm --filter demo-web build
-pnpm --filter demo-web test
+pnpm --filter @open-redact-pdf/sdk build
+pnpm --filter open-redact-pdf-demo-web build
+pnpm --filter open-redact-pdf-demo-web test
 ```
 
 ## Run the demo
 
 ```bash
-pnpm --filter demo-web dev
+pnpm --filter open-redact-pdf-demo-web dev
 ```
 
 The demo rebuilds the wasm bundle when the Rust or TS SDK inputs are newer than the generated browser artifacts.
@@ -75,7 +75,7 @@ import {
   searchText,
   applyRedactions,
   savePdf,
-} from "@openredact/ts-sdk";
+} from "@open-redact-pdf/sdk";
 
 await initWasm();
 const handle = openPdf(inputBytes);

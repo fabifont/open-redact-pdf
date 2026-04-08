@@ -16,8 +16,8 @@ The repository is a Rust workspace plus a `pnpm` workspace:
 
 1. Run the Rust checks: `cargo test --workspace`
 2. Rebuild wasm when browser-facing behavior changes: `pnpm wasm:build`
-3. Rebuild the TS SDK if its source or generated wasm changed: `pnpm --filter @openredact/ts-sdk build`
-4. Typecheck and build the demo: `pnpm --filter demo-web build`
+3. Rebuild the TS SDK if its source or generated wasm changed: `pnpm --filter @open-redact-pdf/sdk build`
+4. Typecheck and build the demo: `pnpm --filter open-redact-pdf-demo-web build`
 
 ## When to update docs
 

@@ -7,7 +7,7 @@ title: Browser Integration
 ## Recommended layering
 
 - Use PDF.js or another viewer only for preview rendering and user interaction
-- Keep redaction logic in `@openredact/ts-sdk`
+- Keep redaction logic in `@open-redact-pdf/sdk`
 - Convert UI events into canonical page-space geometry before calling `applyRedactions`
 
 ## Typical flow
@@ -37,6 +37,6 @@ When Rust or wasm-facing code changes:
 
 ```bash
 pnpm wasm:build
-pnpm --filter @openredact/ts-sdk build
-pnpm --filter demo-web dev
+pnpm --filter @open-redact-pdf/sdk build
+pnpm --filter open-redact-pdf-demo-web dev
 ```

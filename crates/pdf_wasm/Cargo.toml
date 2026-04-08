@@ -11,11 +11,10 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 js-sys.workspace = true
-open_redact_pdf = { path = "../open_redact_pdf" }
+open_redact_pdf = { package = "open-redact-pdf", path = "../open_redact_pdf" }
 serde.workspace = true
 serde-wasm-bindgen.workspace = true
 wasm-bindgen.workspace = true
 
 [dev-dependencies]
 wasm-bindgen-test.workspace = true
-

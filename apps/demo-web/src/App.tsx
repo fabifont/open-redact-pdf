@@ -21,7 +21,7 @@ import {
   type QuadGroupTarget,
   type RectTarget,
   type RedactionPlan,
-} from "@openredact/ts-sdk";
+} from "@open-redact-pdf/sdk";
 import { GlobalWorkerOptions, getDocument, type PDFDocumentProxy } from "pdfjs-dist";
 
 GlobalWorkerOptions.workerSrc = new URL(

@@ -1,5 +1,5 @@
 {
-  "name": "@openredact/ts-sdk",
+  "name": "@open-redact-pdf/sdk",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -22,4 +22,3 @@
     "typescript": "^5.9.3"
   }
 }
-

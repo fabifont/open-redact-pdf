@@ -333,7 +333,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
 
 [[package]]
-name = "open_redact_pdf"
+name = "open-redact-pdf"
 version = "0.1.0"
 dependencies = [
  "pdf_content",
@@ -408,7 +408,7 @@ name = "pdf_wasm"
 version = "0.1.0"
 dependencies = [
  "js-sys",
- "open_redact_pdf",
+ "open-redact-pdf",
  "serde",
  "serde-wasm-bindgen",
  "wasm-bindgen",

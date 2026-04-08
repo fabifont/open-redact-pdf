@@ -10,7 +10,7 @@ importers:
 
   apps/demo-web:
     dependencies:
-      '@openredact/ts-sdk':
+      '@open-redact-pdf/sdk':
         specifier: workspace:*
         version: link:../../packages/ts-sdk
       pdfjs-dist:
