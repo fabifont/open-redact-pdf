@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useEffectEvent,
   useMemo,
   useRef,
   useState,
@@ -36,6 +37,8 @@ type PagePreviewProps = {
   manualTargets: RectTarget[];
   searchTargets: QuadGroupTarget[];
   onCreateRectTarget: (target: RectTarget) => void;
+  onRenderError: (pageIndex: number, message: string | null) => void;
+  renderError: string | null;
 };
 
 type DragState = {
@@ -64,7 +67,8 @@ export function App() {
     annotations_removed: number;
     warnings: string[];
   }>(null);
-  const [pageTexts, setPageTexts] = useState<string[]>([]);
+  const [pageTexts, setPageTexts] = useState<Array<{ text: string; error: string | null }>>([]);
+  const [renderErrors, setRenderErrors] = useState<Record<number, string>>({});
 
   useEffect(() => {
     return () => {
@@ -83,22 +87,35 @@ export function App() {
     const sizes = Array.from({ length: count }, (_, pageIndex) =>
       getPageSize(nextHandle, pageIndex),
     );
-    const texts = Array.from({ length: count }, (_, pageIndex) =>
-      extractText(nextHandle, pageIndex).text,
-    );
     setHandle(nextHandle);
     setPdfBytes(bytes);
     setPageSizes(sizes);
-    setPageTexts(texts);
+    setRenderErrors({});
     setManualTargets([]);
     setSearchTargets([]);
     setSearchMatches([]);
     setApplyReport(null);
+    const texts = Array.from({ length: count }, (_, pageIndex) => {
+      try {
+        return { text: extractText(nextHandle, pageIndex).text, error: null };
+      } catch (caught) {
+        const message = caught instanceof Error ? caught.message : String(caught);
+        return { text: "", error: message };
+      }
+    });
+    const extractionFailures = texts.filter((entry) => entry.error !== null).length;
+    setPageTexts(texts);
     if (downloadUrl) {
       URL.revokeObjectURL(downloadUrl);
       setDownloadUrl(null);
     }
-    setStatus(`Loaded ${count} page${count === 1 ? "" : "s"}.`);
+    if (extractionFailures > 0) {
+      setStatus(
+        `Loaded ${count} page${count === 1 ? "" : "s"}; text extraction is unsupported on ${extractionFailures} page${extractionFailures === 1 ? "" : "s"}.`,
+      );
+    } else {
+      setStatus(`Loaded ${count} page${count === 1 ? "" : "s"}.`);
+    }
   }
 
   async function onFileChange(event: ChangeEvent<HTMLInputElement>) {
@@ -132,9 +149,16 @@ export function App() {
       return;
     }
     try {
-      const matches = Array.from({ length: pageSizes.length }, (_, pageIndex) =>
-        searchText(handle, pageIndex, searchQuery),
-      ).flat();
+      const matches: TextMatch[] = [];
+      const failures: string[] = [];
+      for (let pageIndex = 0; pageIndex < pageSizes.length; pageIndex += 1) {
+        try {
+          matches.push(...searchText(handle, pageIndex, searchQuery));
+        } catch (caught) {
+          const message = caught instanceof Error ? caught.message : String(caught);
+          failures.push(`Page ${pageIndex + 1}: ${message}`);
+        }
+      }
       const targets = matches.map<QuadGroupTarget>((match) => ({
         kind: "quadGroup",
         pageIndex: match.page_index,
@@ -142,7 +166,12 @@ export function App() {
       }));
       setSearchMatches(matches);
       setSearchTargets(targets);
-      setStatus(`Found ${matches.length} text match${matches.length === 1 ? "" : "es"}.`);
+      setError(failures.length > 0 ? failures.join(" | ") : null);
+      if (matches.length === 0 && failures.length > 0) {
+        setStatus("Search is unavailable on one or more pages for this PDF subset.");
+      } else {
+        setStatus(`Found ${matches.length} text match${matches.length === 1 ? "" : "es"}.`);
+      }
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : String(caught);
       setError(message);
@@ -185,6 +214,18 @@ export function App() {
   }
 
   const targetCount = manualTargets.length + searchTargets.length;
+
+  const setRenderError = useEffectEvent((pageIndex: number, message: string | null) => {
+    setRenderErrors((current) => {
+      const next = { ...current };
+      if (message) {
+        next[pageIndex] = message;
+      } else {
+        delete next[pageIndex];
+      }
+      return next;
+    });
+  });
 
   return (
     <div className="app-shell">
@@ -263,10 +304,14 @@ export function App() {
           {pageTexts.length === 0 ? (
             <p className="muted">Load a PDF to inspect the retained text layer.</p>
           ) : (
-            pageTexts.map((text, index) => (
+            pageTexts.map((entry, index) => (
               <details key={index}>
                 <summary>Page {index + 1}</summary>
-                <pre>{text || "[empty]"}</pre>
+                {entry.error ? (
+                  <p className="warning">{entry.error}</p>
+                ) : (
+                  <pre>{entry.text || "[empty]"}</pre>
+                )}
               </details>
             ))
           )}
@@ -299,6 +344,8 @@ export function App() {
               manualTargets={manualTargets.filter((target) => target.pageIndex === pageIndex)}
               searchTargets={searchTargets.filter((target) => target.pageIndex === pageIndex)}
               onCreateRectTarget={addManualTarget}
+              onRenderError={setRenderError}
+              renderError={renderErrors[pageIndex] ?? null}
             />
           ))
         )}
@@ -314,6 +361,8 @@ function PagePreview({
   manualTargets,
   searchTargets,
   onCreateRectTarget,
+  onRenderError,
+  renderError,
 }: PagePreviewProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const overlayRef = useRef<SVGSVGElement | null>(null);
@@ -328,7 +377,8 @@ function PagePreview({
       documentRef = document;
       const page = await document.getPage(pageIndex + 1);
       const targetWidth = 720;
-      const scale = Math.min(targetWidth / page.view[2], 1.4);
+      const baseViewport = page.getViewport({ scale: 1 });
+      const scale = Math.min(targetWidth / baseViewport.width, 1.4);
       const pageViewport = page.getViewport({ scale });
       if (cancelled || !canvasRef.current) {
         return;
@@ -348,6 +398,7 @@ function PagePreview({
         })
         .promise;
       if (!cancelled) {
+        onRenderError(pageIndex, null);
         setViewport({
           width: pageViewport.width,
           height: pageViewport.height,
@@ -355,12 +406,17 @@ function PagePreview({
         });
       }
     }
-    renderPage().catch(console.error);
+    renderPage().catch((caught) => {
+      if (!cancelled) {
+        const message = caught instanceof Error ? caught.message : String(caught);
+        onRenderError(pageIndex, message);
+      }
+    });
     return () => {
       cancelled = true;
       void documentRef?.destroy();
     };
-  }, [bytes, pageIndex, size.width]);
+  }, [bytes, onRenderError, pageIndex, size.width]);
 
   const draftRect = useMemo(() => {
     if (!drag || !viewport) {
@@ -424,6 +480,7 @@ function PagePreview({
       </header>
       <div className="page-canvas-wrap">
         <canvas ref={canvasRef} className="page-canvas" />
+        {renderError ? <div className="page-render-error">{renderError}</div> : null}
         {viewport ? (
           <svg
             ref={overlayRef}
