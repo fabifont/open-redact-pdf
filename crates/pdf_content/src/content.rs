@@ -269,6 +269,28 @@ impl<'a> ContentParser<'a> {
                         b'b' => output.push(0x08),
                         b'f' => output.push(0x0C),
                         b'(' | b')' | b'\\' => output.push(escaped),
+                        b'\n' => {}
+                        b'\r' => {
+                            if self.current() == Some(b'\n') {
+                                self.position += 1;
+                            }
+                        }
+                        b'0'..=b'7' => {
+                            let mut octal = vec![escaped];
+                            for _ in 0..2 {
+                                match self.current() {
+                                    Some(next @ b'0'..=b'7') => {
+                                        octal.push(next);
+                                        self.position += 1;
+                                    }
+                                    _ => break,
+                                }
+                            }
+                            let value =
+                                u8::from_str_radix(std::str::from_utf8(&octal).unwrap_or("0"), 8)
+                                    .unwrap_or(0);
+                            output.push(value);
+                        }
                         other => output.push(other),
                     }
                 }
@@ -375,4 +397,30 @@ fn is_whitespace(byte: u8) -> bool {
 
 fn is_delimiter(byte: u8) -> bool {
     matches!(byte, b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'/' | b'%')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_content_stream;
+    use pdf_objects::{PdfString, PdfValue, serialize_value};
+
+    #[test]
+    fn content_parser_round_trips_binary_literal_strings() {
+        let encoded = serialize_value(&PdfValue::String(PdfString(vec![
+            0x00, 0x01, 0x00, 0x02, 0x00, 0x20, 0x00, 0x43, 0xff,
+        ])));
+        let stream = format!("{encoded} Tj\n");
+        let parsed = parse_content_stream(stream.as_bytes()).expect("content parsing should work");
+        let operand = parsed
+            .operations
+            .first()
+            .and_then(|operation| operation.operands.first())
+            .expect("string operand should be present");
+        assert_eq!(
+            operand,
+            &PdfValue::String(PdfString(vec![
+                0x00, 0x01, 0x00, 0x02, 0x00, 0x20, 0x00, 0x43, 0xff,
+            ]))
+        );
+    }
 }

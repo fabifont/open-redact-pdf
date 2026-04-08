@@ -164,6 +164,85 @@ writeFixture("rotated-text.pdf", {
   trailer: { Root: { ref: [1, 0] } },
 });
 
+writeFixture("type0-search.pdf", {
+  objects: [
+    { id: 1, value: { Type: "/Catalog", Pages: { ref: [2, 0] } } },
+    { id: 2, value: { Type: "/Pages", Count: 1, Kids: [{ ref: [3, 0] }] } },
+    basePageObjects({
+      pageId: 3,
+      pagesId: 2,
+      contentId: 4,
+      resources: { Font: { F1: { ref: [5, 0] } } },
+    }),
+    {
+      id: 4,
+      stream: {
+        dict: {},
+        data: "BT\n/F1 24 Tf\n72 700 Td\n<000100020003000400050006000700080009000A> Tj\nET\n",
+      },
+    },
+    {
+      id: 5,
+      value: {
+        Type: "/Font",
+        Subtype: "/Type0",
+        BaseFont: "/DemoCIDFont",
+        Encoding: "/Identity-H",
+        DescendantFonts: [{ ref: [6, 0] }],
+        ToUnicode: { ref: [7, 0] },
+      },
+    },
+    {
+      id: 6,
+      value: {
+        Type: "/Font",
+        Subtype: "/CIDFontType2",
+        BaseFont: "/DemoCIDFont",
+        CIDSystemInfo: {
+          Registry: "Adobe",
+          Ordering: "Identity",
+          Supplement: 0,
+        },
+        DW: 600,
+        W: [1, [600, 600, 600, 600, 600, 600, 600, 600, 600, 600]],
+      },
+    },
+    {
+      id: 7,
+      stream: {
+        dict: {},
+        data:
+          "/CIDInit /ProcSet findresource begin\n" +
+          "12 dict begin\n" +
+          "begincmap\n" +
+          "/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n" +
+          "/CMapName /Adobe-Identity-UCS def\n" +
+          "/CMapType 2 def\n" +
+          "1 begincodespacerange\n" +
+          "<0000> <FFFF>\n" +
+          "endcodespacerange\n" +
+          "10 beginbfchar\n" +
+          "<0001> <0053>\n" +
+          "<0002> <0065>\n" +
+          "<0003> <0063>\n" +
+          "<0004> <0072>\n" +
+          "<0005> <0065>\n" +
+          "<0006> <0074>\n" +
+          "<0007> <0020>\n" +
+          "<0008> <0043>\n" +
+          "<0009> <0049>\n" +
+          "<000A> <0044>\n" +
+          "endbfchar\n" +
+          "endcmap\n" +
+          "CMapName currentdict /CMap defineresource pop\n" +
+          "end\n" +
+          "end\n",
+      },
+    },
+  ],
+  trailer: { Root: { ref: [1, 0] } },
+});
+
 writeFixture("vector-heavy.pdf", {
   objects: [
     { id: 1, value: { Type: "/Catalog", Pages: { ref: [2, 0] } } },

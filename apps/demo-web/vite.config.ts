@@ -5,6 +5,9 @@ import topLevelAwait from "vite-plugin-top-level-await";
 
 export default defineConfig({
   plugins: [react(), wasm(), topLevelAwait()],
+  server: {
+    hmr: false,
+  },
   build: {
     target: "esnext",
   },

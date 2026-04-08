@@ -2,7 +2,9 @@ use std::collections::BTreeMap;
 
 use pdf_content::{Operation, ParsedPageContent, parse_page_contents};
 use pdf_graphics::{Matrix, Quad, Rect};
-use pdf_objects::{PageInfo, PdfError, PdfFile, PdfResult, PdfValue};
+use pdf_objects::{
+    PageInfo, PdfError, PdfFile, PdfResult, PdfValue, decode_stream, document::get_stream,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,12 +33,14 @@ pub struct GlyphRange {
 pub enum GlyphLocation {
     Direct {
         operand_index: usize,
-        byte_index: usize,
+        byte_start: usize,
+        byte_end: usize,
     },
     Array {
         operand_index: usize,
         element_index: usize,
-        byte_index: usize,
+        byte_start: usize,
+        byte_end: usize,
     },
 }
 
@@ -60,7 +64,6 @@ pub struct ExtractedPageText {
 
 #[derive(Debug, Clone)]
 pub struct PageSearchIndex {
-    pub page: ExtractedPageText,
     normalized_text: String,
     normalized_to_raw: Vec<usize>,
 }
@@ -135,13 +138,14 @@ fn build_search_index(page: &ExtractedPageText) -> PageSearchIndex {
                 previous_was_whitespace = true;
             }
         } else {
-            normalized_text.push(character);
-            normalized_to_raw.push(raw_index);
+            for folded in character.to_lowercase() {
+                normalized_text.push(folded);
+                normalized_to_raw.push(raw_index);
+            }
             previous_was_whitespace = false;
         }
     }
     PageSearchIndex {
-        page: page.clone(),
         normalized_text,
         normalized_to_raw,
     }
@@ -157,7 +161,9 @@ fn normalize_search_text(input: &str) -> String {
                 previous_was_whitespace = true;
             }
         } else {
-            output.push(character);
+            for folded in character.to_lowercase() {
+                output.push(folded);
+            }
             previous_was_whitespace = false;
         }
     }
@@ -168,7 +174,7 @@ fn interpret_page_text(
     page_index: usize,
     page: &PageInfo,
     parsed: &ParsedPageContent,
-    fonts: &BTreeMap<String, SimpleFont>,
+    fonts: &BTreeMap<String, LoadedFont>,
 ) -> PdfResult<ExtractedPageText> {
     let page_transform = page.page_box.normalized_transform();
     let mut context = TextContext::new(page_index);
@@ -345,6 +351,28 @@ struct SimpleFont {
 }
 
 #[derive(Debug, Clone)]
+struct CompositeFont {
+    encoding: String,
+    default_width: f64,
+    widths: BTreeMap<u16, f64>,
+    unicode_map: BTreeMap<u16, String>,
+}
+
+#[derive(Debug, Clone)]
+enum LoadedFont {
+    Simple(SimpleFont),
+    Composite(CompositeFont),
+}
+
+#[derive(Debug, Clone)]
+struct DecodedGlyph {
+    text: String,
+    width_units: f64,
+    byte_start: usize,
+    byte_end: usize,
+}
+
+#[derive(Debug, Clone)]
 struct RuntimeTextState {
     text_matrix: Matrix,
     line_matrix: Matrix,
@@ -395,7 +423,7 @@ impl TextContext {
 fn load_fonts(
     file: &PdfFile,
     resources: &pdf_objects::PdfDictionary,
-) -> PdfResult<BTreeMap<String, SimpleFont>> {
+) -> PdfResult<BTreeMap<String, LoadedFont>> {
     let mut fonts = BTreeMap::new();
     let Some(fonts_value) = resources.get("Font") else {
         return Ok(fonts);
@@ -407,26 +435,32 @@ fn load_fonts(
             .get("Subtype")
             .and_then(PdfValue::as_name)
             .unwrap_or("");
-        if !matches!(subtype, "Type1" | "TrueType") {
-            return Err(PdfError::Unsupported(format!(
-                "font subtype {subtype} is not supported"
-            )));
-        }
-        let first_char = font_dict
-            .get("FirstChar")
-            .and_then(PdfValue::as_integer)
-            .unwrap_or(0) as u16;
-        let widths = font_dict
-            .get("Widths")
-            .and_then(PdfValue::as_array)
-            .map(|widths| {
-                widths
-                    .iter()
-                    .map(|value| value.as_number().unwrap_or(600.0))
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        fonts.insert(name.clone(), SimpleFont { widths, first_char });
+        let font = match subtype {
+            "Type1" | "TrueType" => {
+                let first_char = font_dict
+                    .get("FirstChar")
+                    .and_then(PdfValue::as_integer)
+                    .unwrap_or(0) as u16;
+                let widths = font_dict
+                    .get("Widths")
+                    .and_then(PdfValue::as_array)
+                    .map(|widths| {
+                        widths
+                            .iter()
+                            .map(|value| value.as_number().unwrap_or(600.0))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                LoadedFont::Simple(SimpleFont { widths, first_char })
+            }
+            "Type0" => LoadedFont::Composite(load_composite_font(file, font_dict)?),
+            other => {
+                return Err(PdfError::Unsupported(format!(
+                    "font subtype {other} is not supported"
+                )));
+            }
+        };
+        fonts.insert(name.clone(), font);
     }
     Ok(fonts)
 }
@@ -438,7 +472,7 @@ fn show_text(
     show_operand: ShowOperand,
     string: &pdf_objects::PdfString,
     text_state: &mut RuntimeTextState,
-    fonts: &BTreeMap<String, SimpleFont>,
+    fonts: &BTreeMap<String, LoadedFont>,
     ctm: Matrix,
     page_transform: Matrix,
 ) -> PdfResult<()> {
@@ -454,29 +488,24 @@ fn show_text(
         PdfError::Unsupported(format!("font resource /{font_name} could not be resolved"))
     })?;
     let scaling = text_state.horizontal_scaling / 100.0;
-    let text_to_page = text_state
-        .text_matrix
-        .multiply(ctm)
-        .multiply(page_transform);
     let item_start = context.text.chars().count();
     let mut item_quad: Option<Rect> = None;
     let mut item_text = String::new();
+    let decoded_glyphs = decode_font_glyphs(font, &string.0)?;
 
-    for (byte_index, byte) in string.0.iter().copied().enumerate() {
-        let character = decode_simple_byte(byte);
-        let width_units = font
-            .widths
-            .get(byte.saturating_sub(font.first_char as u8) as usize)
-            .copied()
-            .unwrap_or(600.0);
-        let advance = ((width_units / 1000.0) * text_state.font_size
+    for decoded in decoded_glyphs {
+        let advance = ((decoded.width_units / 1000.0) * text_state.font_size
             + text_state.character_spacing
-            + if byte == b' ' {
+            + if decoded.text == " " {
                 text_state.word_spacing
             } else {
                 0.0
             })
             * scaling;
+        let text_to_page = text_state
+            .text_matrix
+            .multiply(ctm)
+            .multiply(page_transform);
         let local_rect = Rect {
             x: 0.0,
             y: text_state.text_rise,
@@ -485,34 +514,38 @@ fn show_text(
         };
         let quad = local_rect.to_quad().transform(text_to_page);
         let bbox = quad.bounding_rect();
-        let page_char_index = context.text.chars().count();
-        context.glyphs.push(Glyph {
-            text: character,
-            bbox,
-            quad,
-            page_char_index,
-            operation_index,
-            location: match show_operand {
-                ShowOperand::Direct { operand_index } => GlyphLocation::Direct {
-                    operand_index,
-                    byte_index,
-                },
-                ShowOperand::Array {
-                    operand_index,
-                    element_index,
-                } => GlyphLocation::Array {
-                    operand_index,
-                    element_index,
-                    byte_index,
-                },
-            },
-        });
         item_quad = Some(match item_quad {
             Some(existing) => existing.union(&bbox),
             None => bbox,
         });
-        context.text.push(character);
-        item_text.push(character);
+        for character in decoded.text.chars() {
+            let page_char_index = context.text.chars().count();
+            context.glyphs.push(Glyph {
+                text: character,
+                bbox,
+                quad,
+                page_char_index,
+                operation_index,
+                location: match show_operand {
+                    ShowOperand::Direct { operand_index } => GlyphLocation::Direct {
+                        operand_index,
+                        byte_start: decoded.byte_start,
+                        byte_end: decoded.byte_end,
+                    },
+                    ShowOperand::Array {
+                        operand_index,
+                        element_index,
+                    } => GlyphLocation::Array {
+                        operand_index,
+                        element_index,
+                        byte_start: decoded.byte_start,
+                        byte_end: decoded.byte_end,
+                    },
+                },
+            });
+            context.text.push(character);
+            item_text.push(character);
+        }
         text_state.text_matrix = text_state
             .text_matrix
             .multiply(Matrix::translate(advance, 0.0));
@@ -541,6 +574,329 @@ fn decode_simple_byte(byte: u8) -> char {
         byte as char
     } else {
         '\u{FFFD}'
+    }
+}
+
+fn decode_font_glyphs(font: &LoadedFont, bytes: &[u8]) -> PdfResult<Vec<DecodedGlyph>> {
+    match font {
+        LoadedFont::Simple(font) => Ok(bytes
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(byte_index, byte)| {
+                let width_units = font
+                    .widths
+                    .get(byte.saturating_sub(font.first_char as u8) as usize)
+                    .copied()
+                    .unwrap_or(600.0);
+                DecodedGlyph {
+                    text: decode_simple_byte(byte).to_string(),
+                    width_units,
+                    byte_start: byte_index,
+                    byte_end: byte_index + 1,
+                }
+            })
+            .collect()),
+        LoadedFont::Composite(font) => decode_composite_glyphs(font, bytes),
+    }
+}
+
+fn load_composite_font(
+    file: &PdfFile,
+    font_dict: &pdf_objects::PdfDictionary,
+) -> PdfResult<CompositeFont> {
+    let encoding = font_dict
+        .get("Encoding")
+        .and_then(PdfValue::as_name)
+        .unwrap_or("Identity-H")
+        .to_string();
+    if encoding != "Identity-H" {
+        return Err(PdfError::Unsupported(format!(
+            "Type0 font encoding {encoding} is not supported"
+        )));
+    }
+
+    let descendant = font_dict
+        .get("DescendantFonts")
+        .and_then(PdfValue::as_array)
+        .and_then(|fonts| fonts.first())
+        .ok_or_else(|| PdfError::Corrupt("Type0 font is missing DescendantFonts".to_string()))?;
+    let descendant_dict = file.resolve_dict(descendant)?;
+    let descendant_subtype = descendant_dict
+        .get("Subtype")
+        .and_then(PdfValue::as_name)
+        .unwrap_or("");
+    if !matches!(descendant_subtype, "CIDFontType0" | "CIDFontType2") {
+        return Err(PdfError::Unsupported(format!(
+            "descendant font subtype {descendant_subtype} is not supported"
+        )));
+    }
+
+    let default_width = descendant_dict
+        .get("DW")
+        .and_then(PdfValue::as_number)
+        .unwrap_or(1000.0);
+    let widths = descendant_dict
+        .get("W")
+        .map(parse_cid_widths)
+        .transpose()?
+        .unwrap_or_default();
+    let unicode_map = load_to_unicode_map(file, font_dict)?;
+
+    Ok(CompositeFont {
+        encoding,
+        default_width,
+        widths,
+        unicode_map,
+    })
+}
+
+fn parse_cid_widths(value: &PdfValue) -> PdfResult<BTreeMap<u16, f64>> {
+    let array = value
+        .as_array()
+        .ok_or_else(|| PdfError::Corrupt("CID font W entry must be an array".to_string()))?;
+    let mut widths = BTreeMap::new();
+    let mut index = 0usize;
+    while index < array.len() {
+        let start_cid = array[index]
+            .as_integer()
+            .ok_or_else(|| PdfError::Corrupt("CID width entry is invalid".to_string()))?
+            as u16;
+        let next = array
+            .get(index + 1)
+            .ok_or_else(|| PdfError::Corrupt("CID width entry is truncated".to_string()))?;
+        if let Some(width_array) = next.as_array() {
+            for (offset, width) in width_array.iter().enumerate() {
+                widths.insert(
+                    start_cid + offset as u16,
+                    width.as_number().ok_or_else(|| {
+                        PdfError::Corrupt("CID width array contains a non-number".to_string())
+                    })?,
+                );
+            }
+            index += 2;
+        } else {
+            let end_cid = next
+                .as_integer()
+                .ok_or_else(|| PdfError::Corrupt("CID width range is invalid".to_string()))?
+                as u16;
+            let width = array
+                .get(index + 2)
+                .and_then(PdfValue::as_number)
+                .ok_or_else(|| PdfError::Corrupt("CID width range is truncated".to_string()))?;
+            for cid in start_cid..=end_cid {
+                widths.insert(cid, width);
+            }
+            index += 3;
+        }
+    }
+    Ok(widths)
+}
+
+fn load_to_unicode_map(
+    file: &PdfFile,
+    font_dict: &pdf_objects::PdfDictionary,
+) -> PdfResult<BTreeMap<u16, String>> {
+    let Some(to_unicode_value) = font_dict.get("ToUnicode") else {
+        return Ok(BTreeMap::new());
+    };
+    let to_unicode_ref = match to_unicode_value {
+        PdfValue::Reference(reference) => *reference,
+        _ => {
+            return Err(PdfError::Unsupported(
+                "direct ToUnicode streams are not supported".to_string(),
+            ));
+        }
+    };
+    let stream = get_stream(file, to_unicode_ref)?;
+    let decoded = decode_stream(stream)?;
+    parse_to_unicode_cmap(&decoded)
+}
+
+fn parse_to_unicode_cmap(data: &[u8]) -> PdfResult<BTreeMap<u16, String>> {
+    let text = String::from_utf8_lossy(data);
+    let mut mapping = BTreeMap::new();
+    enum Mode {
+        BfChar,
+        BfRange,
+    }
+    let mut mode = None;
+    for raw_line in text.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if line.ends_with("beginbfchar") {
+            mode = Some(Mode::BfChar);
+            continue;
+        }
+        if line.ends_with("endbfchar") {
+            mode = None;
+            continue;
+        }
+        if line.ends_with("beginbfrange") {
+            mode = Some(Mode::BfRange);
+            continue;
+        }
+        if line.ends_with("endbfrange") {
+            mode = None;
+            continue;
+        }
+        match mode {
+            Some(Mode::BfChar) => parse_bfchar_line(line, &mut mapping)?,
+            Some(Mode::BfRange) => parse_bfrange_line(line, &mut mapping)?,
+            None => {}
+        }
+    }
+    Ok(mapping)
+}
+
+fn parse_bfchar_line(line: &str, mapping: &mut BTreeMap<u16, String>) -> PdfResult<()> {
+    let tokens = extract_hex_tokens(line);
+    if tokens.len() < 2 {
+        return Ok(());
+    }
+    mapping.insert(parse_cid_token(&tokens[0])?, decode_utf16be_lossy(&tokens[1]));
+    Ok(())
+}
+
+fn parse_bfrange_line(line: &str, mapping: &mut BTreeMap<u16, String>) -> PdfResult<()> {
+    let tokens = extract_hex_tokens(line);
+    if tokens.len() < 3 {
+        return Ok(());
+    }
+    let start = parse_cid_token(&tokens[0])?;
+    let end = parse_cid_token(&tokens[1])?;
+    if line.contains('[') {
+        for (offset, destination) in tokens.iter().skip(2).enumerate() {
+            let cid = start + offset as u16;
+            if cid > end {
+                break;
+            }
+            mapping.insert(cid, decode_utf16be_lossy(destination));
+        }
+        return Ok(());
+    }
+
+    let base = parse_unicode_scalar(&tokens[2])?;
+    for cid in start..=end {
+        let scalar = base + u32::from(cid - start);
+        mapping.insert(
+            cid,
+            char::from_u32(scalar).unwrap_or('\u{FFFD}').to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn extract_hex_tokens(line: &str) -> Vec<Vec<u8>> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut in_hex = false;
+    for character in line.chars() {
+        match character {
+            '<' => {
+                current.clear();
+                in_hex = true;
+            }
+            '>' if in_hex => {
+                if let Ok(bytes) = parse_hex_string_token(&current) {
+                    tokens.push(bytes);
+                }
+                in_hex = false;
+            }
+            _ if in_hex => current.push(character),
+            _ => {}
+        }
+    }
+    tokens
+}
+
+fn parse_hex_string_token(token: &str) -> PdfResult<Vec<u8>> {
+    let filtered = token.chars().filter(|character| !character.is_whitespace()).collect::<String>();
+    let mut chars = filtered.chars().collect::<Vec<_>>();
+    if chars.len() % 2 != 0 {
+        chars.push('0');
+    }
+    let mut bytes = Vec::with_capacity(chars.len() / 2);
+    for pair in chars.chunks(2) {
+        let byte = u8::from_str_radix(&pair.iter().collect::<String>(), 16)
+            .map_err(|_| PdfError::Corrupt("invalid ToUnicode hex token".to_string()))?;
+        bytes.push(byte);
+    }
+    Ok(bytes)
+}
+
+fn parse_cid_token(bytes: &[u8]) -> PdfResult<u16> {
+    match bytes {
+        [single] => Ok(u16::from(*single)),
+        [high, low] => Ok(u16::from_be_bytes([*high, *low])),
+        _ => Err(PdfError::Unsupported(
+            "only one-byte and two-byte CIDs are supported".to_string(),
+        )),
+    }
+}
+
+fn parse_unicode_scalar(bytes: &[u8]) -> PdfResult<u32> {
+    match bytes {
+        [high, low] => Ok(u32::from(u16::from_be_bytes([*high, *low]))),
+        [0, 0, high, low] => Ok(u32::from(u16::from_be_bytes([*high, *low]))),
+        _ => Err(PdfError::Unsupported(
+            "sequential ToUnicode ranges must use a single UTF-16 code unit".to_string(),
+        )),
+    }
+}
+
+fn decode_utf16be_lossy(bytes: &[u8]) -> String {
+    let mut units = Vec::new();
+    let mut index = 0usize;
+    while index < bytes.len() {
+        let high = bytes[index];
+        let low = *bytes.get(index + 1).unwrap_or(&0);
+        units.push(u16::from_be_bytes([high, low]));
+        index += 2;
+    }
+    String::from_utf16_lossy(&units)
+}
+
+fn decode_composite_glyphs(font: &CompositeFont, bytes: &[u8]) -> PdfResult<Vec<DecodedGlyph>> {
+    if font.encoding != "Identity-H" {
+        return Err(PdfError::Unsupported(format!(
+            "Type0 font encoding {} is not supported",
+            font.encoding
+        )));
+    }
+    if bytes.len() % 2 != 0 {
+        return Err(PdfError::Corrupt(
+            "Identity-H strings must contain an even number of bytes".to_string(),
+        ));
+    }
+    let mut glyphs = Vec::new();
+    let mut byte_index = 0usize;
+    while byte_index < bytes.len() {
+        let cid = u16::from_be_bytes([bytes[byte_index], bytes[byte_index + 1]]);
+        let text = font
+            .unicode_map
+            .get(&cid)
+            .cloned()
+            .unwrap_or_else(|| decode_fallback_cid(cid));
+        let width_units = font.widths.get(&cid).copied().unwrap_or(font.default_width);
+        glyphs.push(DecodedGlyph {
+            text,
+            width_units,
+            byte_start: byte_index,
+            byte_end: byte_index + 2,
+        });
+        byte_index += 2;
+    }
+    Ok(glyphs)
+}
+
+fn decode_fallback_cid(cid: u16) -> String {
+    if cid <= 0x7f {
+        char::from_u32(u32::from(cid)).unwrap_or('\u{FFFD}').to_string()
+    } else {
+        '\u{FFFD}'.to_string()
     }
 }
 

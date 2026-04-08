@@ -83,6 +83,38 @@ fn search_derived_quads_can_drive_redaction() {
 }
 
 #[test]
+fn type0_fonts_with_tounicode_are_searchable_and_redactable() {
+    let mut document = PdfDocument::open(&fixture("type0-search.pdf")).expect("fixture should open");
+    let extracted = document.extract_text(0).expect("text extraction should succeed");
+    assert!(extracted.text.contains("Secret CID"));
+
+    let matches = document.search_text(0, "cid").expect("search should succeed");
+    assert_eq!(matches.len(), 1);
+    let quads = matches[0].quads.iter().map(|quad| quad.points).collect::<Vec<_>>();
+
+    let report = document
+        .apply_redactions(RedactionPlan {
+            targets: vec![RedactionTarget::QuadGroup {
+                page_index: 0,
+                quads,
+            }],
+            fill_color: None,
+            overlay_text: None,
+            remove_intersecting_annotations: Some(false),
+            strip_metadata: Some(false),
+            strip_attachments: Some(false),
+        })
+        .expect("redaction should succeed");
+    assert!(report.text_glyphs_removed > 0);
+
+    let saved = document.save().expect("save should succeed");
+    let reopened = PdfDocument::open(&saved).expect("saved pdf should reopen");
+    let extracted_after = reopened.extract_text(0).expect("extraction should still succeed");
+    assert!(extracted_after.text.contains("Secret"));
+    assert!(!extracted_after.text.contains("CID"));
+}
+
+#[test]
 fn can_strip_metadata_and_attachments() {
     let mut document =
         PdfDocument::open(&fixture("metadata-attachments.pdf")).expect("fixture should open");

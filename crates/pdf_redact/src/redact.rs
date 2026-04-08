@@ -53,7 +53,8 @@ pub fn apply_redactions(
         let xobjects = load_xobjects(file, &page.resources)?;
         let glyph_removals = collect_glyph_removals(&extracted.glyphs, &targets);
         let mut operations = parsed.operations.clone();
-        let text_removed = rewrite_text_operations(&mut operations, &glyph_removals);
+        let text_removed = count_removed_glyphs(&glyph_removals);
+        rewrite_text_operations(&mut operations, &glyph_removals);
         report.text_glyphs_removed += text_removed;
 
         let vector_removed =
@@ -241,7 +242,8 @@ type GlyphRemovalMap = BTreeMap<usize, Vec<GlyphByteRef>>;
 struct GlyphByteRef {
     operand_index: usize,
     element_index: Option<usize>,
-    byte_index: usize,
+    byte_start: usize,
+    byte_end: usize,
 }
 
 fn collect_glyph_removals(glyphs: &[Glyph], targets: &[&NormalizedPageTarget]) -> GlyphRemovalMap {
@@ -255,20 +257,24 @@ fn collect_glyph_removals(glyphs: &[Glyph], targets: &[&NormalizedPageTarget]) -
             match glyph.location {
                 GlyphLocation::Direct {
                     operand_index,
-                    byte_index,
+                    byte_start,
+                    byte_end,
                 } => entry.push(GlyphByteRef {
                     operand_index,
                     element_index: None,
-                    byte_index,
+                    byte_start,
+                    byte_end,
                 }),
                 GlyphLocation::Array {
                     operand_index,
                     element_index,
-                    byte_index,
+                    byte_start,
+                    byte_end,
                 } => entry.push(GlyphByteRef {
                     operand_index,
                     element_index: Some(element_index),
-                    byte_index,
+                    byte_start,
+                    byte_end,
                 }),
             }
         }
@@ -288,9 +294,10 @@ fn rewrite_text_operations(operations: &mut [Operation], removals: &GlyphRemoval
             .fold(
                 BTreeMap::<usize, BTreeSet<usize>>::new(),
                 |mut map, entry| {
-                    map.entry(entry.operand_index)
-                        .or_default()
-                        .insert(entry.byte_index);
+                    let bytes = map.entry(entry.operand_index).or_default();
+                    for byte_index in entry.byte_start..entry.byte_end {
+                        bytes.insert(byte_index);
+                    }
                     map
                 },
             );
@@ -305,14 +312,22 @@ fn rewrite_text_operations(operations: &mut [Operation], removals: &GlyphRemoval
             .filter_map(|entry| {
                 entry
                     .element_index
-                    .map(|element_index| (entry.operand_index, element_index, entry.byte_index))
+                    .map(|element_index| {
+                        (
+                            entry.operand_index,
+                            element_index,
+                            entry.byte_start,
+                            entry.byte_end,
+                        )
+                    })
             })
             .fold(
                 BTreeMap::<(usize, usize), BTreeSet<usize>>::new(),
-                |mut map, (operand_index, element_index, byte_index)| {
-                    map.entry((operand_index, element_index))
-                        .or_default()
-                        .insert(byte_index);
+                |mut map, (operand_index, element_index, byte_start, byte_end)| {
+                    let bytes = map.entry((operand_index, element_index)).or_default();
+                    for byte_index in byte_start..byte_end {
+                        bytes.insert(byte_index);
+                    }
                     map
                 },
             );
@@ -325,6 +340,13 @@ fn rewrite_text_operations(operations: &mut [Operation], removals: &GlyphRemoval
         }
     }
     removed
+}
+
+fn count_removed_glyphs(removals: &GlyphRemovalMap) -> usize {
+    removals
+        .values()
+        .map(|entries| entries.iter().copied().collect::<BTreeSet<_>>().len())
+        .sum()
 }
 
 fn remove_bytes_from_string(string: &mut PdfString, bytes: &BTreeSet<usize>) -> usize {

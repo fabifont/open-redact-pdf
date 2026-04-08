@@ -53,7 +53,7 @@ impl Rect {
         let right = self.max_x().min(other.max_x());
         let bottom = self.y.max(other.y);
         let top = self.max_y().min(other.max_y());
-        left <= right && bottom <= top
+        left < right && bottom < top
     }
 
     pub fn contains(self, point: Point) -> bool {

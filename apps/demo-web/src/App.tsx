@@ -31,7 +31,7 @@ GlobalWorkerOptions.workerSrc = new URL(
 ).toString();
 
 type PagePreviewProps = {
-  bytes: Uint8Array;
+  document: PDFDocumentProxy | null;
   pageIndex: number;
   size: { width: number; height: number };
   manualTargets: RectTarget[];
@@ -69,6 +69,7 @@ export function App() {
   }>(null);
   const [pageTexts, setPageTexts] = useState<Array<{ text: string; error: string | null }>>([]);
   const [renderErrors, setRenderErrors] = useState<Record<number, string>>({});
+  const [previewDocument, setPreviewDocument] = useState<PDFDocumentProxy | null>(null);
 
   useEffect(() => {
     return () => {
@@ -77,6 +78,38 @@ export function App() {
       }
     };
   }, [downloadUrl]);
+
+  useEffect(() => {
+    if (!pdfBytes) {
+      setPreviewDocument(null);
+      return;
+    }
+
+    let cancelled = false;
+    let documentRef: PDFDocumentProxy | null = null;
+    setRenderErrors({});
+    getDocument({ data: Uint8Array.from(pdfBytes) }).promise
+      .then((document) => {
+        documentRef = document;
+        if (!cancelled) {
+          setPreviewDocument(document);
+        }
+      })
+      .catch((caught) => {
+        const message = caught instanceof Error ? caught.message : String(caught);
+        if (!cancelled) {
+          setError(message);
+          setStatus("PDF.js preview failed to load.");
+          setPreviewDocument(null);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+      setPreviewDocument((current) => (current === documentRef ? null : current));
+      void documentRef?.destroy();
+    };
+  }, [pdfBytes]);
 
   async function loadPdfBytes(bytes: Uint8Array) {
     setError(null);
@@ -338,7 +371,7 @@ export function App() {
           pageSizes.map((size, pageIndex) => (
             <PagePreview
               key={pageIndex}
-              bytes={pdfBytes}
+              document={previewDocument}
               pageIndex={pageIndex}
               size={size}
               manualTargets={manualTargets.filter((target) => target.pageIndex === pageIndex)}
@@ -355,7 +388,7 @@ export function App() {
 }
 
 function PagePreview({
-  bytes,
+  document,
   pageIndex,
   size,
   manualTargets,
@@ -370,14 +403,14 @@ function PagePreview({
   const [viewport, setViewport] = useState<{ width: number; height: number; scale: number } | null>(null);
 
   useEffect(() => {
+    if (!document) {
+      setViewport(null);
+      return;
+    }
+    const previewDocument = document;
     let cancelled = false;
-    let documentRef: PDFDocumentProxy | null = null;
     async function renderPage() {
-      // PDF.js may transfer ownership of the typed array to its worker.
-      // Use a fresh clone per load so app state does not end up holding a detached buffer.
-      const document = await getDocument({ data: Uint8Array.from(bytes) }).promise;
-      documentRef = document;
-      const page = await document.getPage(pageIndex + 1);
+      const page = await previewDocument.getPage(pageIndex + 1);
       const targetWidth = 720;
       const baseViewport = page.getViewport({ scale: 1 });
       const scale = Math.min(targetWidth / baseViewport.width, 1.4);
@@ -416,9 +449,8 @@ function PagePreview({
     });
     return () => {
       cancelled = true;
-      void documentRef?.destroy();
     };
-  }, [bytes, onRenderError, pageIndex, size.width]);
+  }, [document, onRenderError, pageIndex, size.width]);
 
   const draftRect = useMemo(() => {
     if (!drag || !viewport) {
