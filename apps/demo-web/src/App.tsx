@@ -63,7 +63,7 @@ export function App() {
   const [searchTargets, setSearchTargets] = useState<QuadGroupTarget[]>([]);
   const [searchMatches, setSearchMatches] = useState<UiTextMatch[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
-  const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
+  const [downloadBytes, setDownloadBytes] = useState<Uint8Array | null>(null);
   const [applyReport, setApplyReport] = useState<null | {
     pages_touched: number;
     text_glyphs_removed: number;
@@ -75,14 +75,6 @@ export function App() {
   const [pageTexts, setPageTexts] = useState<Array<{ text: string; error: string | null }>>([]);
   const [renderErrors, setRenderErrors] = useState<Record<number, string>>({});
   const [previewDocument, setPreviewDocument] = useState<PDFDocumentProxy | null>(null);
-
-  useEffect(() => {
-    return () => {
-      if (downloadUrl) {
-        URL.revokeObjectURL(downloadUrl);
-      }
-    };
-  }, [downloadUrl]);
 
   useEffect(() => {
     if (!pdfBytes) {
@@ -133,6 +125,7 @@ export function App() {
     setSearchTargets([]);
     setSearchMatches([]);
     setApplyReport(null);
+    setDownloadBytes(null);
     const texts = Array.from({ length: count }, (_, pageIndex) => {
       try {
         return { text: extractText(nextHandle, pageIndex).text, error: null };
@@ -143,10 +136,6 @@ export function App() {
     });
     const extractionFailures = texts.filter((entry) => entry.error !== null).length;
     setPageTexts(texts);
-    if (downloadUrl) {
-      URL.revokeObjectURL(downloadUrl);
-      setDownloadUrl(null);
-    }
     if (extractionFailures > 0) {
       setStatus(
         `Loaded ${count} page${count === 1 ? "" : "s"}; text extraction is unsupported on ${extractionFailures} page${extractionFailures === 1 ? "" : "s"}.`,
@@ -238,24 +227,33 @@ export function App() {
       const report = applyRedactions(handle, plan);
       const nextBytes = savePdf(handle);
       const stableBytes = Uint8Array.from(nextBytes);
-      const url = URL.createObjectURL(
-        new Blob([stableBytes], { type: "application/pdf" }),
-      );
-      if (downloadUrl) {
-        URL.revokeObjectURL(downloadUrl);
-      }
-      setDownloadUrl(url);
       setApplyReport(report);
       setStatus("Redactions applied. Reopening sanitized PDF...");
       await loadPdfBytes(stableBytes);
       setApplyReport(report);
-      setDownloadUrl(url);
+      setDownloadBytes(stableBytes);
       setStatus("Sanitized PDF ready for download.");
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : String(caught);
       setError(message);
       setStatus("Redaction failed.");
     }
+  }
+
+  function downloadSanitizedPdf() {
+    if (!downloadBytes) {
+      return;
+    }
+    const bytes = Uint8Array.from(downloadBytes);
+    const url = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
+    const anchor = window.document.createElement("a");
+    anchor.href = url;
+    anchor.download = "sanitized.pdf";
+    anchor.style.display = "none";
+    window.document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
   }
 
   const targetCount = manualTargets.length + searchTargets.length;
@@ -337,10 +335,10 @@ export function App() {
               ))}
             </div>
           ) : null}
-          {downloadUrl ? (
-            <a className="download-link" href={downloadUrl} download="sanitized.pdf">
+          {downloadBytes ? (
+            <button type="button" className="download-link" onClick={downloadSanitizedPdf}>
               Download Sanitized PDF
-            </a>
+            </button>
           ) : null}
         </div>
 
@@ -478,11 +476,6 @@ function PagePreview({
     };
   }, [drag, viewport]);
 
-  const displaySearchQuads = useMemo(
-    () => searchTargets.flatMap((target) => coalesceDisplayQuads(target.quads)),
-    [searchTargets],
-  );
-
   function beginDrag(event: PointerEvent<SVGSVGElement>) {
     if (!viewport || !overlayRef.current) {
       return;
@@ -552,7 +545,7 @@ function PagePreview({
                 height={target.height * viewport.scale}
               />
             ))}
-            {displaySearchQuads.map((quad, index) => (
+            {searchTargets.flatMap((target) => target.quads).map((quad, index) => (
               <polygon
                 key={`search-${pageIndex}-${index}`}
                 className="search-target"
@@ -652,84 +645,4 @@ function readQuadPoints(
   quad: [Point, Point, Point, Point] | { points: [Point, Point, Point, Point] },
 ): [Point, Point, Point, Point] {
   return Array.isArray(quad) ? quad : quad.points;
-}
-
-function coalesceDisplayQuads(
-  quads: Array<[Point, Point, Point, Point]>,
-): Array<[Point, Point, Point, Point]> {
-  const rects = quads
-    .map((quad) => quadToRect(quad))
-    .sort((left, right) => {
-      const yDelta = Math.abs(left.y - right.y);
-      if (yDelta > 1.5) {
-        return right.y - left.y;
-      }
-      return left.x - right.x;
-    });
-
-  const merged: Array<{ x: number; y: number; width: number; height: number }> = [];
-  for (const rect of rects) {
-    const previous = merged.at(-1);
-    if (!previous || !shouldMergeDisplayRects(previous, rect)) {
-      merged.push({ ...rect });
-      continue;
-    }
-    const nextX = Math.min(previous.x, rect.x);
-    const nextY = Math.min(previous.y, rect.y);
-    const nextMaxX = Math.max(previous.x + previous.width, rect.x + rect.width);
-    const nextMaxY = Math.max(previous.y + previous.height, rect.y + rect.height);
-    previous.x = nextX;
-    previous.y = nextY;
-    previous.width = nextMaxX - nextX;
-    previous.height = nextMaxY - nextY;
-  }
-
-  return merged.map((rect) => rectToQuad(expandDisplayRect(rect)));
-}
-
-function quadToRect(quad: [Point, Point, Point, Point]) {
-  const xs = quad.map((point) => point.x);
-  const ys = quad.map((point) => point.y);
-  const minX = Math.min(...xs);
-  const minY = Math.min(...ys);
-  const maxX = Math.max(...xs);
-  const maxY = Math.max(...ys);
-  return {
-    x: minX,
-    y: minY,
-    width: maxX - minX,
-    height: maxY - minY,
-  };
-}
-
-function shouldMergeDisplayRects(
-  left: { x: number; y: number; width: number; height: number },
-  right: { x: number; y: number; width: number; height: number },
-): boolean {
-  const leftTop = left.y + left.height;
-  const rightTop = right.y + right.height;
-  const verticalOverlap = Math.min(leftTop, rightTop) - Math.max(left.y, right.y);
-  const minimumHeight = Math.max(1, Math.min(left.height, right.height));
-  const horizontalGap = right.x - (left.x + left.width);
-  return verticalOverlap >= minimumHeight * 0.45 && horizontalGap <= minimumHeight * 0.65;
-}
-
-function expandDisplayRect(rect: { x: number; y: number; width: number; height: number }) {
-  const paddingX = Math.max(0.8, rect.height * 0.12);
-  const paddingY = Math.max(0.6, rect.height * 0.08);
-  return {
-    x: rect.x - paddingX,
-    y: rect.y - paddingY,
-    width: rect.width + paddingX * 2,
-    height: rect.height + paddingY * 2,
-  };
-}
-
-function rectToQuad(rect: { x: number; y: number; width: number; height: number }): [Point, Point, Point, Point] {
-  return [
-    { x: rect.x, y: rect.y },
-    { x: rect.x + rect.width, y: rect.y },
-    { x: rect.x + rect.width, y: rect.y + rect.height },
-    { x: rect.x, y: rect.y + rect.height },
-  ];
 }

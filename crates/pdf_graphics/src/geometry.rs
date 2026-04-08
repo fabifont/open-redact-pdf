@@ -211,6 +211,21 @@ impl Matrix {
         }
     }
 
+    pub fn inverse(self) -> Option<Self> {
+        let determinant = self.a * self.d - self.b * self.c;
+        if determinant.abs() < 1e-12 {
+            return None;
+        }
+        Some(Self {
+            a: self.d / determinant,
+            b: -self.b / determinant,
+            c: -self.c / determinant,
+            d: self.a / determinant,
+            e: (self.c * self.f - self.d * self.e) / determinant,
+            f: (self.b * self.e - self.a * self.f) / determinant,
+        })
+    }
+
     pub fn transform_point(self, point: Point) -> Point {
         Point {
             x: point.x * self.a + point.y * self.c + self.e,
@@ -294,5 +309,18 @@ mod tests {
         let matrix = Matrix::translate(10.0, 5.0).multiply(Matrix::scale(2.0, 3.0));
         let point = matrix.transform_point(Point::new(4.0, 2.0));
         assert_eq!(point, Point::new(28.0, 21.0));
+    }
+
+    #[test]
+    fn matrix_inverse_round_trips_points() {
+        let matrix = Matrix::translate(15.0, -7.0)
+            .multiply(Matrix::rotate_degrees(90))
+            .multiply(Matrix::scale(2.0, 3.0));
+        let inverse = matrix.inverse().expect("matrix should be invertible");
+        let point = Point::new(12.5, -4.0);
+        let transformed = matrix.transform_point(point);
+        let round_tripped = inverse.transform_point(transformed);
+        assert!((round_tripped.x - point.x).abs() < 1e-9);
+        assert!((round_tripped.y - point.y).abs() < 1e-9);
     }
 }

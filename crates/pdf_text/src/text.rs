@@ -100,12 +100,14 @@ pub fn search_page_text(page: &ExtractedPageText, query: &str) -> Vec<TextMatch>
             .copied()
             .unwrap_or(raw_start)
             + 1;
-        let quads = page
+        let quads = coalesce_match_quads(
+            &page
             .glyphs
             .iter()
             .filter(|glyph| glyph.page_char_index >= raw_start && glyph.page_char_index < raw_end)
             .map(|glyph| glyph.quad)
-            .collect::<Vec<_>>();
+            .collect::<Vec<_>>(),
+        );
         if !quads.is_empty() {
             matches.push(TextMatch {
                 text: page
@@ -124,6 +126,72 @@ pub fn search_page_text(page: &ExtractedPageText, query: &str) -> Vec<TextMatch>
         }
     }
     matches
+}
+
+fn coalesce_match_quads(quads: &[Quad]) -> Vec<Quad> {
+    let mut rects = quads
+        .iter()
+        .map(|quad| quad.bounding_rect())
+        .collect::<Vec<_>>();
+    rects.sort_by(|left, right| {
+        let y_delta = (left.y - right.y).abs();
+        if y_delta > 1.5 {
+            right
+                .y
+                .partial_cmp(&left.y)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        } else {
+            left.x
+                .partial_cmp(&right.x)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }
+    });
+
+    let mut merged = Vec::<Rect>::new();
+    for rect in rects {
+        let Some(previous) = merged.last_mut() else {
+            merged.push(rect);
+            continue;
+        };
+        if should_merge_match_rects(*previous, rect) {
+            let next_x = previous.x.min(rect.x);
+            let next_y = previous.y.min(rect.y);
+            let next_max_x = previous.max_x().max(rect.max_x());
+            let next_max_y = previous.max_y().max(rect.max_y());
+            *previous = Rect {
+                x: next_x,
+                y: next_y,
+                width: next_max_x - next_x,
+                height: next_max_y - next_y,
+            };
+        } else {
+            merged.push(rect);
+        }
+    }
+
+    merged
+        .into_iter()
+        .map(expand_match_rect)
+        .map(Rect::to_quad)
+        .collect()
+}
+
+fn should_merge_match_rects(left: Rect, right: Rect) -> bool {
+    let vertical_overlap = left.max_y().min(right.max_y()) - left.y.max(right.y);
+    let minimum_height = left.height.min(right.height).max(1.0);
+    let horizontal_gap = right.x - left.max_x();
+    vertical_overlap >= minimum_height * 0.45 && horizontal_gap <= minimum_height * 0.8
+}
+
+fn expand_match_rect(rect: Rect) -> Rect {
+    let padding_x = (rect.height * 0.08).max(0.6);
+    let padding_y = (rect.height * 0.12).max(0.8);
+    Rect {
+        x: rect.x - padding_x,
+        y: rect.y - padding_y,
+        width: rect.width + padding_x * 2.0,
+        height: rect.height + padding_y * 2.0,
+    }
 }
 
 fn build_search_index(page: &ExtractedPageText) -> PageSearchIndex {
@@ -950,5 +1018,47 @@ fn operand_string(operation: &Operation, index: usize) -> PdfResult<&pdf_objects
         _ => Err(PdfError::Corrupt(format!(
             "operand {index} is not a string"
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::coalesce_match_quads;
+    use pdf_graphics::{Point, Quad};
+
+    #[test]
+    fn coalesces_adjacent_glyph_quads_into_match_regions() {
+        let quads = vec![
+            Quad {
+                points: [
+                    Point { x: 10.0, y: 20.0 },
+                    Point { x: 14.0, y: 20.0 },
+                    Point { x: 14.0, y: 30.0 },
+                    Point { x: 10.0, y: 30.0 },
+                ],
+            },
+            Quad {
+                points: [
+                    Point { x: 14.3, y: 20.0 },
+                    Point { x: 18.5, y: 20.0 },
+                    Point { x: 18.5, y: 30.0 },
+                    Point { x: 14.3, y: 30.0 },
+                ],
+            },
+            Quad {
+                points: [
+                    Point { x: 50.0, y: 5.0 },
+                    Point { x: 54.0, y: 5.0 },
+                    Point { x: 54.0, y: 15.0 },
+                    Point { x: 50.0, y: 15.0 },
+                    ],
+            },
+        ];
+
+        let merged = coalesce_match_quads(&quads);
+        assert_eq!(merged.len(), 2);
+        let first = merged[0].bounding_rect();
+        assert!(first.x < 10.0);
+        assert!(first.max_x() > 18.5);
     }
 }

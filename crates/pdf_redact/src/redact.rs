@@ -77,7 +77,12 @@ pub fn apply_redactions(
         };
         report.annotations_removed += annotation_removed;
 
-        let overlay = overlay_stream_bytes(&targets, plan.fill_color);
+        let overlay = overlay_stream_bytes(
+            &targets,
+            plan.fill_color,
+            page.page_box.normalized_transform(),
+            final_page_ctm(&operations)?,
+        )?;
         let mut content_bytes = serialize_operations(&operations);
         content_bytes.extend_from_slice(&overlay);
         write_page_contents(file, pages, page_index, content_bytes)?;
@@ -557,16 +562,43 @@ fn write_page_contents(
     Ok(())
 }
 
-fn overlay_stream_bytes(targets: &[&NormalizedPageTarget], color: Color) -> Vec<u8> {
+fn overlay_stream_bytes(
+    targets: &[&NormalizedPageTarget],
+    color: Color,
+    page_transform: Matrix,
+    final_ctm: Matrix,
+) -> PdfResult<Vec<u8>> {
+    let inverse_page_transform = page_transform.inverse().ok_or_else(|| {
+        PdfError::Unsupported(
+            "page transform is singular and cannot be used for overlay painting".to_string(),
+        )
+    })?;
+    let inverse_final_ctm = final_ctm.inverse().ok_or_else(|| {
+        PdfError::Unsupported(
+            "page content leaves a singular CTM, so redaction overlays cannot be painted safely"
+                .to_string(),
+        )
+    })?;
     let red = f64::from(color.r) / 255.0;
     let green = f64::from(color.g) / 255.0;
     let blue = f64::from(color.b) / 255.0;
     let mut output = String::new();
     output.push_str("q\n");
+    output.push_str(&format!(
+        "{} {} {} {} {} {} cm\n",
+        format_number(inverse_final_ctm.a),
+        format_number(inverse_final_ctm.b),
+        format_number(inverse_final_ctm.c),
+        format_number(inverse_final_ctm.d),
+        format_number(inverse_final_ctm.e),
+        format_number(inverse_final_ctm.f)
+    ));
     output.push_str(&format!("{red:.3} {green:.3} {blue:.3} rg\n"));
     for target in targets {
         for quad in &target.quads {
-            let [a, b, c, d] = quad.points;
+            let [a, b, c, d] = quad
+                .transform(inverse_page_transform)
+                .points;
             output.push_str(&format!(
                 "{} {} m\n{} {} l\n{} {} l\n{} {} l\nh\nf\n",
                 format_number(a.x),
@@ -581,7 +613,7 @@ fn overlay_stream_bytes(targets: &[&NormalizedPageTarget], color: Color) -> Vec<
         }
     }
     output.push_str("Q\n");
-    output.into_bytes()
+    Ok(output.into_bytes())
 }
 
 fn serialize_operations(operations: &[Operation]) -> Vec<u8> {
@@ -676,6 +708,20 @@ fn matrix_from_operands(operands: &[PdfValue]) -> PdfResult<Matrix> {
             .as_number()
             .ok_or_else(|| PdfError::Corrupt("cm operand is not numeric".to_string()))?,
     })
+}
+
+fn final_page_ctm(operations: &[Operation]) -> PdfResult<Matrix> {
+    let mut ctm = Matrix::identity();
+    let mut stack = Vec::new();
+    for operation in operations {
+        match operation.operator.as_str() {
+            "q" => stack.push(ctm),
+            "Q" => ctm = stack.pop().unwrap_or(Matrix::identity()),
+            "cm" => ctm = ctm.multiply(matrix_from_operands(&operation.operands)?),
+            _ => {}
+        }
+    }
+    Ok(ctm)
 }
 
 fn operand_number(operation: &Operation, index: usize) -> PdfResult<f64> {
