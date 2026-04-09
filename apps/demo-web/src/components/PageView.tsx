@@ -152,7 +152,7 @@ export function PageView({
   const targetCount = manualTargets.length + searchTargets.reduce((sum, target) => sum + target.quads.length, 0);
 
   return (
-    <div className="page-card">
+    <div className={`page-card${collapsed ? " page-card-collapsed" : ""}`}>
       <div
         className="page-card-header"
         onClick={onToggleCollapsed}
