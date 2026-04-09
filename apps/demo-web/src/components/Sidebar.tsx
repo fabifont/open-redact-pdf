@@ -25,6 +25,7 @@ type SidebarProps = {
   onDownload: () => void;
   applyReport: ApplyReport | null;
   downloadReady: boolean;
+  error: string | null;
   pageTexts: Array<{ text: string; error: string | null }>;
 };
 
@@ -43,6 +44,7 @@ export function Sidebar({
   onDownload,
   applyReport,
   downloadReady,
+  error,
   pageTexts,
 }: SidebarProps) {
   const targetCount = manualTargets.length + searchTargets.length;
@@ -119,6 +121,9 @@ export function Sidebar({
             Clear
           </button>
         </div>
+        {error ? (
+          <div className="sidebar-error">{error}</div>
+        ) : null}
       </div>
 
       {/* Report */}

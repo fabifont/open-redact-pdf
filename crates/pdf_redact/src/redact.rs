@@ -257,52 +257,25 @@ fn ensure_supported_operators(operations: &[Operation]) -> PdfResult<()> {
     for operation in operations {
         let supported = matches!(
             operation.operator.as_str(),
-            "q" | "Q"
-                | "cm"
-                | "BT"
-                | "ET"
-                | "Tf"
-                | "Tm"
-                | "Td"
-                | "TD"
-                | "T*"
-                | "Tc"
-                | "Tw"
-                | "TL"
-                | "Ts"
-                | "Tz"
-                | "Tr"
-                | "Tj"
-                | "TJ"
-                | "'"
-                | "\""
-                | "m"
-                | "l"
-                | "c"
-                | "h"
-                | "re"
-                | "S"
-                | "s"
-                | "f"
-                | "F"
-                | "f*"
-                | "B"
-                | "B*"
-                | "b"
-                | "b*"
-                | "n"
-                | "w"
-                | "J"
-                | "j"
-                | "M"
-                | "d"
-                | "ri"
-                | "i"
-                | "rg"
-                | "RG"
-                | "g"
-                | "G"
-                | "Do"
+            // Graphics state
+            "q" | "Q" | "cm" | "gs" | "w" | "J" | "j" | "M" | "d" | "ri" | "i"
+            // Text state & operators
+            | "BT" | "ET" | "Tf" | "Tm" | "Td" | "TD" | "T*"
+            | "Tc" | "Tw" | "TL" | "Ts" | "Tz" | "Tr"
+            | "Tj" | "TJ" | "'" | "\""
+            // Path construction
+            | "m" | "l" | "c" | "v" | "y" | "h" | "re"
+            // Path painting
+            | "S" | "s" | "f" | "F" | "f*" | "B" | "B*" | "b" | "b*" | "n"
+            // Clipping
+            | "W" | "W*"
+            // Color (device + general)
+            | "rg" | "RG" | "g" | "G" | "k" | "K"
+            | "cs" | "CS" | "sc" | "SC" | "scn" | "SCN"
+            // XObjects
+            | "Do"
+            // Marked content (safe passthrough)
+            | "BMC" | "BDC" | "EMC" | "MP" | "DP"
         );
         if !supported {
             return Err(PdfError::Unsupported(format!(

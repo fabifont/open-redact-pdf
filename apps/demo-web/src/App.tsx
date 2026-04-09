@@ -300,6 +300,7 @@ export function App() {
           onDownload={downloadSanitizedPdf}
           applyReport={applyReport}
           downloadReady={downloadBytes !== null}
+          error={error}
           pageTexts={pageTexts}
         />
         <div className="page-stage">
