@@ -48,6 +48,7 @@ export function PageView({
   const overlayRef = useRef<SVGSVGElement | null>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
   const [viewport, setViewport] = useState<Viewport | null>(null);
+  const [renderedWidth, setRenderedWidth] = useState<number | null>(null);
 
   useEffect(() => {
     if (!document || collapsed) {
@@ -78,6 +79,7 @@ export function PageView({
         .promise;
       if (!cancelled) {
         onRenderError(pageIndex, null);
+        setRenderedWidth(pageViewport.width);
         setViewport({
           width: pageViewport.width,
           height: pageViewport.height,
@@ -152,7 +154,10 @@ export function PageView({
   const targetCount = manualTargets.length + searchTargets.reduce((sum, target) => sum + target.quads.length, 0);
 
   return (
-    <div className={`page-card${collapsed ? " page-card-collapsed" : ""}`}>
+    <div
+      className={`page-card${collapsed ? " page-card-collapsed" : ""}`}
+      style={collapsed && renderedWidth ? { minWidth: renderedWidth } : undefined}
+    >
       <div
         className="page-card-header"
         onClick={onToggleCollapsed}
