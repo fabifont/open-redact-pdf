@@ -107,10 +107,10 @@ export function App() {
     setError(null);
     setStatus("Initializing WebAssembly...");
     await initWasm();
-    setHandle((prev) => {
-      if (prev) freePdf(prev);
-      return null;
-    });
+    if (handle) {
+      freePdf(handle);
+      setHandle(null);
+    }
     const nextHandle = openPdf(Uint8Array.from(bytes));
     const count = getPageCount(nextHandle);
     const sizes = Array.from({ length: count }, (_, pageIndex) =>
