@@ -142,6 +142,12 @@ pub fn parse_content_stream(bytes: &[u8]) -> PdfResult<ContentStream> {
             continue;
         }
         let operator = parser.parse_operator()?;
+        if operator == "BI" {
+            // Inline image: skip past ID <binary data> EI
+            parser.skip_inline_image()?;
+            operands.clear();
+            continue;
+        }
         operations.push(Operation {
             operator,
             operands: std::mem::take(&mut operands),
@@ -199,9 +205,10 @@ impl<'a> ContentParser<'a> {
             Some(b'/') => self.parse_name().map(Some),
             Some(b'(') => self.parse_literal_string().map(Some),
             Some(b'[') => self.parse_array().map(Some),
-            Some(b'<') if self.bytes.get(self.position + 1) != Some(&b'<') => {
-                self.parse_hex_string().map(Some)
+            Some(b'<') if self.bytes.get(self.position + 1) == Some(&b'<') => {
+                self.parse_dictionary().map(Some)
             }
+            Some(b'<') => self.parse_hex_string().map(Some),
             Some(b't') if self.peek_keyword("true") => {
                 self.position += 4;
                 Ok(Some(PdfValue::Bool(true)))
@@ -408,6 +415,83 @@ impl<'a> ContentParser<'a> {
         }
     }
 
+    fn parse_dictionary(&mut self) -> PdfResult<PdfValue> {
+        self.position += 2; // skip <<
+        let mut dictionary = pdf_objects::PdfDictionary::new();
+        loop {
+            self.skip_ws_and_comments();
+            if self.current() == Some(b'>') && self.bytes.get(self.position + 1) == Some(&b'>') {
+                self.position += 2;
+                break;
+            }
+            if self.eof() {
+                return Err(PdfError::Parse("unterminated dictionary in content stream".to_string()));
+            }
+            let key = match self.parse_name()? {
+                PdfValue::Name(name) => name,
+                _ => unreachable!(),
+            };
+            let value = self
+                .try_parse_operand()?
+                .ok_or_else(|| PdfError::Parse("unsupported dictionary value in content stream".to_string()))?;
+            dictionary.insert(key, value);
+        }
+        Ok(PdfValue::Dictionary(dictionary))
+    }
+
+    /// Skip past an inline image: after `BI` has been read as an operator,
+    /// consume the key/value pairs, `ID`, binary data, and `EI`.
+    fn skip_inline_image(&mut self) -> PdfResult<()> {
+        // Read key/value pairs until we hit the ID operator
+        loop {
+            self.skip_ws_and_comments();
+            if self.eof() {
+                return Err(PdfError::Parse("unterminated inline image".to_string()));
+            }
+            // Check for ID keyword (must be followed by single whitespace byte)
+            if self.current() == Some(b'I')
+                && self.bytes.get(self.position + 1) == Some(&b'D')
+                && self
+                    .bytes
+                    .get(self.position + 2)
+                    .map(|&byte| is_whitespace(byte))
+                    .unwrap_or(false)
+            {
+                self.position += 3; // skip "ID" + one whitespace byte
+                break;
+            }
+            // Otherwise consume a key/value pair (name + operand)
+            if self.current() == Some(b'/') {
+                let _ = self.parse_name()?;
+                let _ = self.try_parse_operand()?;
+            } else {
+                // Skip unknown token
+                self.position += 1;
+            }
+        }
+
+        // Now scan for EI preceded by whitespace
+        // PDF spec: EI must be preceded by a whitespace byte and followed by
+        // whitespace or EOF
+        while self.position < self.bytes.len() {
+            if self.bytes[self.position] == b'E'
+                && self.bytes.get(self.position + 1) == Some(&b'I')
+                && self.position > 0
+                && is_whitespace(self.bytes[self.position - 1])
+                && self
+                    .bytes
+                    .get(self.position + 2)
+                    .map(|&byte| is_whitespace(byte) || is_delimiter(byte))
+                    .unwrap_or(true) // EOF after EI is fine
+            {
+                self.position += 2; // skip "EI"
+                return Ok(());
+            }
+            self.position += 1;
+        }
+        Err(PdfError::Parse("unterminated inline image data".to_string()))
+    }
+
     fn peek_keyword(&self, keyword: &str) -> bool {
         self.bytes
             .get(self.position..self.position + keyword.len())
@@ -428,6 +512,33 @@ fn is_delimiter(byte: u8) -> bool {
 mod tests {
     use super::parse_content_stream;
     use pdf_objects::{PdfString, PdfValue, serialize_value};
+
+    #[test]
+    fn parses_dictionary_operand_in_content_stream() {
+        let stream = b"/Span <</MCID 0>> BDC\nBT\nET\nEMC\n";
+        let parsed = parse_content_stream(stream).expect("should parse dictionary operand");
+        let bdc = &parsed.operations[0];
+        assert_eq!(bdc.operator, "BDC");
+        assert_eq!(bdc.operands.len(), 2);
+        assert!(matches!(&bdc.operands[1], PdfValue::Dictionary(_)));
+    }
+
+    #[test]
+    fn skips_inline_image_data() {
+        let stream = b"BT\n(Hello) Tj\nET\nBI\n/W 1 /H 1 /CS /G /BPC 8\nID \xFF\nEI\nBT\n(World) Tj\nET\n";
+        let parsed = parse_content_stream(stream).expect("should skip inline image");
+        let operators: Vec<&str> = parsed
+            .operations
+            .iter()
+            .map(|op| op.operator.as_str())
+            .collect();
+        assert!(operators.contains(&"Tj"));
+        // BI should not appear as an operation (it was consumed by skip_inline_image)
+        assert!(!operators.contains(&"BI"));
+        // Both text-showing operations should survive
+        let tj_count = operators.iter().filter(|&&op| op == "Tj").count();
+        assert_eq!(tj_count, 2, "both Tj operators should be present");
+    }
 
     #[test]
     fn content_parser_round_trips_binary_literal_strings() {

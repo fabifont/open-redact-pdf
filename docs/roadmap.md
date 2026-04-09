@@ -8,7 +8,7 @@ title: Roadmap
 
 - Classic xref parsing with incremental update chain support (follows `Prev` pointers)
 - Page tree traversal
-- Content parsing for common text, path, image, clipping, color, graphics-state, and marked-content operators
+- Content parsing for common text, path, image, clipping, color, graphics-state, and marked-content operators (including inline images and dictionary operands)
 - Simple-font text extraction and search geometry (including fonts set via ExtGState `gs` operator)
 - `Type0` / `Identity-H` composite font extraction, search, and redaction when `ToUnicode` is available
 - Geometry target normalization for rects, quads, and quad groups

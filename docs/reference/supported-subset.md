@@ -13,6 +13,8 @@ This project intentionally targets a narrow, explicit MVP.
 - Full-document rewrites on save (incremental updates are flattened into a single revision on output)
 - Unfiltered or `FlateDecode` streams
 - Page tree traversal with inherited resources, media boxes, crop boxes, and page rotation
+- Inline images (`BI`/`ID`/`EI`) are safely skipped during content stream parsing
+- Dictionary operands in content streams (e.g., `BDC` with `<</MCID 0>>`)
 - Common text operators
 - Common path, paint, and graphics-state operators (`q`, `Q`, `cm`, `gs`, `w`, `J`, `j`, `M`, `d`, `ri`, `i`)
 - Clipping path operators (`W`, `W*`)

@@ -265,3 +265,55 @@ fn extgstate_font_text_is_extractable_and_redactable() {
     assert!(!extracted_after.text.contains("ExtGState"));
     assert!(extracted_after.text.contains("Normal Line"));
 }
+
+#[test]
+fn inline_image_and_dictionary_operand_pages_are_parseable() {
+    let mut document =
+        PdfDocument::open(&fixture("inline-image.pdf")).expect("inline-image fixture should open");
+    let extracted = document
+        .extract_text(0)
+        .expect("text extraction should succeed despite inline image");
+    assert!(
+        extracted.text.contains("Inline Image Secret"),
+        "should extract text before inline image, got: {}",
+        extracted.text
+    );
+    assert!(
+        extracted.text.contains("After Image"),
+        "should extract text after inline image"
+    );
+
+    let matches = document
+        .search_text(0, "Inline Image")
+        .expect("search should succeed");
+    assert_eq!(matches.len(), 1);
+    let quads = matches[0]
+        .quads
+        .iter()
+        .map(|quad| quad.points)
+        .collect::<Vec<_>>();
+
+    let report = document
+        .apply_redactions(RedactionPlan {
+            targets: vec![RedactionTarget::QuadGroup {
+                page_index: 0,
+                quads,
+            }],
+            mode: None,
+            fill_color: None,
+            overlay_text: None,
+            remove_intersecting_annotations: Some(false),
+            strip_metadata: Some(false),
+            strip_attachments: Some(false),
+        })
+        .expect("redaction should succeed");
+    assert!(report.text_glyphs_removed > 0);
+
+    let saved = document.save().expect("save should succeed");
+    let reopened = PdfDocument::open(&saved).expect("saved pdf should reopen");
+    let extracted_after = reopened
+        .extract_text(0)
+        .expect("reopened extraction should succeed");
+    assert!(!extracted_after.text.contains("Inline Image"));
+    assert!(extracted_after.text.contains("After Image"));
+}

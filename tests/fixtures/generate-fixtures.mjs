@@ -114,6 +114,34 @@ writeFixture("extgstate-font.pdf", {
   trailer: { Root: { ref: [1, 0] } },
 });
 
+// Content stream with inline image (BI/ID/EI) and dictionary operand (BDC with <<...>>)
+writeFixture("inline-image.pdf", {
+  objects: [
+    { id: 1, value: { Type: "/Catalog", Pages: { ref: [2, 0] } } },
+    { id: 2, value: { Type: "/Pages", Count: 1, Kids: [{ ref: [3, 0] }] } },
+    basePageObjects({
+      pageId: 3,
+      pagesId: 2,
+      contentId: 4,
+      resources: { Font: { F1: { ref: [5, 0] } } },
+    }),
+    {
+      id: 4,
+      stream: {
+        dict: {},
+        data:
+          "/Span <</MCID 0>> BDC\n" +
+          "BT\n/F1 20 Tf\n72 700 Td\n(Inline Image Secret) Tj\nET\n" +
+          "EMC\n" +
+          "BI\n/W 2 /H 2 /CS /G /BPC 8\nID \xFF\xFF\xFF\xFF\nEI\n" +
+          "BT\n/F1 20 Tf\n72 660 Td\n(After Image) Tj\nET\n",
+      },
+    },
+    fontObject,
+  ],
+  trailer: { Root: { ref: [1, 0] } },
+});
+
 writeFixture("simple-text.pdf", {
   objects: [
     { id: 1, value: { Type: "/Catalog", Pages: { ref: [2, 0] } } },
