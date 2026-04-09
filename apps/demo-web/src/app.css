@@ -172,6 +172,10 @@ body {
   max-width: 100%;
 }
 
+.page-card-collapsed {
+  min-width: 720px;
+}
+
 .page-card-collapsed .page-card-header {
   border-bottom: none;
   border-radius: var(--radius-lg);
