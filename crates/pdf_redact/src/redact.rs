@@ -652,7 +652,7 @@ fn neutralize_vector_operations(
                     stroke_width = saved_width;
                 }
             }
-            "cm" => ctm = ctm.multiply(matrix_from_operands(&operation.operands)?),
+            "cm" => ctm = matrix_from_operands(&operation.operands)?.multiply(ctm),
             "w" => stroke_width = operand_number(operation, 0)?,
             "m" => path_segments.push(PathSegment::MoveTo(transform_point_pair(
                 &operation.operands,
@@ -720,7 +720,7 @@ fn neutralize_image_operations(
         match operation.operator.as_str() {
             "q" => ctm_stack.push(ctm),
             "Q" => ctm = ctm_stack.pop().unwrap_or(Matrix::identity()),
-            "cm" => ctm = ctm.multiply(matrix_from_operands(&operation.operands)?),
+            "cm" => ctm = matrix_from_operands(&operation.operands)?.multiply(ctm),
             "Do" => {
                 let name = operand_name(operation, 0)?;
                 match xobjects.get(name) {
@@ -995,7 +995,7 @@ fn final_page_ctm(operations: &[Operation]) -> PdfResult<Matrix> {
         match operation.operator.as_str() {
             "q" => stack.push(ctm),
             "Q" => ctm = stack.pop().unwrap_or(Matrix::identity()),
-            "cm" => ctm = ctm.multiply(matrix_from_operands(&operation.operands)?),
+            "cm" => ctm = matrix_from_operands(&operation.operands)?.multiply(ctm),
             _ => {}
         }
     }

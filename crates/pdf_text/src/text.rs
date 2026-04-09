@@ -412,7 +412,7 @@ fn interpret_page_text(
             }
             "cm" => {
                 let matrix = matrix_from_operands(&operation.operands)?;
-                ctm = ctm.multiply(matrix);
+                ctm = matrix.multiply(ctm);
             }
             "BT" => {
                 text_state.text_matrix = Matrix::identity();

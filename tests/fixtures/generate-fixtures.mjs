@@ -456,6 +456,40 @@ function buildIncrementalPdf() {
 
 fs.writeFileSync(path.join(fixturesDir, "incremental-update.pdf"), buildIncrementalPdf(), "binary");
 
+// Nested cm operators: outer cm scales content space (like many real-world PDFs),
+// inner cm inside q/Q scales back up. Tests correct CTM pre-multiplication order.
+writeFixture("nested-cm.pdf", {
+  objects: [
+    { id: 1, value: { Type: "/Catalog", Pages: { ref: [2, 0] } } },
+    { id: 2, value: { Type: "/Pages", Count: 1, Kids: [{ ref: [3, 0] }] } },
+    basePageObjects({
+      pageId: 3,
+      pagesId: 2,
+      contentId: 4,
+      // Page is 612x792 but content space is 2x larger (1224x1584)
+      resources: { Font: { F1: { ref: [5, 0] } } },
+    }),
+    {
+      id: 4,
+      stream: {
+        dict: {},
+        // Outer cm scales from 2x content space to page space (0.5 factor)
+        // Inner cm inside q/Q scales back up by 2x
+        // Net effect on text: coordinates stay within page bounds
+        data:
+          "0.5 0 0 0.5 0 0 cm\n" +
+          "q\n" +
+          "2 0 0 2 0 0 cm\n" +
+          "BT\n/F1 24 Tf\n72 700 Td\n(Nested CM Secret) Tj\nET\n" +
+          "Q\n" +
+          "BT\n/F1 48 Tf\n144 1300 Td\n(Outer Text) Tj\nET\n",
+      },
+    },
+    fontObject,
+  ],
+  trailer: { Root: { ref: [1, 0] } },
+});
+
 writeFixture("metadata-attachments.pdf", {
   objects: [
     { id: 1, value: { Type: "/Catalog", Pages: { ref: [2, 0] }, Names: { ref: [7, 0] } } },

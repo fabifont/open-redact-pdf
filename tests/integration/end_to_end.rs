@@ -317,3 +317,62 @@ fn inline_image_and_dictionary_operand_pages_are_parseable() {
     assert!(!extracted_after.text.contains("Inline Image"));
     assert!(extracted_after.text.contains("After Image"));
 }
+
+#[test]
+fn nested_cm_operators_produce_page_space_quads() {
+    let mut document =
+        PdfDocument::open(&fixture("nested-cm.pdf")).expect("nested-cm fixture should open");
+    let extracted = document
+        .extract_text(0)
+        .expect("text extraction should succeed");
+    assert!(
+        extracted.text.contains("Nested CM Secret"),
+        "should extract text from inner cm block, got: {}",
+        extracted.text
+    );
+    assert!(extracted.text.contains("Outer Text"));
+
+    // Search-derived quads must be within page bounds (612x792)
+    let matches = document
+        .search_text(0, "Nested CM")
+        .expect("search should succeed");
+    assert_eq!(matches.len(), 1);
+    for quad in &matches[0].quads {
+        let bbox = quad.bounding_rect();
+        assert!(
+            bbox.x >= -1.0 && bbox.max_x() <= 613.0 && bbox.y >= -1.0 && bbox.max_y() <= 793.0,
+            "quad should be within page bounds, got bbox: {:?}",
+            bbox
+        );
+    }
+
+    // Quads should also drive a successful redaction
+    let quads = matches[0]
+        .quads
+        .iter()
+        .map(|quad| quad.points)
+        .collect::<Vec<_>>();
+    let report = document
+        .apply_redactions(RedactionPlan {
+            targets: vec![RedactionTarget::QuadGroup {
+                page_index: 0,
+                quads,
+            }],
+            mode: None,
+            fill_color: None,
+            overlay_text: None,
+            remove_intersecting_annotations: Some(false),
+            strip_metadata: Some(false),
+            strip_attachments: Some(false),
+        })
+        .expect("redaction should succeed");
+    assert!(report.text_glyphs_removed > 0);
+
+    let saved = document.save().expect("save should succeed");
+    let reopened = PdfDocument::open(&saved).expect("saved pdf should reopen");
+    let extracted_after = reopened
+        .extract_text(0)
+        .expect("reopened extraction should succeed");
+    assert!(!extracted_after.text.contains("Nested CM"));
+    assert!(extracted_after.text.contains("Outer Text"));
+}
