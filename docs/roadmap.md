@@ -8,13 +8,16 @@ title: Roadmap
 
 - Classic xref parsing
 - Page tree traversal
-- Content parsing for common text, path, and image operators
+- Content parsing for common text, path, image, clipping, color, graphics-state, and marked-content operators
 - Simple-font text extraction and search geometry
 - `Type0` / `Identity-H` composite font extraction, search, and redaction when `ToUnicode` is available
 - Geometry target normalization for rects, quads, and quad groups
+- Three redaction modes: `strip` (remove bytes), `redact` (blank space + overlay), `erase` (blank space, no overlay)
+- Tighter glyph bounding boxes (80% em-square height) to reduce adjacent-line false positives
 - True redaction for a constrained subset of PDFs
 - Deterministic full-save rewrite
 - WASM bindings and a browser demo
+- Demo UI with zoom controls, collapsible pages, search-driven redaction, and in-app error reporting
 
 ## Next priorities
 

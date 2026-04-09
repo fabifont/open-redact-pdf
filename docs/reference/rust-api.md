@@ -73,6 +73,18 @@ Important fields:
 
 Search results are returned as merged visual match regions rather than raw content-stream character order.
 
+### `RedactionMode`
+
+Re-exported from `pdf_targets`.
+
+```rust
+pub enum RedactionMode {
+    Strip,   // remove bytes; text shifts, no overlay
+    Redact,  // blank space + colored overlay (default)
+    Erase,   // blank space, no overlay
+}
+```
+
 ### `RedactionPlan`
 
 Re-exported from `pdf_targets`.
@@ -80,6 +92,7 @@ Re-exported from `pdf_targets`.
 Important fields:
 
 - `targets`
+- `mode` — controls visual output (see `RedactionMode`)
 - `fill_color`
 - `overlay_text`
 - `remove_intersecting_annotations`
@@ -123,7 +136,7 @@ Typical categories in the MVP:
 ## Example
 
 ```rust
-use open_redact_pdf::{PdfDocument, RedactionPlan, RedactionTarget};
+use open_redact_pdf::{PdfDocument, RedactionMode, RedactionPlan, RedactionTarget};
 
 let mut document = PdfDocument::open(&bytes)?;
 let matches = document.search_text(0, "account")?;
@@ -138,6 +151,7 @@ let targets = matches
 
 document.apply_redactions(RedactionPlan {
     targets,
+    mode: Some(RedactionMode::Redact),
     fill_color: None,
     overlay_text: None,
     remove_intersecting_annotations: Some(true),

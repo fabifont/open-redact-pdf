@@ -41,6 +41,7 @@ Open Redact PDF is a browser-first PDF redaction engine implemented in Rust and 
 - Common page content streams without Form XObjects on targeted pages
 - `Type1`, `TrueType`, and `Type0` / `Identity-H` text when extraction can map glyphs safely
 - Rectangle, quad, and quad-group redaction targets in canonical page space
+- Three redaction modes: `strip`, `redact` (default), and `erase`
 - Conservative image redaction at invocation level
 
 Unsupported features fail explicitly instead of being silently ignored.

@@ -18,6 +18,10 @@ Loads the generated wasm module. Call this once before opening PDFs.
 
 Parses an input PDF and returns an opaque handle used by the rest of the API.
 
+### `freePdf(handle: PdfHandle): void`
+
+Releases the memory held by a document handle. Call this before replacing a handle (e.g., when reopening a different file) to avoid leaking wasm heap memory.
+
 ### `getPageCount(handle: PdfHandle): number`
 
 Returns the page count for the parsed PDF.
@@ -81,11 +85,24 @@ type QuadGroupTarget = {
 }
 ```
 
+### `RedactionMode`
+
+```ts
+type RedactionMode = "strip" | "redact" | "erase"
+```
+
+Controls the visual and structural output of text redaction:
+
+- `"strip"` — physically removes the targeted bytes; surrounding text shifts to fill the gap. No overlay is painted.
+- `"redact"` — replaces targeted text with blank space and paints a colored overlay over the region. **(default)**
+- `"erase"` — replaces targeted text with blank space but paints no overlay, leaving a visible gap.
+
 ### `RedactionPlan`
 
 ```ts
 type RedactionPlan = {
   targets: RedactionTarget[]
+  mode?: RedactionMode
   fillColor?: { r: number; g: number; b: number }
   overlayText?: string | null
   removeIntersectingAnnotations?: boolean
@@ -110,6 +127,7 @@ type TextMatch = {
 import {
   initWasm,
   openPdf,
+  freePdf,
   searchText,
   applyRedactions,
   savePdf,
@@ -127,6 +145,7 @@ const targets = matches.map((match) => ({
 
 applyRedactions(handle, {
   targets,
+  mode: "redact",
   stripMetadata: true,
   stripAttachments: true,
 })

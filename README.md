@@ -33,10 +33,11 @@ This repository currently targets a deliberately narrow MVP:
 - Unencrypted PDFs with classic cross-reference tables
 - Unfiltered or `FlateDecode` streams
 - Full-document rewrite on save
-- Simple page content streams without Form XObjects
-- Simple `Type1` and `TrueType` text with horizontal writing
+- Common page content streams without Form XObjects on targeted pages
+- `Type1` and `TrueType` text with horizontal writing
 - `Type0` / `Identity-H` text with `ToUnicode` maps and two-byte CIDs
 - Rectangle, quad, and quad-group redaction targets in page space
+- Three redaction modes: `strip` (remove bytes), `redact` (blank space + overlay, default), `erase` (blank space, no overlay)
 - Conservative image redaction by removing intersecting image draws
 
 Unsupported features fail explicitly instead of being silently ignored.
@@ -79,6 +80,6 @@ pnpm --filter open-redact-pdf-demo-web dev
 
 ## Security Model
 
-Redaction in this project means the output PDF must not retain the removed text in content streams that continue to be referenced by the output file. A visible black rectangle alone does not count as redaction. The current implementation removes intersecting text glyphs, removes intersecting vector paint operations, removes intersecting image draws conservatively, and paints replacement fill marks after content removal.
+Redaction in this project means the output PDF must not retain the removed text in content streams that continue to be referenced by the output file. A visible black rectangle alone does not count as redaction. The current implementation removes or neutralizes intersecting text glyphs, removes intersecting vector paint operations, removes intersecting image draws conservatively, and (in `redact` mode) paints replacement fill marks after content removal.
 
 See [docs/security-model.md](docs/security-model.md), [docs/architecture.md](docs/architecture.md), [docs/roadmap.md](docs/roadmap.md), and [docs/why-not-overlays.md](docs/why-not-overlays.md).

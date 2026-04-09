@@ -8,6 +8,16 @@ title: Security Model
 
 For this project, redaction means the output PDF no longer contains the redacted text or content in referenced page content that remains accessible after save. A visible overlay is only valid after the underlying targeted content has been removed or neutralized.
 
+## Redaction mode semantics
+
+Three modes are supported; all modes remove or neutralize targeted content before any visual treatment:
+
+- **`strip`** — targeted text bytes are physically removed from text-showing operators; no overlay is painted.
+- **`redact`** (default) — targeted text is replaced with blank space in the operator stream; a colored fill is painted over the region.
+- **`erase`** — targeted text is replaced with blank space; no overlay is painted, leaving a visible gap.
+
+The key invariant across all modes is that the underlying content is removed or neutralized first. The overlay in `redact` mode is a UI affordance, not a substitute for structural removal.
+
 ## Current guarantees
 
 - Intersecting text glyphs are removed from rewritten text-showing operators.

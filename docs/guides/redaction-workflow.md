@@ -23,9 +23,21 @@ Manual rectangle authoring is a UI convenience layer. The engine still receives 
 
 Search works in visual glyph order and returns quad groups. These can be passed directly into `apply_redactions`.
 
+## Redaction modes
+
+The `mode` field on `RedactionPlan` controls the visual and structural output:
+
+| Mode | Bytes removed | Overlay painted | Surrounding text |
+|---|---|---|---|
+| `strip` | yes | no | shifts to fill gap |
+| `redact` | yes (blank space) | yes | stays in place |
+| `erase` | yes (blank space) | no | stays in place |
+
+`redact` is the default when `mode` is omitted. The fill color for the overlay defaults to black and can be overridden via `fill_color` / `fillColor`.
+
 ## Apply semantics
 
-- text glyphs intersecting a target are removed from rewritten text-showing operators
+- text glyphs intersecting a target are removed or replaced according to the selected mode
 - intersecting path paints are neutralized
 - intersecting image draws are removed conservatively at invocation level
 - optional annotation removal can strip intersecting annotation objects from touched pages
