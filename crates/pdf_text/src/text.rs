@@ -50,6 +50,9 @@ pub struct Glyph {
     /// Invisible glyphs are still included for redaction but excluded from
     /// search results and extracted text items.
     pub visible: bool,
+    /// Raw advance width in 1/1000 em font units. Used by kern-compensating
+    /// redaction modes to preserve text positioning after byte removal.
+    pub width_units: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -761,6 +764,7 @@ fn show_text(
                     },
                 },
                 visible,
+                width_units: decoded.width_units,
             });
             if visible {
                 context.text.push(character);

@@ -2,6 +2,20 @@ use pdf_graphics::{Color, Point, Quad, Rect};
 use pdf_objects::{PdfError, PdfResult};
 use serde::{Deserialize, Serialize};
 
+/// Controls the visual output of text redaction.
+///
+/// - `Strip` — physically remove bytes; text shifts, no overlay.
+/// - `Redact` — replace bytes with kern compensation, draw colored overlay. **(default)**
+/// - `Erase` — replace bytes with kern compensation, no overlay (blank space).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RedactionMode {
+    Strip,
+    #[default]
+    Redact,
+    Erase,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FillColor {
     pub r: u8,
@@ -78,6 +92,7 @@ pub enum RedactionTarget {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RedactionPlan {
     pub targets: Vec<RedactionTarget>,
+    pub mode: Option<RedactionMode>,
     #[serde(rename = "fillColor")]
     pub fill_color: Option<FillColor>,
     #[serde(rename = "overlayText")]
@@ -113,6 +128,7 @@ impl NormalizedPageTarget {
 #[derive(Debug, Clone)]
 pub struct NormalizedRedactionPlan {
     pub targets: Vec<NormalizedPageTarget>,
+    pub mode: RedactionMode,
     pub fill_color: Color,
     pub remove_intersecting_annotations: bool,
     pub strip_metadata: bool,
@@ -192,6 +208,7 @@ pub fn normalize_plan(
 
     Ok(NormalizedRedactionPlan {
         targets,
+        mode: plan.mode.unwrap_or_default(),
         fill_color: plan.fill_color.unwrap_or_default().into(),
         remove_intersecting_annotations: plan.remove_intersecting_annotations.unwrap_or(true),
         strip_metadata: plan.strip_metadata.unwrap_or(false),
@@ -247,6 +264,7 @@ mod tests {
                 width: 50.0,
                 height: 40.0,
             }],
+            mode: None,
             fill_color: None,
             overlay_text: None,
             remove_intersecting_annotations: None,
@@ -271,6 +289,7 @@ mod tests {
                 page_index: 0,
                 quads: Vec::<[Point; 4]>::new(),
             }],
+            mode: None,
             fill_color: None,
             overlay_text: None,
             remove_intersecting_annotations: None,

@@ -113,5 +113,5 @@ impl PdfDocument {
 }
 
 pub use pdf_objects::PdfError;
-pub use pdf_targets::{FillColor, RedactionPlan, RedactionTarget};
+pub use pdf_targets::{FillColor, RedactionMode, RedactionPlan, RedactionTarget};
 pub use pdf_text::TextMatch;

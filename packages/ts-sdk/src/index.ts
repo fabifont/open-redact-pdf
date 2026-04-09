@@ -1,6 +1,6 @@
 import type { ApplyReport, PageSize, PageText, RedactionPlan, TextMatch } from "./types";
 
-export type { ApplyReport, PageSize, PageText, RedactionPlan, RedactionTarget, TextItem, TextMatch } from "./types";
+export type { ApplyReport, PageSize, PageText, RedactionMode, RedactionPlan, RedactionTarget, TextItem, TextMatch } from "./types";
 export type {
   FillColor,
   Point,

@@ -6,7 +6,7 @@ use pdf_objects::{
     ObjectRef, PageInfo, PdfDictionary, PdfError, PdfFile, PdfObject, PdfResult, PdfStream,
     PdfString, PdfValue, serialize_value,
 };
-use pdf_targets::{NormalizedPageTarget, NormalizedRedactionPlan};
+use pdf_targets::{NormalizedPageTarget, NormalizedRedactionPlan, RedactionMode};
 use pdf_text::{Glyph, GlyphLocation, analyze_page_text};
 use serde::{Deserialize, Serialize};
 
@@ -54,7 +54,12 @@ pub fn apply_redactions(
         let glyph_removals = collect_glyph_removals(&extracted.glyphs, &targets);
         let mut operations = parsed.operations.clone();
         let text_removed = count_removed_glyphs(&glyph_removals);
-        rewrite_text_operations(&mut operations, &glyph_removals);
+        rewrite_text_operations(
+            &mut operations,
+            &glyph_removals,
+            plan.mode,
+            &mut report.warnings,
+        );
         report.text_glyphs_removed += text_removed;
 
         let vector_removed =
@@ -80,14 +85,16 @@ pub fn apply_redactions(
         };
         report.annotations_removed += annotation_removed;
 
-        let overlay = overlay_stream_bytes(
-            &targets,
-            plan.fill_color,
-            page.page_box.normalized_transform(),
-            final_page_ctm(&operations)?,
-        )?;
         let mut content_bytes = serialize_operations(&operations);
-        content_bytes.extend_from_slice(&overlay);
+        if plan.mode == RedactionMode::Redact {
+            let overlay = overlay_stream_bytes(
+                &targets,
+                plan.fill_color,
+                page.page_box.normalized_transform(),
+                final_page_ctm(&operations)?,
+            )?;
+            content_bytes.extend_from_slice(&overlay);
+        }
         write_page_contents(file, pages, page_index, content_bytes)?;
         report.pages_touched += 1;
     }
@@ -360,12 +367,13 @@ enum XObjectKind {
 
 type GlyphRemovalMap = BTreeMap<usize, Vec<GlyphByteRef>>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy)]
 struct GlyphByteRef {
     operand_index: usize,
     element_index: Option<usize>,
     byte_start: usize,
     byte_end: usize,
+    width_units: f64,
 }
 
 fn collect_glyph_removals(glyphs: &[Glyph], targets: &[&NormalizedPageTarget]) -> GlyphRemovalMap {
@@ -386,6 +394,7 @@ fn collect_glyph_removals(glyphs: &[Glyph], targets: &[&NormalizedPageTarget]) -
                     element_index: None,
                     byte_start,
                     byte_end,
+                    width_units: glyph.width_units,
                 }),
                 GlyphLocation::Array {
                     operand_index,
@@ -397,6 +406,7 @@ fn collect_glyph_removals(glyphs: &[Glyph], targets: &[&NormalizedPageTarget]) -
                     element_index: Some(element_index),
                     byte_start,
                     byte_end,
+                    width_units: glyph.width_units,
                 }),
             }
         }
@@ -404,59 +414,144 @@ fn collect_glyph_removals(glyphs: &[Glyph], targets: &[&NormalizedPageTarget]) -
     output
 }
 
-fn rewrite_text_operations(operations: &mut [Operation], removals: &GlyphRemovalMap) -> usize {
+fn rewrite_text_operations(
+    operations: &mut [Operation],
+    removals: &GlyphRemovalMap,
+    mode: RedactionMode,
+    warnings: &mut Vec<String>,
+) -> usize {
+    let compensate = matches!(mode, RedactionMode::Redact | RedactionMode::Erase);
     let mut removed = 0usize;
+
     for (operation_index, refs) in removals {
         let Some(operation) = operations.get_mut(*operation_index) else {
             continue;
         };
-        let direct_groups = refs
+
+        // For ' and " operators, kern compensation is not possible (they carry
+        // implicit newline / spacing side effects). Fall back to strip.
+        let use_compensation =
+            compensate && matches!(operation.operator.as_str(), "Tj" | "TJ");
+        if compensate && !use_compensation {
+            warnings.push(format!(
+                "operator '{}' fell back to strip mode (kern compensation not supported)",
+                operation.operator
+            ));
+        }
+
+        // --- Direct string operators (Tj, ', ") ---
+        let direct_refs: Vec<&GlyphByteRef> = refs
             .iter()
-            .filter(|entry| entry.element_index.is_none())
-            .fold(
-                BTreeMap::<usize, BTreeSet<usize>>::new(),
-                |mut map, entry| {
-                    let bytes = map.entry(entry.operand_index).or_default();
-                    for byte_index in entry.byte_start..entry.byte_end {
-                        bytes.insert(byte_index);
+            .filter(|e| e.element_index.is_none())
+            .collect();
+
+        if !direct_refs.is_empty() {
+            // Group byte indices by operand
+            let mut byte_sets = BTreeMap::<usize, BTreeSet<usize>>::new();
+            let mut glyph_starts = BTreeMap::<usize, BTreeMap<usize, f64>>::new();
+            let mut seen_ranges = BTreeSet::<(usize, usize)>::new();
+            for entry in &direct_refs {
+                let bytes = byte_sets.entry(entry.operand_index).or_default();
+                for i in entry.byte_start..entry.byte_end {
+                    bytes.insert(i);
+                }
+                if use_compensation && seen_ranges.insert((entry.byte_start, entry.byte_end)) {
+                    glyph_starts
+                        .entry(entry.operand_index)
+                        .or_default()
+                        .insert(entry.byte_start, entry.width_units);
+                }
+            }
+
+            for (operand_index, bytes) in &byte_sets {
+                if use_compensation {
+                    // Build TJ array with kern compensation, convert Tj → TJ
+                    if let Some(PdfValue::String(string)) = operation.operands.get(*operand_index) {
+                        let starts = glyph_starts.get(operand_index).cloned().unwrap_or_default();
+                        let array = build_compensated_array(string, bytes, &starts);
+                        removed += bytes.len();
+                        operation.operands[*operand_index] = PdfValue::Array(array);
+                        operation.operator = "TJ".to_string();
                     }
-                    map
-                },
-            );
-        for (operand_index, bytes) in direct_groups {
-            if let Some(PdfValue::String(string)) = operation.operands.get_mut(operand_index) {
-                removed += remove_bytes_from_string(string, &bytes);
+                } else if let Some(PdfValue::String(string)) =
+                    operation.operands.get_mut(*operand_index)
+                {
+                    removed += remove_bytes_from_string(string, bytes);
+                }
             }
         }
 
-        let array_groups = refs
+        // --- TJ array operators ---
+        let array_refs: Vec<&GlyphByteRef> = refs
             .iter()
-            .filter_map(|entry| {
-                entry
-                    .element_index
-                    .map(|element_index| {
-                        (
-                            entry.operand_index,
-                            element_index,
-                            entry.byte_start,
-                            entry.byte_end,
-                        )
-                    })
-            })
-            .fold(
-                BTreeMap::<(usize, usize), BTreeSet<usize>>::new(),
-                |mut map, (operand_index, element_index, byte_start, byte_end)| {
-                    let bytes = map.entry((operand_index, element_index)).or_default();
-                    for byte_index in byte_start..byte_end {
-                        bytes.insert(byte_index);
+            .filter(|e| e.element_index.is_some())
+            .collect();
+
+        if !array_refs.is_empty() {
+            // Group by (operand_index, element_index)
+            let mut element_bytes = BTreeMap::<(usize, usize), BTreeSet<usize>>::new();
+            let mut element_glyph_starts =
+                BTreeMap::<(usize, usize), BTreeMap<usize, f64>>::new();
+            let mut seen_ranges = BTreeSet::<(usize, usize, usize, usize)>::new();
+            for entry in &array_refs {
+                let el = entry.element_index.unwrap();
+                let bytes = element_bytes.entry((entry.operand_index, el)).or_default();
+                for i in entry.byte_start..entry.byte_end {
+                    bytes.insert(i);
+                }
+                if use_compensation
+                    && seen_ranges.insert((
+                        entry.operand_index,
+                        el,
+                        entry.byte_start,
+                        entry.byte_end,
+                    ))
+                {
+                    element_glyph_starts
+                        .entry((entry.operand_index, el))
+                        .or_default()
+                        .insert(entry.byte_start, entry.width_units);
+                }
+            }
+
+            if use_compensation {
+                // Rebuild the entire TJ array, expanding modified string elements
+                // into sub-arrays with kern compensation.
+                let affected_operands: BTreeSet<usize> =
+                    element_bytes.keys().map(|(op, _)| *op).collect();
+                for operand_index in affected_operands {
+                    if let Some(PdfValue::Array(items)) =
+                        operation.operands.get(operand_index).cloned()
+                    {
+                        let mut new_array = Vec::new();
+                        for (el_index, item) in items.iter().enumerate() {
+                            let key = (operand_index, el_index);
+                            if let (Some(bytes), PdfValue::String(string)) =
+                                (element_bytes.get(&key), item)
+                            {
+                                let starts = element_glyph_starts
+                                    .get(&key)
+                                    .cloned()
+                                    .unwrap_or_default();
+                                let sub = build_compensated_array(string, bytes, &starts);
+                                removed += bytes.len();
+                                new_array.extend(sub);
+                            } else {
+                                new_array.push(item.clone());
+                            }
+                        }
+                        operation.operands[operand_index] = PdfValue::Array(new_array);
                     }
-                    map
-                },
-            );
-        for ((operand_index, element_index), bytes) in array_groups {
-            if let Some(PdfValue::Array(items)) = operation.operands.get_mut(operand_index) {
-                if let Some(PdfValue::String(string)) = items.get_mut(element_index) {
-                    removed += remove_bytes_from_string(string, &bytes);
+                }
+            } else {
+                for ((operand_index, element_index), bytes) in &element_bytes {
+                    if let Some(PdfValue::Array(items)) =
+                        operation.operands.get_mut(*operand_index)
+                    {
+                        if let Some(PdfValue::String(string)) = items.get_mut(*element_index) {
+                            removed += remove_bytes_from_string(string, bytes);
+                        }
+                    }
                 }
             }
         }
@@ -467,7 +562,13 @@ fn rewrite_text_operations(operations: &mut [Operation], removals: &GlyphRemoval
 fn count_removed_glyphs(removals: &GlyphRemovalMap) -> usize {
     removals
         .values()
-        .map(|entries| entries.iter().copied().collect::<BTreeSet<_>>().len())
+        .map(|entries| {
+            entries
+                .iter()
+                .map(|r| (r.operand_index, r.element_index, r.byte_start, r.byte_end))
+                .collect::<BTreeSet<_>>()
+                .len()
+        })
         .sum()
 }
 
@@ -481,6 +582,57 @@ fn remove_bytes_from_string(string: &mut PdfString, bytes: &BTreeSet<usize>) -> 
         .filter_map(|(index, byte)| (!bytes.contains(&index)).then_some(byte))
         .collect();
     original.saturating_sub(string.0.len())
+}
+
+/// Builds a TJ-style array from a string with some bytes removed and kern
+/// compensation inserted. `glyph_starts` maps each removed glyph's
+/// `byte_start` to its `width_units` (deduped so multi-char glyphs count once).
+fn build_compensated_array(
+    string: &PdfString,
+    removed_indices: &BTreeSet<usize>,
+    glyph_starts: &BTreeMap<usize, f64>,
+) -> Vec<PdfValue> {
+    let mut result: Vec<PdfValue> = Vec::new();
+    let mut kept_buf: Vec<u8> = Vec::new();
+    let mut kern_accum: f64 = 0.0;
+    let mut in_removed = false;
+
+    for (i, &byte) in string.0.iter().enumerate() {
+        let is_removed = removed_indices.contains(&i);
+        if is_removed {
+            if let Some(&width) = glyph_starts.get(&i) {
+                kern_accum += width;
+            }
+        }
+        match (in_removed, is_removed) {
+            (false, false) => kept_buf.push(byte),
+            (false, true) => {
+                if !kept_buf.is_empty() {
+                    result.push(PdfValue::String(PdfString(std::mem::take(&mut kept_buf))));
+                }
+                in_removed = true;
+            }
+            (true, false) => {
+                if kern_accum.abs() > 0.01 {
+                    result.push(PdfValue::Number(-kern_accum));
+                    kern_accum = 0.0;
+                }
+                in_removed = false;
+                kept_buf.push(byte);
+            }
+            (true, true) => {}
+        }
+    }
+
+    // Flush trailing state
+    if kern_accum.abs() > 0.01 {
+        result.push(PdfValue::Number(-kern_accum));
+    }
+    if !kept_buf.is_empty() {
+        result.push(PdfValue::String(PdfString(kept_buf)));
+    }
+
+    result
 }
 
 fn neutralize_vector_operations(

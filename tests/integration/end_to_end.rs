@@ -31,6 +31,7 @@ fn rectangle_redaction_removes_target_text_but_preserves_other_text() {
                 width: 95.0,
                 height: 30.0,
             }],
+            mode: None,
             fill_color: None,
             overlay_text: None,
             remove_intersecting_annotations: Some(false),
@@ -75,6 +76,7 @@ fn search_derived_quads_can_drive_redaction() {
                 page_index: 0,
                 quads,
             }],
+            mode: None,
             fill_color: None,
             overlay_text: None,
             remove_intersecting_annotations: Some(false),
@@ -106,6 +108,7 @@ fn type0_fonts_with_tounicode_are_searchable_and_redactable() {
                 page_index: 0,
                 quads,
             }],
+            mode: None,
             fill_color: None,
             overlay_text: None,
             remove_intersecting_annotations: Some(false),
@@ -129,6 +132,7 @@ fn can_strip_metadata_and_attachments() {
     document
         .apply_redactions(RedactionPlan {
             targets: Vec::new(),
+            mode: None,
             fill_color: None,
             overlay_text: None,
             remove_intersecting_annotations: Some(false),

@@ -28,9 +28,19 @@ export type QuadGroupTarget = {
 /** Canonical redaction target union accepted by the engine. */
 export type RedactionTarget = RectTarget | QuadTarget | QuadGroupTarget;
 
+/**
+ * Controls the visual output of text redaction.
+ *
+ * - `"strip"` — physically remove bytes; surviving text shifts, no overlay.
+ * - `"redact"` — replace bytes with blank space, draw colored overlay. **(default)**
+ * - `"erase"` — replace bytes with blank space, no overlay.
+ */
+export type RedactionMode = "strip" | "redact" | "erase";
+
 /** Redaction plan passed to the apply pipeline. */
 export type RedactionPlan = {
   targets: RedactionTarget[];
+  mode?: RedactionMode;
   fillColor?: { r: number; g: number; b: number };
   overlayText?: string | null;
   removeIntersectingAnnotations?: boolean;

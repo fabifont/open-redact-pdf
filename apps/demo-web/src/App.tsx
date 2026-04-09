@@ -67,6 +67,7 @@ export function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [downloadBytes, setDownloadBytes] = useState<Uint8Array | null>(null);
   const [applyReport, setApplyReport] = useState<null | ApplyReport>(null);
+  const [redactionMode, setRedactionMode] = useState<"strip" | "redact" | "erase">("redact");
   const [pageTexts, setPageTexts] = useState<Array<{ text: string; error: string | null }>>([]);
   const [renderErrors, setRenderErrors] = useState<Record<number, string>>({});
   const [previewDocument, setPreviewDocument] = useState<PDFDocumentProxy | null>(null);
@@ -218,6 +219,7 @@ export function App() {
     }
     const plan: RedactionPlan = {
       targets: [...manualTargets, ...searchTargets],
+      mode: redactionMode,
       removeIntersectingAnnotations: true,
       stripMetadata: true,
       stripAttachments: true,
@@ -307,6 +309,17 @@ export function App() {
           <p>{targetCount} target(s) queued.</p>
           <p>{manualTargets.length} manual rectangles.</p>
           <p>{searchTargets.length} search-derived quad groups.</p>
+          <label>
+            Mode:{" "}
+            <select
+              value={redactionMode}
+              onChange={(e) => setRedactionMode(e.target.value as "strip" | "redact" | "erase")}
+            >
+              <option value="redact">Redact (black box)</option>
+              <option value="erase">Erase (blank space)</option>
+              <option value="strip">Strip (remove only)</option>
+            </select>
+          </label>
           <div className="button-row">
             <button type="button" onClick={applyPlan} disabled={!handle || targetCount === 0}>
               Apply Redactions
