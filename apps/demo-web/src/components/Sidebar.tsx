@@ -56,9 +56,9 @@ export function Sidebar({
           <input
             className="input"
             value={searchQuery}
-            onChange={(e) => onSearchQueryChange(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") onSearch();
+            onChange={(event) => onSearchQueryChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") onSearch();
             }}
             placeholder="Text to redact..."
           />
@@ -92,8 +92,8 @@ export function Sidebar({
           <select
             className="select"
             value={redactionMode}
-            onChange={(e) =>
-              onRedactionModeChange(e.target.value as RedactionMode)
+            onChange={(event) =>
+              onRedactionModeChange(event.target.value as RedactionMode)
             }
           >
             <option value="redact">Redact (black overlay)</option>
@@ -155,8 +155,8 @@ export function Sidebar({
           </div>
           {applyReport.warnings.length > 0 ? (
             <div className="report-warnings">
-              {applyReport.warnings.map((w, i) => (
-                <div key={i}>{w}</div>
+              {applyReport.warnings.map((warning, index) => (
+                <div key={index}>{warning}</div>
               ))}
             </div>
           ) : null}
@@ -181,10 +181,10 @@ export function Sidebar({
             Matches ({searchMatches.length})
           </div>
           <ul className="match-list">
-            {searchMatches.map((m, i) => (
-              <li key={i} className="match-item">
-                <span className="match-page">p{m.pageIndex + 1}</span>
-                <span className="match-text">{m.text}</span>
+            {searchMatches.map((match, index) => (
+              <li key={index} className="match-item">
+                <span className="match-page">p{match.pageIndex + 1}</span>
+                <span className="match-text">{match.text}</span>
               </li>
             ))}
           </ul>
@@ -195,9 +195,9 @@ export function Sidebar({
       {pageTexts.length > 0 ? (
         <div className="sidebar-section">
           <div className="section-title">Extracted Text</div>
-          {pageTexts.map((entry, i) => (
-            <details key={i} className="text-panel">
-              <summary>Page {i + 1}</summary>
+          {pageTexts.map((entry, index) => (
+            <details key={index} className="text-panel">
+              <summary>Page {index + 1}</summary>
               {entry.error ? (
                 <div className="text-panel-content text-panel-error">
                   {entry.error}

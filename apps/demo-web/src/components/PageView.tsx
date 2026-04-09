@@ -12,6 +12,9 @@ type PageViewProps = {
   document: PDFDocumentProxy | null;
   pageIndex: number;
   size: { width: number; height: number };
+  zoom: number;
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
   manualTargets: RectTarget[];
   searchTargets: QuadGroupTarget[];
   onCreateRectTarget: (target: RectTarget) => void;
@@ -32,6 +35,9 @@ export function PageView({
   document,
   pageIndex,
   size,
+  zoom,
+  collapsed,
+  onToggleCollapsed,
   manualTargets,
   searchTargets,
   onCreateRectTarget,
@@ -44,27 +50,31 @@ export function PageView({
   const [viewport, setViewport] = useState<Viewport | null>(null);
 
   useEffect(() => {
-    if (!document) {
+    if (!document || collapsed) {
       setViewport(null);
       return;
     }
-    const doc = document;
+    const pdfDocument = document;
     let cancelled = false;
 
     async function renderPage() {
-      const page = await doc.getPage(pageIndex + 1);
-      const targetWidth = 720;
+      const page = await pdfDocument.getPage(pageIndex + 1);
       const baseViewport = page.getViewport({ scale: 1 });
-      const scale = Math.min(targetWidth / baseViewport.width, 1.4);
-      const pageViewport = page.getViewport({ scale });
+      const baseScale = Math.min(720 / baseViewport.width, 1.4);
+      const renderScale = baseScale * zoom;
+      const pageViewport = page.getViewport({ scale: renderScale });
       if (cancelled || !canvasRef.current) return;
       const canvas = canvasRef.current;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
+      const context = canvas.getContext("2d");
+      if (!context) return;
       canvas.width = pageViewport.width;
       canvas.height = pageViewport.height;
       await page
-        .render({ canvas, canvasContext: ctx, viewport: pageViewport })
+        .render({
+          canvas,
+          canvasContext: context,
+          viewport: pageViewport,
+        })
         .promise;
       if (!cancelled) {
         onRenderError(pageIndex, null);
@@ -86,15 +96,15 @@ export function PageView({
     return () => {
       cancelled = true;
     };
-  }, [document, onRenderError, pageIndex, size.width]);
+  }, [document, onRenderError, pageIndex, size.width, zoom, collapsed]);
 
   const draftRect = useMemo(() => {
     if (!drag || !viewport) return null;
-    const x = Math.min(drag.startX, drag.currentX);
-    const y = Math.min(drag.startY, drag.currentY);
+    const left = Math.min(drag.startX, drag.currentX);
+    const top = Math.min(drag.startY, drag.currentY);
     return {
-      x,
-      y,
+      x: left,
+      y: top,
       width: Math.abs(drag.currentX - drag.startX),
       height: Math.abs(drag.currentY - drag.startY),
     };
@@ -102,14 +112,19 @@ export function PageView({
 
   function beginDrag(event: PointerEvent<SVGSVGElement>) {
     if (!viewport || !overlayRef.current) return;
-    const pt = clientToOverlay(event, overlayRef.current);
-    setDrag({ startX: pt.x, startY: pt.y, currentX: pt.x, currentY: pt.y });
+    const point = clientToOverlay(event, overlayRef.current);
+    setDrag({
+      startX: point.x,
+      startY: point.y,
+      currentX: point.x,
+      currentY: point.y,
+    });
   }
 
   function updateDrag(event: PointerEvent<SVGSVGElement>) {
     if (!drag || !overlayRef.current) return;
-    const pt = clientToOverlay(event, overlayRef.current);
-    setDrag({ ...drag, currentX: pt.x, currentY: pt.y });
+    const point = clientToOverlay(event, overlayRef.current);
+    setDrag({ ...drag, currentX: point.x, currentY: point.y });
   }
 
   function finishDrag() {
@@ -117,77 +132,103 @@ export function PageView({
       setDrag(null);
       return;
     }
-    const w = Math.abs(drag.currentX - drag.startX);
-    const h = Math.abs(drag.currentY - drag.startY);
-    if (w > 8 && h > 8) {
+    const dragWidth = Math.abs(drag.currentX - drag.startX);
+    const dragHeight = Math.abs(drag.currentY - drag.startY);
+    if (dragWidth > 8 && dragHeight > 8) {
       const left = Math.min(drag.startX, drag.currentX);
       const top = Math.min(drag.startY, drag.currentY);
       onCreateRectTarget({
         kind: "rect",
         pageIndex,
         x: left / viewport.scale,
-        y: size.height - (top + h) / viewport.scale,
-        width: w / viewport.scale,
-        height: h / viewport.scale,
+        y: size.height - (top + dragHeight) / viewport.scale,
+        width: dragWidth / viewport.scale,
+        height: dragHeight / viewport.scale,
       });
     }
     setDrag(null);
   }
 
+  const targetCount = manualTargets.length + searchTargets.reduce((sum, target) => sum + target.quads.length, 0);
+
   return (
     <div className="page-card">
-      <div className="page-card-header">
-        <span>Page {pageIndex + 1}</span>
+      <div
+        className="page-card-header"
+        onClick={onToggleCollapsed}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") onToggleCollapsed();
+        }}
+      >
+        <span>
+          <span className="page-collapse-icon">
+            {collapsed ? "\u25b6" : "\u25bc"}
+          </span>
+          Page {pageIndex + 1}
+          {targetCount > 0 ? (
+            <span className="page-target-badge">{targetCount}</span>
+          ) : null}
+        </span>
         <span>
           {Math.round(size.width)} x {Math.round(size.height)} pt
         </span>
       </div>
-      <div className="page-canvas-wrap">
-        <canvas ref={canvasRef} />
-        {renderError ? (
-          <div className="page-render-error">{renderError}</div>
-        ) : null}
-        {viewport ? (
-          <svg
-            ref={overlayRef}
-            className="page-overlay"
-            viewBox={`0 0 ${viewport.width} ${viewport.height}`}
-            onPointerDown={beginDrag}
-            onPointerMove={updateDrag}
-            onPointerUp={finishDrag}
-            onPointerLeave={finishDrag}
-          >
-            {manualTargets.map((target, i) => (
-              <rect
-                key={`r-${pageIndex}-${i}`}
-                className="target-rect"
-                x={target.x * viewport.scale}
-                y={(size.height - target.y - target.height) * viewport.scale}
-                width={target.width * viewport.scale}
-                height={target.height * viewport.scale}
-              />
-            ))}
-            {searchTargets.flatMap((t) => t.quads).map((quad, i) => (
-              <polygon
-                key={`q-${pageIndex}-${i}`}
-                className="target-quad"
-                points={quad
-                  .map((p: Point) => toSvgPoint(p, size.height, viewport.scale))
-                  .join(" ")}
-              />
-            ))}
-            {draftRect ? (
-              <rect
-                className="target-draft"
-                x={draftRect.x}
-                y={draftRect.y}
-                width={draftRect.width}
-                height={draftRect.height}
-              />
-            ) : null}
-          </svg>
-        ) : null}
-      </div>
+      {!collapsed ? (
+        <div className="page-canvas-wrap">
+          <canvas ref={canvasRef} />
+          {renderError ? (
+            <div className="page-render-error">{renderError}</div>
+          ) : null}
+          {viewport ? (
+            <svg
+              ref={overlayRef}
+              className="page-overlay"
+              viewBox={`0 0 ${viewport.width} ${viewport.height}`}
+              onPointerDown={beginDrag}
+              onPointerMove={updateDrag}
+              onPointerUp={finishDrag}
+              onPointerLeave={finishDrag}
+            >
+              {manualTargets.map((target, index) => (
+                <rect
+                  key={`rect-${pageIndex}-${index}`}
+                  className="target-rect"
+                  x={target.x * viewport.scale}
+                  y={
+                    (size.height - target.y - target.height) * viewport.scale
+                  }
+                  width={target.width * viewport.scale}
+                  height={target.height * viewport.scale}
+                />
+              ))}
+              {searchTargets
+                .flatMap((target) => target.quads)
+                .map((quad, index) => (
+                  <polygon
+                    key={`quad-${pageIndex}-${index}`}
+                    className="target-quad"
+                    points={quad
+                      .map((point: Point) =>
+                        toSvgPoint(point, size.height, viewport.scale),
+                      )
+                      .join(" ")}
+                  />
+                ))}
+              {draftRect ? (
+                <rect
+                  className="target-draft"
+                  x={draftRect.x}
+                  y={draftRect.y}
+                  width={draftRect.width}
+                  height={draftRect.height}
+                />
+              ) : null}
+            </svg>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
