@@ -336,6 +336,66 @@ writeFixture("annotations.pdf", {
   trailer: { Root: { ref: [1, 0] } },
 });
 
+// --- Incremental update fixture ---
+// Builds a two-revision PDF: the original has "Original Secret", then an
+// incremental update replaces the content stream with "Updated Secret".
+function buildIncrementalPdf() {
+  // --- Revision 1: original document ---
+  const rev1Spec = {
+    objects: [
+      { id: 1, value: { Type: "/Catalog", Pages: { ref: [2, 0] } } },
+      { id: 2, value: { Type: "/Pages", Count: 1, Kids: [{ ref: [3, 0] }] } },
+      basePageObjects({
+        pageId: 3,
+        pagesId: 2,
+        contentId: 4,
+        resources: { Font: { F1: { ref: [5, 0] } } },
+      }),
+      {
+        id: 4,
+        stream: {
+          dict: {},
+          data: "BT\n/F1 24 Tf\n72 700 Td\n(Original Secret) Tj\nET\n",
+        },
+      },
+      fontObject,
+    ],
+    trailer: { Root: { ref: [1, 0] } },
+  };
+  let body = buildPdf(rev1Spec);
+  // Remove trailing %%EOF newline for clean append
+  if (body.endsWith("\n")) body = body.slice(0, -1);
+
+  // Find the startxref offset of revision 1
+  const startxrefMarker = "startxref\n";
+  const startxrefPos = body.lastIndexOf(startxrefMarker);
+  const afterMarker = startxrefPos + startxrefMarker.length;
+  const eofPos = body.indexOf("\n", afterMarker);
+  const rev1Xref = body.slice(afterMarker, eofPos);
+
+  // --- Revision 2: incremental update replacing object 4 ---
+  const updatedStreamData = "BT\n/F1 24 Tf\n72 700 Td\n(Updated Secret) Tj\nET\n";
+  const updatedStreamLength = Buffer.byteLength(updatedStreamData, "binary");
+
+  let rev2Body = "\n";
+  const rev2Offset = body.length + 1; // offset of object 4 in the appended body
+  rev2Body += `4 0 obj\n<< /Length ${updatedStreamLength} >>\nstream\n${updatedStreamData}endstream\nendobj\n`;
+
+  const rev2XrefOffset = body.length + rev2Body.length;
+  rev2Body += "xref\n";
+  rev2Body += "0 1\n";
+  rev2Body += "0000000000 65535 f \n";
+  rev2Body += "4 1\n";
+  rev2Body += `${String(rev2Offset).padStart(10, "0")} 00000 n \n`;
+  rev2Body += "trailer\n";
+  rev2Body += `${serializeValue({ Size: 6, Root: { ref: [1, 0] }, Prev: Number(rev1Xref) })}\n`;
+  rev2Body += `startxref\n${rev2XrefOffset}\n%%EOF\n`;
+
+  return body + rev2Body;
+}
+
+fs.writeFileSync(path.join(fixturesDir, "incremental-update.pdf"), buildIncrementalPdf(), "binary");
+
 writeFixture("metadata-attachments.pdf", {
   objects: [
     { id: 1, value: { Type: "/Catalog", Pages: { ref: [2, 0] }, Names: { ref: [7, 0] } } },

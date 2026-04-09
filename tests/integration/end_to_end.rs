@@ -164,3 +164,55 @@ fn can_strip_metadata_and_attachments() {
         "Info dictionary content survived in saved PDF"
     );
 }
+
+#[test]
+fn incremental_update_reads_latest_revision_and_redacts() {
+    let mut document =
+        PdfDocument::open(&fixture("incremental-update.pdf")).expect("incremental fixture should open");
+    let extracted = document
+        .extract_text(0)
+        .expect("text extraction should succeed");
+    assert!(
+        extracted.text.contains("Updated Secret"),
+        "should see updated text, got: {}",
+        extracted.text
+    );
+    assert!(
+        !extracted.text.contains("Original Secret"),
+        "should not see original text"
+    );
+
+    let matches = document
+        .search_text(0, "Updated")
+        .expect("search should succeed");
+    assert_eq!(matches.len(), 1);
+    let quads = matches[0]
+        .quads
+        .iter()
+        .map(|quad| quad.points)
+        .collect::<Vec<_>>();
+
+    let report = document
+        .apply_redactions(RedactionPlan {
+            targets: vec![RedactionTarget::QuadGroup {
+                page_index: 0,
+                quads,
+            }],
+            mode: None,
+            fill_color: None,
+            overlay_text: None,
+            remove_intersecting_annotations: Some(false),
+            strip_metadata: Some(false),
+            strip_attachments: Some(false),
+        })
+        .expect("redaction should succeed");
+    assert!(report.text_glyphs_removed > 0);
+
+    let saved = document.save().expect("save should succeed");
+    let reopened = PdfDocument::open(&saved).expect("saved pdf should reopen");
+    let extracted_after = reopened
+        .extract_text(0)
+        .expect("reopened extraction should succeed");
+    assert!(!extracted_after.text.contains("Updated"));
+    assert!(extracted_after.text.contains("Secret"));
+}

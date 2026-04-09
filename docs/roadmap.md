@@ -6,7 +6,7 @@ title: Roadmap
 
 ## Implemented MVP
 
-- Classic xref parsing
+- Classic xref parsing with incremental update chain support (follows `Prev` pointers)
 - Page tree traversal
 - Content parsing for common text, path, image, clipping, color, graphics-state, and marked-content operators
 - Simple-font text extraction and search geometry
@@ -27,7 +27,7 @@ title: Roadmap
 - Partial image rewriting
 - Optional-content and hidden-layer sanitization
 - Overlay text stamping
-- Incremental-save preservation
+- Incremental-save preservation (reading is supported; output is always a flat rewrite)
 
 ## Documentation policy
 

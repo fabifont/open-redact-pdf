@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::document::build_document;
 use crate::error::{PdfError, PdfResult};
@@ -10,11 +10,6 @@ pub fn parse_pdf(bytes: &[u8]) -> PdfResult<crate::document::ParsedDocument> {
     let version = parse_header(bytes)?;
     let startxref = find_startxref(bytes)?;
     let (xref, trailer) = parse_xref_table(bytes, startxref)?;
-    if trailer.contains_key("XRefStm") {
-        return Err(PdfError::Unsupported(
-            "xref streams are not supported".to_string(),
-        ));
-    }
 
     let mut objects = BTreeMap::new();
     let mut max_object_number = 0;
@@ -64,6 +59,45 @@ fn find_startxref(bytes: &[u8]) -> PdfResult<usize> {
 
 fn parse_xref_table(
     bytes: &[u8],
+    start_offset: usize,
+) -> PdfResult<(BTreeMap<ObjectRef, XrefEntry>, PdfDictionary)> {
+    let mut merged_entries = BTreeMap::new();
+    let mut newest_trailer = None;
+    let mut visited = BTreeSet::new();
+    let mut offset = start_offset;
+
+    loop {
+        if !visited.insert(offset) {
+            return Err(PdfError::Parse("circular Prev chain".to_string()));
+        }
+        let (section_entries, trailer) = parse_xref_section(bytes, offset)?;
+
+        if trailer.contains_key("XRefStm") {
+            return Err(PdfError::Unsupported(
+                "xref streams are not supported".to_string(),
+            ));
+        }
+
+        // Newest-first: only insert entries not already present
+        for (object_ref, entry) in section_entries {
+            merged_entries.entry(object_ref).or_insert(entry);
+        }
+
+        if newest_trailer.is_none() {
+            newest_trailer = Some(trailer.clone());
+        }
+
+        match trailer.get("Prev").and_then(PdfValue::as_integer) {
+            Some(prev_offset) => offset = prev_offset as usize,
+            None => break,
+        }
+    }
+
+    Ok((merged_entries, newest_trailer.unwrap()))
+}
+
+fn parse_xref_section(
+    bytes: &[u8],
     offset: usize,
 ) -> PdfResult<(BTreeMap<ObjectRef, XrefEntry>, PdfDictionary)> {
     let mut cursor = Cursor::new(bytes, offset);
@@ -85,7 +119,7 @@ fn parse_xref_table(
             }
             let parts = String::from_utf8_lossy(line).trim().to_string();
             let mut fields = parts.split_whitespace();
-            let offset = fields
+            let entry_offset = fields
                 .next()
                 .ok_or_else(|| PdfError::Parse("invalid xref entry offset".to_string()))?
                 .parse::<usize>()
@@ -104,7 +138,7 @@ fn parse_xref_table(
             entries.insert(
                 ObjectRef::new(object_number, generation),
                 XrefEntry {
-                    offset,
+                    offset: entry_offset,
                     generation,
                     in_use: flag == "n",
                 },
@@ -116,11 +150,6 @@ fn parse_xref_table(
         PdfValue::Dictionary(dictionary) => dictionary,
         _ => return Err(PdfError::Parse("trailer is not a dictionary".to_string())),
     };
-    if trailer.contains_key("Prev") {
-        return Err(PdfError::Unsupported(
-            "incremental update chains are not supported".to_string(),
-        ));
-    }
     Ok((entries, trailer))
 }
 
@@ -552,11 +581,80 @@ fn is_delimiter(byte: u8) -> bool {
 #[cfg(test)]
 mod tests {
     use super::parse_pdf;
+    use crate::error::PdfError;
+    use crate::types::PdfObject;
 
     #[test]
     fn parses_simple_pdf_fixture() {
         let bytes = include_bytes!("../../../tests/fixtures/simple-text.pdf");
         let document = parse_pdf(bytes).expect("fixture should parse");
         assert_eq!(document.pages.len(), 1);
+    }
+
+    #[test]
+    fn parses_incremental_update_fixture() {
+        let bytes = include_bytes!("../../../tests/fixtures/incremental-update.pdf");
+        let document = parse_pdf(bytes).expect("incremental fixture should parse");
+        assert_eq!(document.pages.len(), 1);
+
+        // The updated content stream (object 4) should contain "Updated Secret",
+        // not "Original Secret"
+        let content_refs = &document.pages[0].content_refs;
+        assert!(!content_refs.is_empty());
+        let content_obj = document.file.objects.get(&content_refs[0]).unwrap();
+        let stream_data = match content_obj {
+            PdfObject::Stream(stream) => String::from_utf8_lossy(&stream.data),
+            _ => panic!("expected stream object for page content"),
+        };
+        assert!(
+            stream_data.contains("Updated Secret"),
+            "content stream should contain updated text"
+        );
+        assert!(
+            !stream_data.contains("Original Secret"),
+            "content stream should not contain original text"
+        );
+    }
+
+    #[test]
+    fn rejects_circular_prev_chain() {
+        // Build a minimal PDF where Prev points back to the same xref offset
+        let mut pdf = Vec::new();
+        pdf.extend_from_slice(b"%PDF-1.4\n");
+
+        // Object 1: catalog
+        let obj1_offset = pdf.len();
+        pdf.extend_from_slice(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+
+        // Object 2: pages
+        let obj2_offset = pdf.len();
+        pdf.extend_from_slice(b"2 0 obj\n<< /Type /Pages /Count 0 /Kids [] >>\nendobj\n");
+
+        let xref_offset = pdf.len();
+        pdf.extend_from_slice(b"xref\n0 3\n");
+        pdf.extend_from_slice(b"0000000000 65535 f \n");
+        pdf.extend_from_slice(format!("{:010} 00000 n \n", obj1_offset).as_bytes());
+        pdf.extend_from_slice(format!("{:010} 00000 n \n", obj2_offset).as_bytes());
+        pdf.extend_from_slice(b"trailer\n");
+        // Prev points back to this same xref offset — circular
+        pdf.extend_from_slice(
+            format!(
+                "<< /Size 3 /Root 1 0 R /Prev {} >>\n",
+                xref_offset
+            )
+            .as_bytes(),
+        );
+        pdf.extend_from_slice(format!("startxref\n{}\n%%EOF\n", xref_offset).as_bytes());
+
+        let result = parse_pdf(&pdf);
+        match result {
+            Err(PdfError::Parse(message)) => {
+                assert!(
+                    message.contains("circular Prev chain"),
+                    "expected circular chain error, got: {message}"
+                );
+            }
+            other => panic!("expected Parse error, got: {other:?}"),
+        }
     }
 }

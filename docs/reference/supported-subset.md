@@ -9,8 +9,8 @@ This project intentionally targets a narrow, explicit MVP.
 ## Supported now
 
 - Unencrypted PDFs
-- Classic xref tables
-- Full-document rewrites on save
+- Classic xref tables, including incremental update chains (multiple xref sections linked via `Prev`)
+- Full-document rewrites on save (incremental updates are flattened into a single revision on output)
 - Unfiltered or `FlateDecode` streams
 - Page tree traversal with inherited resources, media boxes, crop boxes, and page rotation
 - Common text operators
@@ -31,7 +31,7 @@ This project intentionally targets a narrow, explicit MVP.
 
 - Encrypted PDFs
 - Object streams and xref streams
-- Incremental update preservation
+- Incremental update preservation (output is always a flat rewrite)
 - Form XObjects on targeted pages
 - Type3 fonts
 - broad CID font support beyond the current `Identity-H` path
