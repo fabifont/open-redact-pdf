@@ -82,6 +82,38 @@ const fontObject = {
   },
 };
 
+// Font set only via gs operator (ExtGState Font entry), no Tf in the content stream
+writeFixture("extgstate-font.pdf", {
+  objects: [
+    { id: 1, value: { Type: "/Catalog", Pages: { ref: [2, 0] } } },
+    { id: 2, value: { Type: "/Pages", Count: 1, Kids: [{ ref: [3, 0] }] } },
+    basePageObjects({
+      pageId: 3,
+      pagesId: 2,
+      contentId: 4,
+      resources: {
+        ExtGState: { GS1: { ref: [6, 0] } },
+      },
+    }),
+    {
+      id: 4,
+      stream: {
+        dict: {},
+        data: "/GS1 gs\nBT\n72 700 Td\n(ExtGState Secret) Tj\n0 -32 Td\n(Normal Line) Tj\nET\n",
+      },
+    },
+    fontObject,
+    {
+      id: 6,
+      value: {
+        Type: "/ExtGState",
+        Font: [{ ref: [5, 0] }, 24],
+      },
+    },
+  ],
+  trailer: { Root: { ref: [1, 0] } },
+});
+
 writeFixture("simple-text.pdf", {
   objects: [
     { id: 1, value: { Type: "/Catalog", Pages: { ref: [2, 0] } } },

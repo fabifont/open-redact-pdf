@@ -19,6 +19,7 @@ This project intentionally targets a narrow, explicit MVP.
 - Color operators for device and general color spaces (`rg`/`RG`, `g`/`G`, `k`/`K`, `cs`/`CS`, `sc`/`SC`, `scn`/`SCN`)
 - Curve segment operators (`v`, `y`)
 - Marked-content operators as safe pass-through (`BMC`, `BDC`, `EMC`, `MP`, `DP`)
+- ExtGState font entries (fonts set via `gs` operator)
 - Image XObject invocation detection
 - `Type1` and `TrueType` fonts in the current text path
 - `Type0` with `Identity-H`, two-byte CIDs, and `ToUnicode` maps

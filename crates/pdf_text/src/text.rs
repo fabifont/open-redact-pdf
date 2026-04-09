@@ -77,8 +77,8 @@ pub fn analyze_page_text(
     page: &PageInfo,
 ) -> PdfResult<ExtractedPageText> {
     let parsed = parse_page_contents(file, page)?;
-    let fonts = load_fonts(file, &page.resources)?;
-    interpret_page_text(page_index, page, &parsed, &fonts)
+    let (fonts, extgstate_fonts) = load_fonts(file, &page.resources)?;
+    interpret_page_text(page_index, page, &parsed, &fonts, &extgstate_fonts)
 }
 
 pub fn search_page_text(page: &ExtractedPageText, query: &str) -> Vec<TextMatch> {
@@ -385,23 +385,38 @@ fn interpret_page_text(
     page: &PageInfo,
     parsed: &ParsedPageContent,
     fonts: &BTreeMap<String, LoadedFont>,
+    extgstate_fonts: &ExtGStateFontMap,
 ) -> PdfResult<ExtractedPageText> {
     let page_transform = page.page_box.normalized_transform();
     let mut context = TextContext::new(page_index);
     let mut ctm = Matrix::identity();
-    let mut ctm_stack = Vec::new();
+    let mut ctm_stack: Vec<(Matrix, RuntimeTextState)> = Vec::new();
     let mut text_state = RuntimeTextState::default();
 
     for (operation_index, operation) in parsed.operations.iter().enumerate() {
         match operation.operator.as_str() {
-            "q" => ctm_stack.push(ctm),
-            "Q" => ctm = ctm_stack.pop().unwrap_or(Matrix::identity()),
+            "q" => ctm_stack.push((ctm, text_state.clone())),
+            "Q" => {
+                let (saved_ctm, saved_text_state) = ctm_stack
+                    .pop()
+                    .unwrap_or((Matrix::identity(), RuntimeTextState::default()));
+                ctm = saved_ctm;
+                text_state = saved_text_state;
+            }
+            "gs" => {
+                let gs_name = operand_name(operation, 0)?;
+                if let Some((font_key, font_size)) = extgstate_fonts.get(gs_name) {
+                    text_state.font = Some(font_key.clone());
+                    text_state.font_size = *font_size;
+                }
+            }
             "cm" => {
                 let matrix = matrix_from_operands(&operation.operands)?;
                 ctm = ctm.multiply(matrix);
             }
             "BT" => {
-                text_state = RuntimeTextState::default();
+                text_state.text_matrix = Matrix::identity();
+                text_state.line_matrix = Matrix::identity();
             }
             "ET" => {}
             "Tf" => {
@@ -640,49 +655,84 @@ impl TextContext {
     }
 }
 
+/// Maps ExtGState resource name → (synthetic font key in the fonts map, font size).
+type ExtGStateFontMap = BTreeMap<String, (String, f64)>;
+
+fn load_single_font(file: &PdfFile, font_dict: &pdf_objects::PdfDictionary) -> PdfResult<LoadedFont> {
+    let subtype = font_dict
+        .get("Subtype")
+        .and_then(PdfValue::as_name)
+        .unwrap_or("");
+    match subtype {
+        "Type1" | "TrueType" => {
+            let first_char = font_dict
+                .get("FirstChar")
+                .and_then(PdfValue::as_integer)
+                .unwrap_or(0) as u16;
+            let widths = font_dict
+                .get("Widths")
+                .and_then(PdfValue::as_array)
+                .map(|widths| {
+                    widths
+                        .iter()
+                        .map(|value| value.as_number().unwrap_or(600.0))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            Ok(LoadedFont::Simple(SimpleFont { widths, first_char }))
+        }
+        "Type0" => Ok(LoadedFont::Composite(load_composite_font(file, font_dict)?)),
+        other => Err(PdfError::Unsupported(format!(
+            "font subtype {other} is not supported"
+        ))),
+    }
+}
+
 fn load_fonts(
     file: &PdfFile,
     resources: &pdf_objects::PdfDictionary,
-) -> PdfResult<BTreeMap<String, LoadedFont>> {
+) -> PdfResult<(BTreeMap<String, LoadedFont>, ExtGStateFontMap)> {
     let mut fonts = BTreeMap::new();
-    let Some(fonts_value) = resources.get("Font") else {
-        return Ok(fonts);
-    };
-    let fonts_dict = file.resolve_dict(fonts_value)?;
-    for (name, font_value) in fonts_dict {
-        let font_dict = file.resolve_dict(font_value)?;
-        let subtype = font_dict
-            .get("Subtype")
-            .and_then(PdfValue::as_name)
-            .unwrap_or("");
-        let font = match subtype {
-            "Type1" | "TrueType" => {
-                let first_char = font_dict
-                    .get("FirstChar")
-                    .and_then(PdfValue::as_integer)
-                    .unwrap_or(0) as u16;
-                let widths = font_dict
-                    .get("Widths")
-                    .and_then(PdfValue::as_array)
-                    .map(|widths| {
-                        widths
-                            .iter()
-                            .map(|value| value.as_number().unwrap_or(600.0))
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default();
-                LoadedFont::Simple(SimpleFont { widths, first_char })
-            }
-            "Type0" => LoadedFont::Composite(load_composite_font(file, font_dict)?),
-            other => {
-                return Err(PdfError::Unsupported(format!(
-                    "font subtype {other} is not supported"
-                )));
-            }
-        };
-        fonts.insert(name.clone(), font);
+    let mut extgstate_fonts = BTreeMap::new();
+
+    // Load fonts from the Font resource dictionary
+    if let Some(fonts_value) = resources.get("Font") {
+        let fonts_dict = file.resolve_dict(fonts_value)?;
+        for (name, font_value) in fonts_dict {
+            let font_dict = file.resolve_dict(font_value)?;
+            let font = load_single_font(file, font_dict)?;
+            fonts.insert(name.clone(), font);
+        }
     }
-    Ok(fonts)
+
+    // Scan ExtGState entries for Font arrays
+    if let Some(extgstate_value) = resources.get("ExtGState") {
+        if let Ok(extgstate_dict) = file.resolve_dict(extgstate_value) {
+            for (gs_name, gs_value) in extgstate_dict {
+                let Ok(gs_dict) = file.resolve_dict(gs_value) else {
+                    continue;
+                };
+                let Some(font_array) = gs_dict.get("Font").and_then(PdfValue::as_array) else {
+                    continue;
+                };
+                if font_array.len() < 2 {
+                    continue;
+                }
+                let font_size = font_array[1].as_number().unwrap_or(12.0);
+                let Ok(font_dict) = file.resolve_dict(&font_array[0]) else {
+                    continue;
+                };
+                let Ok(font) = load_single_font(file, font_dict) else {
+                    continue;
+                };
+                let synthetic_key = format!("__gs:{gs_name}");
+                fonts.insert(synthetic_key.clone(), font);
+                extgstate_fonts.insert(gs_name.clone(), (synthetic_key, font_size));
+            }
+        }
+    }
+
+    Ok((fonts, extgstate_fonts))
 }
 
 #[allow(clippy::too_many_arguments)]
