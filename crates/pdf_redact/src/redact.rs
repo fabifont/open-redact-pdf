@@ -41,6 +41,12 @@ pub fn apply_redactions(
         strip_attachments(file)?;
     }
 
+    // Collect object refs to remove AFTER the loop so shared objects (e.g. a
+    // logo XObject used on every page) remain available while processing all
+    // pages.
+    let mut deferred_xobject_removals: Vec<(PdfDictionary, Vec<String>)> = Vec::new();
+    let mut deferred_content_removals: Vec<ObjectRef> = Vec::new();
+
     for (page_index, targets) in page_targets {
         let page = pages
             .get(page_index)
@@ -75,8 +81,10 @@ pub fn apply_redactions(
             ));
         }
 
-        // Remove neutralized XObject stream objects so image data does not survive
-        remove_neutralized_xobjects(file, &page.resources, &neutralized_xobjects)?;
+        // Defer XObject removal so shared objects stay available for other pages
+        if !neutralized_xobjects.is_empty() {
+            deferred_xobject_removals.push((page.resources.clone(), neutralized_xobjects));
+        }
 
         let annotation_removed = if plan.remove_intersecting_annotations {
             remove_annotations(file, &page, &targets, page_transform)?
@@ -95,8 +103,24 @@ pub fn apply_redactions(
             )?;
             content_bytes.extend_from_slice(&overlay);
         }
-        write_page_contents(file, pages, page_index, content_bytes)?;
+
+        // Defer old content stream removal; write new content immediately
+        let old_content_refs =
+            std::mem::take(&mut pages[page_index].content_refs);
+        deferred_content_removals.extend(old_content_refs);
+        write_page_contents_without_removal(file, pages, page_index, content_bytes)?;
         report.pages_touched += 1;
+    }
+
+    // Now remove deferred objects — no page will need them again
+    for (resources, names) in &deferred_xobject_removals {
+        remove_neutralized_xobjects(file, resources, names)?;
+    }
+    let mut removed_refs = BTreeSet::new();
+    for old_ref in deferred_content_removals {
+        if removed_refs.insert(old_ref) {
+            file.objects.remove(&old_ref);
+        }
     }
 
     Ok(report)
@@ -743,7 +767,15 @@ fn remove_annotations(
     let mut removed = 0usize;
     let mut retained = Vec::new();
     for annotation_ref in &page.annotation_refs {
-        let dict = file.get_dictionary(*annotation_ref)?;
+        let dict = match file.get_dictionary(*annotation_ref) {
+            Ok(dict) => dict,
+            Err(PdfError::MissingObject(_)) => {
+                // Annotation object missing (shared and already removed, or absent)
+                removed += 1;
+                continue;
+            }
+            Err(other) => return Err(other),
+        };
         let rect = dict
             .get("Rect")
             .map(parse_rect)
@@ -781,7 +813,7 @@ fn remove_annotations(
     Ok(removed)
 }
 
-fn write_page_contents(
+fn write_page_contents_without_removal(
     file: &mut PdfFile,
     pages: &mut [PageInfo],
     page_index: usize,
@@ -790,12 +822,6 @@ fn write_page_contents(
     let page = pages
         .get_mut(page_index)
         .ok_or(PdfError::InvalidPageIndex(page_index))?;
-
-    // Remove old content stream objects so original unredacted data does not survive
-    let old_refs = std::mem::take(&mut page.content_refs);
-    for old_ref in &old_refs {
-        file.objects.remove(old_ref);
-    }
 
     let content_ref = file.allocate_object_ref();
     file.insert_object(
