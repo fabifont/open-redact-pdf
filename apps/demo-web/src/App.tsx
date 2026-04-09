@@ -1,12 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ChangeEvent,
-  type PointerEvent,
-} from "react";
+import { useCallback, useEffect, useState, type ChangeEvent } from "react";
 import {
   applyRedactions,
   extractText,
@@ -21,33 +13,23 @@ import {
   type Point,
   type QuadGroupTarget,
   type RectTarget,
+  type RedactionMode,
   type RedactionPlan,
   type ApplyReport,
 } from "@open-redact-pdf/sdk";
-import { GlobalWorkerOptions, getDocument, type PDFDocumentProxy } from "pdfjs-dist";
+import {
+  GlobalWorkerOptions,
+  getDocument,
+  type PDFDocumentProxy,
+} from "pdfjs-dist";
+import { Toolbar } from "./components/Toolbar";
+import { Sidebar } from "./components/Sidebar";
+import { PageView } from "./components/PageView";
 
 GlobalWorkerOptions.workerSrc = new URL(
   "pdfjs-dist/build/pdf.worker.min.mjs",
   import.meta.url,
 ).toString();
-
-type PagePreviewProps = {
-  document: PDFDocumentProxy | null;
-  pageIndex: number;
-  size: { width: number; height: number };
-  manualTargets: RectTarget[];
-  searchTargets: QuadGroupTarget[];
-  onCreateRectTarget: (target: RectTarget) => void;
-  onRenderError: (pageIndex: number, message: string | null) => void;
-  renderError: string | null;
-};
-
-type DragState = {
-  startX: number;
-  startY: number;
-  currentX: number;
-  currentY: number;
-};
 
 type UiTextMatch = {
   text: string;
@@ -56,51 +38,53 @@ type UiTextMatch = {
 };
 
 export function App() {
-  const [status, setStatus] = useState("Load a local PDF to start.");
+  const [status, setStatus] = useState("Load a PDF to start.");
   const [error, setError] = useState<string | null>(null);
   const [pdfBytes, setPdfBytes] = useState<Uint8Array | null>(null);
   const [handle, setHandle] = useState<PdfHandle | null>(null);
-  const [pageSizes, setPageSizes] = useState<Array<{ width: number; height: number }>>([]);
+  const [pageSizes, setPageSizes] = useState<
+    Array<{ width: number; height: number }>
+  >([]);
   const [manualTargets, setManualTargets] = useState<RectTarget[]>([]);
   const [searchTargets, setSearchTargets] = useState<QuadGroupTarget[]>([]);
   const [searchMatches, setSearchMatches] = useState<UiTextMatch[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [downloadBytes, setDownloadBytes] = useState<Uint8Array | null>(null);
-  const [applyReport, setApplyReport] = useState<null | ApplyReport>(null);
-  const [redactionMode, setRedactionMode] = useState<"strip" | "redact" | "erase">("redact");
-  const [pageTexts, setPageTexts] = useState<Array<{ text: string; error: string | null }>>([]);
+  const [applyReport, setApplyReport] = useState<ApplyReport | null>(null);
+  const [redactionMode, setRedactionMode] = useState<RedactionMode>("redact");
+  const [pageTexts, setPageTexts] = useState<
+    Array<{ text: string; error: string | null }>
+  >([]);
   const [renderErrors, setRenderErrors] = useState<Record<number, string>>({});
-  const [previewDocument, setPreviewDocument] = useState<PDFDocumentProxy | null>(null);
+  const [previewDocument, setPreviewDocument] =
+    useState<PDFDocumentProxy | null>(null);
 
+  // PDF.js document lifecycle
   useEffect(() => {
     if (!pdfBytes) {
       setPreviewDocument(null);
       return;
     }
-
     let cancelled = false;
-    let documentRef: PDFDocumentProxy | null = null;
+    let docRef: PDFDocumentProxy | null = null;
     setRenderErrors({});
-    getDocument({ data: Uint8Array.from(pdfBytes) }).promise
-      .then((document) => {
-        documentRef = document;
-        if (!cancelled) {
-          setPreviewDocument(document);
-        }
+    getDocument({ data: Uint8Array.from(pdfBytes) })
+      .promise.then((doc) => {
+        docRef = doc;
+        if (!cancelled) setPreviewDocument(doc);
       })
       .catch((caught) => {
-        const message = caught instanceof Error ? caught.message : String(caught);
+        const msg = caught instanceof Error ? caught.message : String(caught);
         if (!cancelled) {
-          setError(message);
-          setStatus("PDF.js preview failed to load.");
+          setError(msg);
+          setStatus("PDF.js preview failed.");
           setPreviewDocument(null);
         }
       });
-
     return () => {
       cancelled = true;
-      setPreviewDocument((current) => (current === documentRef ? null : current));
-      void documentRef?.destroy();
+      setPreviewDocument((cur) => (cur === docRef ? null : cur));
+      void docRef?.destroy();
     };
   }, [pdfBytes]);
 
@@ -114,8 +98,8 @@ export function App() {
     }
     const nextHandle = openPdf(Uint8Array.from(bytes));
     const count = getPageCount(nextHandle);
-    const sizes = Array.from({ length: count }, (_, pageIndex) =>
-      getPageSize(nextHandle, pageIndex),
+    const sizes = Array.from({ length: count }, (_, i) =>
+      getPageSize(nextHandle, i),
     );
     setHandle(nextHandle);
     setPdfBytes(Uint8Array.from(bytes));
@@ -126,19 +110,19 @@ export function App() {
     setSearchMatches([]);
     setApplyReport(null);
     setDownloadBytes(null);
-    const texts = Array.from({ length: count }, (_, pageIndex) => {
+    const texts = Array.from({ length: count }, (_, i) => {
       try {
-        return { text: extractText(nextHandle, pageIndex).text, error: null };
+        return { text: extractText(nextHandle, i).text, error: null };
       } catch (caught) {
-        const message = caught instanceof Error ? caught.message : String(caught);
-        return { text: "", error: message };
+        const msg = caught instanceof Error ? caught.message : String(caught);
+        return { text: "", error: msg };
       }
     });
-    const extractionFailures = texts.filter((entry) => entry.error !== null).length;
     setPageTexts(texts);
-    if (extractionFailures > 0) {
+    const failures = texts.filter((e) => e.error !== null).length;
+    if (failures > 0) {
       setStatus(
-        `Loaded ${count} page${count === 1 ? "" : "s"}; text extraction is unsupported on ${extractionFailures} page${extractionFailures === 1 ? "" : "s"}.`,
+        `Loaded ${count} page${count === 1 ? "" : "s"}; text extraction unsupported on ${failures} page${failures === 1 ? "" : "s"}.`,
       );
     } else {
       setStatus(`Loaded ${count} page${count === 1 ? "" : "s"}.`);
@@ -147,21 +131,19 @@ export function App() {
 
   async function onFileChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
-    if (!file) {
-      return;
-    }
+    if (!file) return;
     try {
       const bytes = new Uint8Array(await file.arrayBuffer());
       await loadPdfBytes(bytes);
     } catch (caught) {
-      const message = caught instanceof Error ? caught.message : String(caught);
-      setError(message);
+      const msg = caught instanceof Error ? caught.message : String(caught);
+      setError(msg);
       setStatus("Failed to load PDF.");
     }
   }
 
   function addManualTarget(target: RectTarget) {
-    setManualTargets((current) => [...current, target]);
+    setManualTargets((cur) => [...cur, target]);
   }
 
   function clearTargets() {
@@ -172,51 +154,52 @@ export function App() {
   }
 
   function runSearch() {
-    if (!handle || !searchQuery.trim()) {
-      return;
-    }
+    if (!handle || !searchQuery.trim()) return;
     try {
       const matches: UiTextMatch[] = [];
       const failures: string[] = [];
-      for (let pageIndex = 0; pageIndex < pageSizes.length; pageIndex += 1) {
+      for (let i = 0; i < pageSizes.length; i++) {
         try {
-          for (const match of searchText(handle, pageIndex, searchQuery)) {
+          for (const match of searchText(handle, i, searchQuery)) {
             const normalized = normalizeSearchMatch(match);
             if (normalized) {
               matches.push(normalized);
             } else {
-              failures.push(`Page ${pageIndex + 1}: search result geometry was invalid`);
+              failures.push(
+                `Page ${i + 1}: search result geometry was invalid`,
+              );
             }
           }
         } catch (caught) {
-          const message = caught instanceof Error ? caught.message : String(caught);
-          failures.push(`Page ${pageIndex + 1}: ${message}`);
+          const msg =
+            caught instanceof Error ? caught.message : String(caught);
+          failures.push(`Page ${i + 1}: ${msg}`);
         }
       }
-      const targets = matches.map<QuadGroupTarget>((match) => ({
+      const targets = matches.map<QuadGroupTarget>((m) => ({
         kind: "quadGroup",
-        pageIndex: match.pageIndex,
-        quads: match.quads,
+        pageIndex: m.pageIndex,
+        quads: m.quads,
       }));
       setSearchMatches(matches);
       setSearchTargets(targets);
       setError(failures.length > 0 ? failures.join(" | ") : null);
       if (matches.length === 0 && failures.length > 0) {
-        setStatus("Search is unavailable on one or more pages for this PDF subset.");
+        setStatus("Search unavailable on one or more pages.");
       } else {
-        setStatus(`Found ${matches.length} text match${matches.length === 1 ? "" : "es"}.`);
+        setStatus(
+          `Found ${matches.length} match${matches.length === 1 ? "" : "es"}.`,
+        );
       }
     } catch (caught) {
-      const message = caught instanceof Error ? caught.message : String(caught);
-      setError(message);
+      const msg = caught instanceof Error ? caught.message : String(caught);
+      setError(msg);
       setStatus("Search failed.");
     }
   }
 
   async function applyPlan() {
-    if (!handle || !pdfBytes) {
-      return;
-    }
+    if (!handle || !pdfBytes) return;
     const plan: RedactionPlan = {
       targets: [...manualTargets, ...searchTargets],
       mode: redactionMode,
@@ -235,426 +218,145 @@ export function App() {
       setDownloadBytes(stableBytes);
       setStatus("Sanitized PDF ready for download.");
     } catch (caught) {
-      const message = caught instanceof Error ? caught.message : String(caught);
-      setError(message);
+      const msg = caught instanceof Error ? caught.message : String(caught);
+      setError(msg);
       setStatus("Redaction failed.");
     }
   }
 
   function downloadSanitizedPdf() {
-    if (!downloadBytes) {
-      return;
-    }
-    const bytes = Uint8Array.from(downloadBytes);
-    const url = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
-    const anchor = window.document.createElement("a");
-    anchor.href = url;
-    anchor.download = "sanitized.pdf";
-    anchor.style.display = "none";
-    window.document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
+    if (!downloadBytes) return;
+    const url = URL.createObjectURL(
+      new Blob([Uint8Array.from(downloadBytes)], { type: "application/pdf" }),
+    );
+    const a = window.document.createElement("a");
+    a.href = url;
+    a.download = "sanitized.pdf";
+    a.style.display = "none";
+    window.document.body.appendChild(a);
+    a.click();
+    a.remove();
     window.setTimeout(() => URL.revokeObjectURL(url), 0);
   }
 
-  const targetCount = manualTargets.length + searchTargets.length;
-
-  const setRenderError = useCallback((pageIndex: number, message: string | null) => {
-    setRenderErrors((current) => {
-      const next = { ...current };
-      if (message) {
-        next[pageIndex] = message;
-      } else {
-        delete next[pageIndex];
-      }
-      return next;
-    });
-  }, []);
+  const setRenderError = useCallback(
+    (pageIndex: number, message: string | null) => {
+      setRenderErrors((cur) => {
+        const next = { ...cur };
+        if (message) next[pageIndex] = message;
+        else delete next[pageIndex];
+        return next;
+      });
+    },
+    [],
+  );
 
   return (
-    <div className="app-shell">
-      <aside className="control-panel">
-        <div className="panel-header">
-          <p className="eyebrow">Browser-First PDF Redaction</p>
-          <h1>Open Redact PDF Demo</h1>
-          <p className="lede">
-            This demo renders pages with PDF.js, but every redact/apply/save action runs through the Rust/WASM engine.
-          </p>
-        </div>
-
-        <label className="file-picker">
-          <span>Open local PDF</span>
-          <input type="file" accept="application/pdf" onChange={onFileChange} />
-        </label>
-
-        <div className="panel-block">
-          <h2>Search-Driven Targets</h2>
-          <div className="search-row">
-            <input
-              value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
-              placeholder="Search text to redact"
-            />
-            <button type="button" onClick={runSearch} disabled={!handle}>
-              Find
-            </button>
-          </div>
-          <p className="muted">
-            Matches compile into quad-group targets before redaction.
-          </p>
-        </div>
-
-        <div className="panel-block">
-          <h2>Plan</h2>
-          <p>{targetCount} target(s) queued.</p>
-          <p>{manualTargets.length} manual rectangles.</p>
-          <p>{searchTargets.length} search-derived quad groups.</p>
-          <label>
-            Mode:{" "}
-            <select
-              value={redactionMode}
-              onChange={(e) => setRedactionMode(e.target.value as "strip" | "redact" | "erase")}
-            >
-              <option value="redact">Redact (black box)</option>
-              <option value="erase">Erase (blank space)</option>
-              <option value="strip">Strip (remove only)</option>
-            </select>
-          </label>
-          <div className="button-row">
-            <button type="button" onClick={applyPlan} disabled={!handle || targetCount === 0}>
-              Apply Redactions
-            </button>
-            <button type="button" className="ghost" onClick={clearTargets} disabled={targetCount === 0}>
-              Clear
-            </button>
-          </div>
-        </div>
-
-        <div className="panel-block">
-          <h2>Status</h2>
-          <p>{status}</p>
-          {error ? <p className="error">{error}</p> : null}
-          {applyReport ? (
-            <div className="report">
-              <p>{applyReport.textGlyphsRemoved} glyphs removed</p>
-              <p>{applyReport.pathPaintsRemoved} vector paints removed</p>
-              <p>{applyReport.imageDrawsRemoved} image draws removed</p>
-              <p>{applyReport.annotationsRemoved} annotations removed</p>
-              {applyReport.warnings.map((warning) => (
-                <p key={warning} className="warning">
-                  {warning}
-                </p>
-              ))}
+    <div className="app">
+      <Toolbar onFileChange={onFileChange} status={status} error={error} />
+      <div className="main-layout">
+        <Sidebar
+          hasHandle={handle !== null}
+          searchQuery={searchQuery}
+          onSearchQueryChange={setSearchQuery}
+          onSearch={runSearch}
+          searchMatches={searchMatches.map((m) => ({
+            text: m.text,
+            pageIndex: m.pageIndex,
+          }))}
+          manualTargets={manualTargets}
+          searchTargets={searchTargets}
+          redactionMode={redactionMode}
+          onRedactionModeChange={setRedactionMode}
+          onApply={applyPlan}
+          onClear={clearTargets}
+          onDownload={downloadSanitizedPdf}
+          applyReport={applyReport}
+          downloadReady={downloadBytes !== null}
+          pageTexts={pageTexts}
+        />
+        <div className="page-stage">
+          {!pdfBytes ? (
+            <div className="page-stage-empty">
+              Open a PDF file to get started.
             </div>
-          ) : null}
-          {downloadBytes ? (
-            <button type="button" className="download-link" onClick={downloadSanitizedPdf}>
-              Download Sanitized PDF
-            </button>
-          ) : null}
-        </div>
-
-        <div className="panel-block">
-          <h2>Extracted Text</h2>
-          {pageTexts.length === 0 ? (
-            <p className="muted">Load a PDF to inspect the retained text layer.</p>
           ) : (
-            pageTexts.map((entry, index) => (
-              <details key={index}>
-                <summary>Page {index + 1}</summary>
-                {entry.error ? (
-                  <p className="warning">{entry.error}</p>
-                ) : (
-                  <pre>{entry.text || "[empty]"}</pre>
+            pageSizes.map((size, i) => (
+              <PageView
+                key={i}
+                document={previewDocument}
+                pageIndex={i}
+                size={size}
+                manualTargets={manualTargets.filter(
+                  (t) => t.pageIndex === i,
                 )}
-              </details>
+                searchTargets={searchTargets.filter(
+                  (t) => t.pageIndex === i,
+                )}
+                onCreateRectTarget={addManualTarget}
+                onRenderError={setRenderError}
+                renderError={renderErrors[i] ?? null}
+              />
             ))
           )}
         </div>
-
-        {searchMatches.length > 0 ? (
-          <div className="panel-block">
-            <h2>Search Matches</h2>
-            {searchMatches.map((match, index) => (
-              <p key={`${match.pageIndex}-${index}`}>
-                Page {match.pageIndex + 1}: {match.text}
-              </p>
-            ))}
-          </div>
-        ) : null}
-      </aside>
-
-      <main className="page-stage">
-        {!pdfBytes ? (
-          <div className="empty-state">
-            <p>Load a fixture or your own text-based PDF. Drag on a page to add rectangle targets.</p>
-          </div>
-        ) : (
-          pageSizes.map((size, pageIndex) => (
-            <PagePreview
-              key={pageIndex}
-              document={previewDocument}
-              pageIndex={pageIndex}
-              size={size}
-              manualTargets={manualTargets.filter((target) => target.pageIndex === pageIndex)}
-              searchTargets={searchTargets.filter((target) => target.pageIndex === pageIndex)}
-              onCreateRectTarget={addManualTarget}
-              onRenderError={setRenderError}
-              renderError={renderErrors[pageIndex] ?? null}
-            />
-          ))
-        )}
-      </main>
+      </div>
     </div>
   );
 }
 
-function PagePreview({
-  document,
-  pageIndex,
-  size,
-  manualTargets,
-  searchTargets,
-  onCreateRectTarget,
-  onRenderError,
-  renderError,
-}: PagePreviewProps) {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const overlayRef = useRef<SVGSVGElement | null>(null);
-  const [drag, setDrag] = useState<DragState | null>(null);
-  const [viewport, setViewport] = useState<{ width: number; height: number; scale: number } | null>(null);
-
-  useEffect(() => {
-    if (!document) {
-      setViewport(null);
-      return;
-    }
-    const previewDocument = document;
-    let cancelled = false;
-    async function renderPage() {
-      const page = await previewDocument.getPage(pageIndex + 1);
-      const targetWidth = 720;
-      const baseViewport = page.getViewport({ scale: 1 });
-      const scale = Math.min(targetWidth / baseViewport.width, 1.4);
-      const pageViewport = page.getViewport({ scale });
-      if (cancelled || !canvasRef.current) {
-        return;
-      }
-      const canvas = canvasRef.current;
-      const context = canvas.getContext("2d");
-      if (!context) {
-        return;
-      }
-      canvas.width = pageViewport.width;
-      canvas.height = pageViewport.height;
-      await page
-        .render({
-          canvas,
-          canvasContext: context,
-          viewport: pageViewport,
-        })
-        .promise;
-      if (!cancelled) {
-        onRenderError(pageIndex, null);
-        setViewport({
-          width: pageViewport.width,
-          height: pageViewport.height,
-          scale: pageViewport.width / size.width,
-        });
-      }
-    }
-    renderPage().catch((caught) => {
-      if (!cancelled) {
-        const message = caught instanceof Error ? caught.message : String(caught);
-        onRenderError(pageIndex, message);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [document, onRenderError, pageIndex, size.width]);
-
-  const draftRect = useMemo(() => {
-    if (!drag || !viewport) {
-      return null;
-    }
-    const x = Math.min(drag.startX, drag.currentX);
-    const y = Math.min(drag.startY, drag.currentY);
-    return {
-      x,
-      y,
-      width: Math.abs(drag.currentX - drag.startX),
-      height: Math.abs(drag.currentY - drag.startY),
-    };
-  }, [drag, viewport]);
-
-  function beginDrag(event: PointerEvent<SVGSVGElement>) {
-    if (!viewport || !overlayRef.current) {
-      return;
-    }
-    const { x, y } = clientToOverlay(event, overlayRef.current);
-    setDrag({ startX: x, startY: y, currentX: x, currentY: y });
-  }
-
-  function updateDrag(event: PointerEvent<SVGSVGElement>) {
-    if (!drag || !overlayRef.current) {
-      return;
-    }
-    const { x, y } = clientToOverlay(event, overlayRef.current);
-    setDrag({ ...drag, currentX: x, currentY: y });
-  }
-
-  function finishDrag() {
-    if (!drag || !viewport) {
-      setDrag(null);
-      return;
-    }
-    const width = Math.abs(drag.currentX - drag.startX);
-    const height = Math.abs(drag.currentY - drag.startY);
-    if (width > 8 && height > 8) {
-      const left = Math.min(drag.startX, drag.currentX);
-      const top = Math.min(drag.startY, drag.currentY);
-      onCreateRectTarget({
-        kind: "rect",
-        pageIndex,
-        x: left / viewport.scale,
-        y: size.height - (top + height) / viewport.scale,
-        width: width / viewport.scale,
-        height: height / viewport.scale,
-      });
-    }
-    setDrag(null);
-  }
-
-  return (
-    <section className="page-card">
-      <header>
-        <h3>Page {pageIndex + 1}</h3>
-        <p>
-          {Math.round(size.width)} × {Math.round(size.height)} pt
-        </p>
-      </header>
-      <div className="page-canvas-wrap">
-        <canvas ref={canvasRef} className="page-canvas" />
-        {renderError ? <div className="page-render-error">{renderError}</div> : null}
-        {viewport ? (
-          <svg
-            ref={overlayRef}
-            className="page-overlay"
-            viewBox={`0 0 ${viewport.width} ${viewport.height}`}
-            onPointerDown={beginDrag}
-            onPointerMove={updateDrag}
-            onPointerUp={finishDrag}
-            onPointerLeave={finishDrag}
-          >
-            {manualTargets.map((target, index) => (
-              <rect
-                key={`manual-${pageIndex}-${index}`}
-                className="manual-target"
-                x={target.x * viewport.scale}
-                y={(size.height - target.y - target.height) * viewport.scale}
-                width={target.width * viewport.scale}
-                height={target.height * viewport.scale}
-              />
-            ))}
-            {searchTargets.flatMap((target) => target.quads).map((quad, index) => (
-              <polygon
-                key={`search-${pageIndex}-${index}`}
-                className="search-target"
-                points={quad
-                  .map((point: Point) => toSvgPoint(point, size.height, viewport.scale))
-                  .join(" ")}
-              />
-            ))}
-            {draftRect ? (
-              <rect
-                className="draft-target"
-                x={draftRect.x}
-                y={draftRect.y}
-                width={draftRect.width}
-                height={draftRect.height}
-              />
-            ) : null}
-          </svg>
-        ) : null}
-      </div>
-    </section>
-  );
-}
-
-function clientToOverlay(
-  event: PointerEvent<SVGSVGElement>,
-  element: SVGSVGElement,
-) {
-  const bounds = element.getBoundingClientRect();
-  return {
-    x: event.clientX - bounds.left,
-    y: event.clientY - bounds.top,
-  };
-}
-
-function toSvgPoint(point: Point, pageHeight: number, scale: number): string {
-  return `${point.x * scale},${(pageHeight - point.y) * scale}`;
-}
-
-function isQuadPoints(quad: unknown): quad is [Point, Point, Point, Point] {
-  return Array.isArray(quad) && quad.length === 4 && quad.every(isPoint);
-}
-
-function isPoint(point: unknown): point is Point {
-  if (!point || typeof point !== "object") {
-    return false;
-  }
-  const candidate = point as Record<string, unknown>;
-  return (
-    typeof candidate.x === "number"
-    && Number.isFinite(candidate.x)
-    && typeof candidate.y === "number"
-    && Number.isFinite(candidate.y)
-  );
-}
+// --- Search match normalization ---
 
 function normalizeSearchMatch(match: unknown): UiTextMatch | null {
-  if (!match || typeof match !== "object") {
-    return null;
-  }
-  const candidate = match as Record<string, unknown>;
-  const pageIndex = readPageIndex(candidate);
-  const quads = Array.isArray(candidate.quads)
-    ? candidate.quads.filter(isQuadCandidate).map((quad) => readQuadPoints(quad))
+  if (!match || typeof match !== "object") return null;
+  const c = match as Record<string, unknown>;
+  const pageIndex = readPageIndex(c);
+  const quads = Array.isArray(c.quads)
+    ? c.quads.filter(isQuadCandidate).map(readQuadPoints)
     : [];
-
-  if (pageIndex === null || quads.length === 0 || typeof candidate.text !== "string") {
+  if (pageIndex === null || quads.length === 0 || typeof c.text !== "string")
     return null;
-  }
-
-  return {
-    text: candidate.text,
-    pageIndex,
-    quads,
-  };
+  return { text: c.text, pageIndex, quads };
 }
 
-function readPageIndex(candidate: Record<string, unknown>): number | null {
-  const pageIndex = candidate.pageIndex ?? candidate.page_index;
-  return typeof pageIndex === "number" && Number.isInteger(pageIndex) && pageIndex >= 0
-    ? pageIndex
-    : null;
+function readPageIndex(c: Record<string, unknown>): number | null {
+  const v = c.pageIndex ?? c.page_index;
+  return typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : null;
+}
+
+function isQuadPoints(q: unknown): q is [Point, Point, Point, Point] {
+  return Array.isArray(q) && q.length === 4 && q.every(isPoint);
+}
+
+function isPoint(p: unknown): p is Point {
+  if (!p || typeof p !== "object") return false;
+  const c = p as Record<string, unknown>;
+  return (
+    typeof c.x === "number" &&
+    Number.isFinite(c.x) &&
+    typeof c.y === "number" &&
+    Number.isFinite(c.y)
+  );
 }
 
 function isQuadCandidate(
-  quad: unknown,
-): quad is [Point, Point, Point, Point] | { points: [Point, Point, Point, Point] } {
-  return isQuadPoints(quad) || (
-    !!quad
-    && typeof quad === "object"
-    && "points" in quad
-    && isQuadPoints((quad as { points?: unknown }).points)
+  q: unknown,
+): q is
+  | [Point, Point, Point, Point]
+  | { points: [Point, Point, Point, Point] } {
+  return (
+    isQuadPoints(q) ||
+    (!!q &&
+      typeof q === "object" &&
+      "points" in q &&
+      isQuadPoints((q as { points?: unknown }).points))
   );
 }
 
 function readQuadPoints(
-  quad: [Point, Point, Point, Point] | { points: [Point, Point, Point, Point] },
+  q:
+    | [Point, Point, Point, Point]
+    | { points: [Point, Point, Point, Point] },
 ): [Point, Point, Point, Point] {
-  return Array.isArray(quad) ? quad : quad.points;
+  return Array.isArray(q) ? q : q.points;
 }

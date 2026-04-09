@@ -121,7 +121,6 @@ impl NormalizedPageTarget {
         self.quads
             .iter()
             .any(|candidate| candidate.intersects_quad(quad))
-            || self.bounds.intersects(&quad.bounding_rect())
     }
 }
 

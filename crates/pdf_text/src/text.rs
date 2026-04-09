@@ -726,11 +726,14 @@ fn show_text(
             .text_matrix
             .multiply(ctm)
             .multiply(page_transform);
+        // Use heuristic ascent/descent (80%/12% of em-square) instead of the
+        // full font_size to avoid bboxes that span into adjacent text lines.
+        let font_size = text_state.font_size.max(0.0);
         let local_rect = Rect {
             x: 0.0,
-            y: text_state.text_rise,
+            y: text_state.text_rise - font_size * 0.12,
             width: advance.max(0.0),
-            height: text_state.font_size.max(0.0),
+            height: font_size * 0.8,
         };
         let quad = local_rect.to_quad().transform(text_to_page);
         let bbox = quad.bounding_rect();
