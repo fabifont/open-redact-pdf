@@ -215,13 +215,18 @@ fn build_search_index(page: &ExtractedPageText) -> PageSearchIndex {
         if character.is_whitespace() {
             if !previous_was_whitespace {
                 normalized_text.push(' ');
-                normalized_to_display.push(display_index);
+                // One entry per UTF-8 byte so byte offsets from str::find() map correctly
+                for _ in 0..' '.len_utf8() {
+                    normalized_to_display.push(display_index);
+                }
                 previous_was_whitespace = true;
             }
         } else {
             for folded in character.to_lowercase() {
                 normalized_text.push(folded);
-                normalized_to_display.push(display_index);
+                for _ in 0..folded.len_utf8() {
+                    normalized_to_display.push(display_index);
+                }
             }
             previous_was_whitespace = false;
         }
@@ -1236,8 +1241,75 @@ fn operand_string(operation: &Operation, index: usize) -> PdfResult<&pdf_objects
 
 #[cfg(test)]
 mod tests {
-    use super::coalesce_match_quads;
-    use pdf_graphics::{Point, Quad};
+    use super::{
+        build_search_index, coalesce_match_quads, search_page_text, ExtractedPageText, Glyph,
+    };
+    use pdf_graphics::{Point, Quad, Rect};
+
+    fn make_glyph(text: char, x: f64, y: f64) -> Glyph {
+        let rect = Rect {
+            x,
+            y,
+            width: 8.0,
+            height: 12.0,
+        };
+        Glyph {
+            text,
+            bbox: rect,
+            quad: rect.to_quad(),
+            page_char_index: 0,
+            operation_index: 0,
+            location: super::GlyphLocation::Direct {
+                operand_index: 0,
+                byte_start: 0,
+                byte_end: 1,
+            },
+            visible: true,
+            width_units: 600.0,
+        }
+    }
+
+    #[test]
+    fn search_handles_multibyte_utf8_characters() {
+        // Text: "café and tea" — 'é' is 2 bytes in UTF-8, which used to cause
+        // byte-vs-char offset mismatch in normalized_to_display.
+        let glyphs: Vec<Glyph> = "café and tea"
+            .chars()
+            .enumerate()
+            .map(|(i, c)| make_glyph(c, i as f64 * 10.0, 100.0))
+            .collect();
+        let page = ExtractedPageText {
+            page_index: 0,
+            text: "café and tea".to_string(),
+            items: Vec::new(),
+            glyphs,
+        };
+        let matches = search_page_text(&page, "and");
+        assert_eq!(matches.len(), 1, "should find exactly one 'and'");
+        assert_eq!(matches[0].text, "and", "match text should be 'and', not a shifted substring");
+    }
+
+    #[test]
+    fn search_index_byte_alignment() {
+        // Verify that normalized_to_display has exactly one entry per byte
+        let glyphs: Vec<Glyph> = "aé b"
+            .chars()
+            .enumerate()
+            .map(|(i, c)| make_glyph(c, i as f64 * 10.0, 100.0))
+            .collect();
+        let page = ExtractedPageText {
+            page_index: 0,
+            text: "aé b".to_string(),
+            items: Vec::new(),
+            glyphs,
+        };
+        let index = build_search_index(&page);
+        assert_eq!(
+            index.normalized_to_display.len(),
+            index.normalized_text.len(),
+            "normalized_to_display should have one entry per byte of normalized_text"
+        );
+    }
 
     #[test]
     fn coalesces_adjacent_glyph_quads_into_match_regions() {
