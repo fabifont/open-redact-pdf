@@ -82,7 +82,7 @@ pub struct PdfFile {
 }
 ```
 
-The top-level document container. `objects` is the flat merged object table (all revisions collapsed). `trailer` is the newest trailer dictionary, with `Prev` and `XRefStm` removed (those keys are irrelevant after flattening). `max_object_number` tracks the highest object number allocated so far, used by `allocate_object_ref`.
+The top-level document container. `objects` is the flat merged object table (all revisions collapsed). `trailer` is the newest trailer dictionary (note: `Prev` and `XRefStm` keys are retained in memory but stripped at serialization time by `serialize_pdf` — see `10-writer.md`). `max_object_number` tracks the highest object number allocated so far, used by `allocate_object_ref`.
 
 ---
 
@@ -91,17 +91,17 @@ The top-level document container. `objects` is the flat merged object table (all
 ### Basic lookups
 
 ```rust
-fn get_object(&self, r: ObjectRef) -> Option<&PdfObject>
-fn get_value(&self, r: ObjectRef) -> Option<&PdfValue>
-fn get_dictionary(&self, r: ObjectRef) -> Option<&BTreeMap<String, PdfValue>>
+fn get_object(&self, r: ObjectRef) -> PdfResult<&PdfObject>
+fn get_value(&self, r: ObjectRef) -> PdfResult<&PdfValue>
+fn get_dictionary(&self, r: ObjectRef) -> PdfResult<&PdfDictionary>
 ```
 
-These look up an `ObjectRef` in `self.objects` and return the result (or the inner variant) without any resolution. They are the building blocks for callers that already have a concrete `ObjectRef`.
+These look up an `ObjectRef` in `self.objects` and return the result (or the inner variant) without any resolution. They return `PdfError::MissingObject` if the object is absent or `PdfError::Corrupt` if the type does not match. They are the building blocks for callers that already have a concrete `ObjectRef`.
 
 ### `resolve`
 
 ```rust
-fn resolve<'a>(&'a self, value: &'a PdfValue) -> Option<&'a PdfValue>
+fn resolve<'a>(&'a self, value: &'a PdfValue) -> PdfResult<&'a PdfValue>
 ```
 
 Single-step indirect dereference. If `value` is `PdfValue::Reference(n, g)`, it looks up `ObjectRef { n, g }` in the object table and returns a reference to the stored value. If `value` is any other variant, it is returned unchanged.
@@ -112,7 +112,7 @@ Single-step indirect dereference. If `value` is `PdfValue::Reference(n, g)`, it 
 
 ```rust
 fn resolve_dict<'a>(&'a self, value: &'a PdfValue)
-    -> Option<&'a BTreeMap<String, PdfValue>>
+    -> PdfResult<&'a PdfDictionary>
 ```
 
 Convenience wrapper: `resolve` followed by an assertion that the resolved value is a `Dictionary`. This is the most common lookup pattern in the rest of the engine — nearly every named structure in a PDF (page, font, resources, annotation) is a dictionary stored as an indirect object.

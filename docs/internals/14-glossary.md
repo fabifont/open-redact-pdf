@@ -318,7 +318,7 @@ The raw, flattened in-memory representation of a parsed PDF. Contains `version: 
 An enum with two variants: `Value(PdfValue)` for ordinary objects and `Stream(PdfStream)` for stream objects. The value stored in `PdfFile::objects` for each `ObjectRef`. Defined in `crates/pdf_objects/src/types.rs`.
 
 ### `PdfStream`
-A decoded stream: `dict: PdfDictionary` (the stream dictionary) and `data: Vec<u8>` (the decoded bytes after filter application). Defined in `crates/pdf_objects/src/types.rs`.
+A stream object: `dict: PdfDictionary` (the stream dictionary) and `data: Vec<u8>` (the raw, still-encoded bytes as read from the file). Decoding (e.g., FlateDecode inflation) happens on demand via `decode_stream`. Defined in `crates/pdf_objects/src/types.rs`.
 
 ### `PdfString`
 A wrapper around `Vec<u8>` representing a PDF literal or hex string. Byte-oriented because PDF strings are not required to be UTF-8. Provides `to_lossy_string()` for display purposes. Defined in `crates/pdf_objects/src/types.rs`.

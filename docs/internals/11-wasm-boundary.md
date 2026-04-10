@@ -7,7 +7,7 @@ Rust crates (open_redact_pdf, pdf_*)
     ↓ wasm-pack --target bundler
 pdf_wasm crate (wasm_api.rs)
     ↓ wasm-bindgen generates
-vendor/pdf-wasm/ (JS glue + .wasm binary)
+packages/ts-sdk/vendor/pdf-wasm/ (JS glue + .wasm binary)
     ↓ dynamic import()
 packages/ts-sdk/src/index.ts
     ↓ workspace dependency

@@ -76,6 +76,25 @@ That structure makes the site suitable for later Context7 ingestion or any other
 2. Use GitHub Actions as the Pages source
 3. Let the `docs` workflow deploy the site from `main`
 
+## Demo deployment (Cloudflare Pages)
+
+The interactive demo at `apps/demo-web` is deployed separately to Cloudflare Pages via `.github/workflows/deploy-demo.yml`. It is decoupled from the docs deployment because the demo build requires a full Rust/WASM toolchain, while the docs are lightweight Jekyll.
+
+The workflow:
+
+- triggers on pushes to `main` that touch `crates/`, `packages/`, `apps/demo-web/`, `scripts/`, or lock files
+- builds the WASM bundle, TS SDK, and demo
+- deploys to Cloudflare Pages using `wrangler pages deploy`
+
+### Required repository secrets
+
+- `CLOUDFLARE_API_TOKEN`: Cloudflare API token with Pages edit permission
+- `CLOUDFLARE_ACCOUNT_ID`: Cloudflare account ID
+
+### Custom domain
+
+After the first deployment creates the `open-redact-pdf` project in Cloudflare Pages, add a custom domain (e.g., `open-redact-pdf.fabifont.dev`) in the Cloudflare dashboard under Pages > Custom domains.
+
 ## Authoring rules for future docs
 
 - Prefer stable file names over changelog-like page names
@@ -87,4 +106,5 @@ That structure makes the site suitable for later Context7 ingestion or any other
 
 - `docs/index.md`
 - `.github/workflows/docs.yml`
+- `.github/workflows/deploy-demo.yml`
 - `docs/_config.yml`

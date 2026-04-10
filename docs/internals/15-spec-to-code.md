@@ -23,7 +23,7 @@ Spec references use ISO 32000-1:2008 section numbers.
 | MediaBox / CropBox | ISO 32000 7.7.3.3 | `crates/pdf_graphics/src/geometry.rs` | `PageBox { media_box, crop_box, rotate }` |
 | Coordinate systems | ISO 32000 8.3 | `crates/pdf_graphics/src/geometry.rs` | `Matrix`, `transform_point`, `PageBox::normalized_transform` |
 | CTM | ISO 32000 8.3.4 | `crates/pdf_text/src/text.rs`, `crates/pdf_redact/src/redact.rs` | `ctm` variable, `cm` operator handler |
-| cm operator | ISO 32000 8.4.4 | `crates/pdf_text/src/text.rs:413-416` | `ctm = matrix.multiply(ctm)` |
+| cm operator | ISO 32000 8.4.4 | `crates/pdf_text/src/text.rs` | `cm` handler: `ctm = matrix.multiply(ctm)` |
 | Graphics state stack | ISO 32000 8.4.2 | `crates/pdf_text/src/text.rs` | `q`/`Q` handlers, `ctm_stack` |
 | Content streams | ISO 32000 7.8.2 | `crates/pdf_content/src/content.rs` | `parse_content_stream`, `Operation` |
 | Text state | ISO 32000 9.3 | `crates/pdf_text/src/text.rs` | `RuntimeTextState` |

@@ -8,6 +8,7 @@ Open Redact PDF is a browser-first PDF redaction engine implemented in Rust and 
 
 ## Start here
 
+- [Live demo](https://open-redact-pdf.fabifont.dev) — try the redaction engine in your browser
 - [Getting started](getting-started/)
 - [Development workflow](development/)
 - [Publishing and documentation ingestion](publishing/)

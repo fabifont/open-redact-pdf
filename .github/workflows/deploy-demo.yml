@@ -1,0 +1,58 @@
+name: deploy-demo
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/**"
+      - "packages/**"
+      - "apps/demo-web/**"
+      - "scripts/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "pnpm-lock.yaml"
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --locked
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build WASM
+        run: node scripts/build-wasm.mjs
+
+      - name: Build TS SDK
+        run: pnpm --filter @open-redact-pdf/sdk build
+
+      - name: Build demo
+        run: pnpm --filter open-redact-pdf-demo-web build
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy apps/demo-web/dist --project-name=open-redact-pdf

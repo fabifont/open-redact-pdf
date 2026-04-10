@@ -89,6 +89,9 @@ The arrows point from "required reading" to "depends on it". A document with mul
                                           ▼
                                   09-redaction-pipeline
                                           │
+                                          ▼
+                                   10-writer
+                                          │
                               ┌───────────┤
                               │           │
                               ▼           ▼
@@ -116,6 +119,7 @@ The arrows point from "required reading" to "depends on it". A document with mul
 | 07-search-geometry.md | Search Geometry | Text contributors |
 | 08-redaction-targets.md | Redaction Targets | Redaction contributors |
 | 09-redaction-pipeline.md | Redaction Pipeline | Redaction contributors |
+| 10-writer.md | Writer | Writer / serialization contributors |
 | 11-wasm-boundary.md | WASM Boundary | WASM / JS contributors |
 | 12-security-model.md | Security Model | Everyone |
 | 13-limitations.md | Limitations | Everyone |

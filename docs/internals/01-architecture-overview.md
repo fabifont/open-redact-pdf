@@ -68,11 +68,11 @@ A complete redaction pass moves through six stages. Each stage has a well-define
 
 ### Stage 2: Extract
 
-**Entry point:** `pdf_text::analyze_page_text(doc, page_index)`
+**Entry point:** `pdf_text::analyze_page_text(file: &PdfFile, page_index: usize, page: &PageInfo)`
 
-**What happens:** The content stream for the requested page is decompressed and parsed into `ContentOperator` sequences by `pdf_content`. A graphics state machine interprets the operators, maintaining the current transformation matrix, text matrix, font, font size, and text state parameters. For each glyph-placing operator (`Tj`, `TJ`, `'`, `"`, etc.), the current state is used to compute the glyph's bounding quad in page space. Font encoding and ToUnicode CMaps are consulted to decode each glyph to a Unicode character.
+**What happens:** The content stream for the requested page is decompressed and parsed into a `ParsedPageContent` by `pdf_content`. A graphics state machine interprets the operators, maintaining the current transformation matrix, text matrix, font, font size, and text state parameters. For each glyph-placing operator (`Tj`, `TJ`, `'`, `"`, etc.), the current state is used to compute the glyph's bounding quad in page space. Font encoding and ToUnicode CMaps are consulted to decode each glyph to a Unicode character.
 
-**Output:** `ExtractedPageText { text: String, items: Vec<TextItem>, glyphs: Vec<GlyphQuad> }`
+**Output:** `ExtractedPageText { text: String, items: Vec<TextItem>, glyphs: Vec<Glyph> }`
 
 ### Stage 3: Search
 
@@ -84,15 +84,15 @@ A complete redaction pass moves through six stages. Each stage has a well-define
 
 ### Stage 4: Target normalization
 
-**Entry point:** `pdf_targets::normalize_plan(plan, page_geometry)`
+**Entry point:** `pdf_targets::normalize_plan(plan: RedactionPlan, page_sizes: &[pdf_graphics::Size])`
 
 **What happens:** The caller-supplied `RedactionPlan` contains one or more targets per page. Each target is one of: a page-space `Rect`, a `Quad` (four corner points), or a `QuadGroup` (a search match result). Each target is validated (non-degenerate, within page bounds) and converted to one or more `NormalizedPageTarget` values holding verified quads.
 
-**Output:** `Vec<NormalizedPageTarget>`
+**Output:** `PdfResult<NormalizedRedactionPlan>` (wraps a `Vec<NormalizedPageTarget>` plus mode, color, and flag fields)
 
 ### Stage 5: Redact
 
-**Entry point:** `pdf_redact::apply_redactions(doc, page_index, targets)`
+**Entry point:** `pdf_redact::apply_redactions(file: &mut PdfFile, pages: &mut [PageInfo], plan: &NormalizedRedactionPlan)`
 
 **What happens:** For each normalized target quad, the pipeline intersects the quad against:
 - **Glyphs** — any `GlyphQuad` whose bounds overlap the target is removed from the content stream.
@@ -142,7 +142,7 @@ pdf_text::search_page_text()   ◄── query string from caller
 pdf_targets::normalize_plan()  ◄── RedactionPlan from caller
         │
         ▼
-  Vec<NormalizedPageTarget>
+  NormalizedRedactionPlan
         │
         ▼
 pdf_redact::apply_redactions() ◄── mutates ParsedDocument

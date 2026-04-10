@@ -235,7 +235,7 @@ All operators are ASCII keywords. Operands are PDF values (numbers, names, strin
 
 A page may have multiple content streams listed in `/Contents` as an array; they are concatenated and treated as one stream.
 
-The engine parses content streams into `Vec<Operation>` in `crates/pdf_content/src/content.rs`, where each `Operation` holds an operator string and a `Vec<PdfValue>` of operands.
+The engine parses content streams into a `ParsedPageContent` (via `parse_page_contents`) or a `ContentStream` (via `parse_content_stream`) in `crates/pdf_content/src/content.rs`. A `ContentStream` contains a `Vec<Operation>`, where each `Operation` holds an operator string and a `Vec<PdfValue>` of operands.
 
 ---
 

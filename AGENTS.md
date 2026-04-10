@@ -60,6 +60,7 @@ Core product rules:
 - Stable API references live under `docs/reference/`.
 - Workflow and integration guides live under `docs/guides/`.
 - `docs/publishing.md` describes the GitHub Pages setup and the documentation layout intended for later Context7 ingestion.
+- Deep implementation internals live under `docs/internals/`. Start with `docs/internals/00-reading-order.md` for the recommended reading order.
 
 ## Security considerations
 
