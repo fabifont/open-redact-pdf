@@ -33,6 +33,28 @@ Open Redact PDF is a browser-first PDF redaction engine implemented in Rust and 
 - [Browser integration](guides/browser-integration/)
 - [Testing and fixtures](guides/testing-and-fixtures/)
 
+## Engine Internals
+
+Deep technical documentation covering PDF spec concepts, implementation decisions, tradeoffs, and code-level explanations. Start with the reading order guide.
+
+- [Reading order for new contributors](internals/00-reading-order/)
+- [Architecture overview](internals/01-architecture-overview/)
+- [PDF primer](internals/02-pdf-primer/)
+- [Parsing model](internals/03-parsing-model/)
+- [Object model and serialization](internals/04-object-model/)
+- [Graphics state and coordinate systems](internals/05-graphics-state/)
+- [Text system and extraction](internals/06-text-system/)
+- [Search geometry and match modeling](internals/07-search-geometry/)
+- [Redaction target model](internals/08-redaction-targets/)
+- [Redaction application pipeline](internals/09-redaction-pipeline/)
+- [Writer and deterministic output](internals/10-writer/)
+- [WASM/JS boundary design](internals/11-wasm-boundary/)
+- [Security and correctness model](internals/12-security-model/)
+- [Known limitations](internals/13-limitations/)
+- [Glossary](internals/14-glossary/)
+- [PDF spec to code map](internals/15-spec-to-code/)
+- [Top 10 implementation decisions](internals/16-top-ten-decisions/)
+
 ## Current MVP scope
 
 - Unencrypted PDFs with classic xref tables
