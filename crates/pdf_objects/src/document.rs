@@ -56,7 +56,16 @@ pub fn build_document(file: PdfFile) -> PdfResult<ParsedDocument> {
 
     let mut pages = Vec::new();
     let mut visited = std::collections::BTreeSet::new();
-    collect_pages(&file, pages_ref, &mut pages, None, None, None, 0, &mut visited)?;
+    collect_pages(
+        &file,
+        pages_ref,
+        &mut pages,
+        None,
+        None,
+        None,
+        0,
+        &mut visited,
+    )?;
 
     Ok(ParsedDocument {
         file,
@@ -79,7 +88,9 @@ fn collect_pages(
     visited: &mut std::collections::BTreeSet<ObjectRef>,
 ) -> PdfResult<()> {
     if depth > MAX_PAGE_TREE_DEPTH {
-        return Err(PdfError::Corrupt("page tree exceeds maximum depth".to_string()));
+        return Err(PdfError::Corrupt(
+            "page tree exceeds maximum depth".to_string(),
+        ));
     }
     if !visited.insert(node_ref) {
         return Err(PdfError::Corrupt("cycle detected in page tree".to_string()));
@@ -115,7 +126,16 @@ fn collect_pages(
                         ));
                     }
                 };
-                collect_pages(file, kid_ref, output, resources, media_box, rotate, depth + 1, visited)?;
+                collect_pages(
+                    file,
+                    kid_ref,
+                    output,
+                    resources,
+                    media_box,
+                    rotate,
+                    depth + 1,
+                    visited,
+                )?;
             }
         }
         Some("Page") => {

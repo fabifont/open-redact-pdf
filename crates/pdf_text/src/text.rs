@@ -241,10 +241,7 @@ fn build_search_index(page: &ExtractedPageText) -> PageSearchIndex {
 
 impl PageSearchIndex {
     fn normalized_to_glyph(&self, display_index: usize) -> Option<usize> {
-        self.display_to_glyph
-            .get(display_index)
-            .copied()
-            .flatten()
+        self.display_to_glyph.get(display_index).copied().flatten()
     }
 }
 
@@ -332,7 +329,9 @@ fn glyph_belongs_to_line(page: &ExtractedPageText, glyph_index: usize, line: &[u
     let glyph = &page.glyphs[glyph_index];
     let glyph_center = glyph_center_y(glyph);
     let line_center = average_line_center_y(page, line);
-    let line_height = average_line_height(page, line).max(glyph.bbox.height).max(1.0);
+    let line_height = average_line_height(page, line)
+        .max(glyph.bbox.height)
+        .max(1.0);
     let overlap = line_vertical_overlap(page, glyph, line);
     (glyph_center - line_center).abs() <= line_height * 0.55 || overlap >= line_height * 0.35
 }
@@ -663,7 +662,10 @@ impl TextContext {
 /// Maps ExtGState resource name → (synthetic font key in the fonts map, font size).
 type ExtGStateFontMap = BTreeMap<String, (String, f64)>;
 
-fn load_single_font(file: &PdfFile, font_dict: &pdf_objects::PdfDictionary) -> PdfResult<LoadedFont> {
+fn load_single_font(
+    file: &PdfFile,
+    font_dict: &pdf_objects::PdfDictionary,
+) -> PdfResult<LoadedFont> {
     let subtype = font_dict
         .get("Subtype")
         .and_then(PdfValue::as_name)
@@ -950,9 +952,9 @@ fn parse_cid_widths(value: &PdfValue) -> PdfResult<BTreeMap<u16, f64>> {
             .ok_or_else(|| PdfError::Corrupt("CID width entry is truncated".to_string()))?;
         if let Some(width_array) = next.as_array() {
             for (offset, width) in width_array.iter().enumerate() {
-                let cid = start_cid.checked_add(offset as u16).ok_or_else(|| {
-                    PdfError::Corrupt("CID width index overflow".to_string())
-                })?;
+                let cid = start_cid
+                    .checked_add(offset as u16)
+                    .ok_or_else(|| PdfError::Corrupt("CID width index overflow".to_string()))?;
                 widths.insert(
                     cid,
                     width.as_number().ok_or_else(|| {
@@ -1042,7 +1044,10 @@ fn parse_bfchar_line(line: &str, mapping: &mut BTreeMap<u16, String>) -> PdfResu
     if tokens.len() < 2 {
         return Ok(());
     }
-    mapping.insert(parse_cid_token(&tokens[0])?, decode_utf16be_lossy(&tokens[1]));
+    mapping.insert(
+        parse_cid_token(&tokens[0])?,
+        decode_utf16be_lossy(&tokens[1]),
+    );
     Ok(())
 }
 
@@ -1099,7 +1104,10 @@ fn extract_hex_tokens(line: &str) -> Vec<Vec<u8>> {
 }
 
 fn parse_hex_string_token(token: &str) -> PdfResult<Vec<u8>> {
-    let filtered = token.chars().filter(|character| !character.is_whitespace()).collect::<String>();
+    let filtered = token
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
     let mut chars = filtered.chars().collect::<Vec<_>>();
     if chars.len() % 2 != 0 {
         chars.push('0');
@@ -1180,7 +1188,9 @@ fn decode_composite_glyphs(font: &CompositeFont, bytes: &[u8]) -> PdfResult<Vec<
 
 fn decode_fallback_cid(cid: u16) -> String {
     if cid <= 0x7f {
-        char::from_u32(u32::from(cid)).unwrap_or('\u{FFFD}').to_string()
+        char::from_u32(u32::from(cid))
+            .unwrap_or('\u{FFFD}')
+            .to_string()
     } else {
         '\u{FFFD}'.to_string()
     }
@@ -1242,7 +1252,7 @@ fn operand_string(operation: &Operation, index: usize) -> PdfResult<&pdf_objects
 #[cfg(test)]
 mod tests {
     use super::{
-        build_search_index, coalesce_match_quads, search_page_text, ExtractedPageText, Glyph,
+        ExtractedPageText, Glyph, build_search_index, coalesce_match_quads, search_page_text,
     };
     use pdf_graphics::{Point, Quad, Rect};
 
@@ -1286,7 +1296,10 @@ mod tests {
         };
         let matches = search_page_text(&page, "and");
         assert_eq!(matches.len(), 1, "should find exactly one 'and'");
-        assert_eq!(matches[0].text, "and", "match text should be 'and', not a shifted substring");
+        assert_eq!(
+            matches[0].text, "and",
+            "match text should be 'and', not a shifted substring"
+        );
     }
 
     #[test]
@@ -1336,7 +1349,7 @@ mod tests {
                     Point { x: 54.0, y: 5.0 },
                     Point { x: 54.0, y: 15.0 },
                     Point { x: 50.0, y: 15.0 },
-                    ],
+                ],
             },
         ];
 

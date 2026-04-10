@@ -377,21 +377,18 @@ impl<'a> Cursor<'a> {
                 break;
             }
             if byte == b'#' {
-                let high = self
-                    .bytes
-                    .get(self.position + 1)
-                    .copied()
-                    .ok_or_else(|| PdfError::Parse("truncated #XX escape in name".to_string()))?;
-                let low = self
-                    .bytes
-                    .get(self.position + 2)
-                    .copied()
-                    .ok_or_else(|| PdfError::Parse("truncated #XX escape in name".to_string()))?;
-                let decoded = u8::from_str_radix(
-                    &format!("{}{}", high as char, low as char),
-                    16,
-                )
-                .map_err(|_| PdfError::Parse("invalid #XX hex escape in name".to_string()))?;
+                let high =
+                    self.bytes.get(self.position + 1).copied().ok_or_else(|| {
+                        PdfError::Parse("truncated #XX escape in name".to_string())
+                    })?;
+                let low =
+                    self.bytes.get(self.position + 2).copied().ok_or_else(|| {
+                        PdfError::Parse("truncated #XX escape in name".to_string())
+                    })?;
+                let decoded = u8::from_str_radix(&format!("{}{}", high as char, low as char), 16)
+                    .map_err(|_| {
+                    PdfError::Parse("invalid #XX hex escape in name".to_string())
+                })?;
                 raw.push(decoded);
                 self.position += 3;
             } else {
@@ -399,9 +396,7 @@ impl<'a> Cursor<'a> {
                 self.position += 1;
             }
         }
-        Ok(PdfValue::Name(
-            String::from_utf8_lossy(&raw).to_string(),
-        ))
+        Ok(PdfValue::Name(String::from_utf8_lossy(&raw).to_string()))
     }
 
     fn parse_literal_string(&mut self) -> PdfResult<PdfValue> {
@@ -638,11 +633,7 @@ mod tests {
         pdf.extend_from_slice(b"trailer\n");
         // Prev points back to this same xref offset — circular
         pdf.extend_from_slice(
-            format!(
-                "<< /Size 3 /Root 1 0 R /Prev {} >>\n",
-                xref_offset
-            )
-            .as_bytes(),
+            format!("<< /Size 3 /Root 1 0 R /Prev {} >>\n", xref_offset).as_bytes(),
         );
         pdf.extend_from_slice(format!("startxref\n{}\n%%EOF\n", xref_offset).as_bytes());
 

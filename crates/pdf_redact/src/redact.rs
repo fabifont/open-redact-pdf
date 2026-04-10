@@ -105,8 +105,7 @@ pub fn apply_redactions(
         }
 
         // Defer old content stream removal; write new content immediately
-        let old_content_refs =
-            std::mem::take(&mut pages[page_index].content_refs);
+        let old_content_refs = std::mem::take(&mut pages[page_index].content_refs);
         deferred_content_removals.extend(old_content_refs);
         write_page_contents_without_removal(file, pages, page_index, content_bytes)?;
         report.pages_touched += 1;
@@ -198,9 +197,7 @@ fn strip_attachments(file: &mut PdfFile) -> PdfResult<()> {
 
     // Also remove EmbeddedFiles from the Names dictionary itself
     if let Some(names_ref) = names_ref {
-        if let Ok(PdfObject::Value(PdfValue::Dictionary(names))) =
-            file.get_object_mut(names_ref)
-        {
+        if let Ok(PdfObject::Value(PdfValue::Dictionary(names))) = file.get_object_mut(names_ref) {
             names.remove("EmbeddedFiles");
         }
     }
@@ -427,8 +424,7 @@ fn rewrite_text_operations(
 
         // For ' and " operators, kern compensation is not possible (they carry
         // implicit newline / spacing side effects). Fall back to strip.
-        let use_compensation =
-            compensate && matches!(operation.operator.as_str(), "Tj" | "TJ");
+        let use_compensation = compensate && matches!(operation.operator.as_str(), "Tj" | "TJ");
         if compensate && !use_compensation {
             warnings.push(format!(
                 "operator '{}' fell back to strip mode (kern compensation not supported)",
@@ -437,10 +433,8 @@ fn rewrite_text_operations(
         }
 
         // --- Direct string operators (Tj, ', ") ---
-        let direct_refs: Vec<&GlyphByteRef> = refs
-            .iter()
-            .filter(|e| e.element_index.is_none())
-            .collect();
+        let direct_refs: Vec<&GlyphByteRef> =
+            refs.iter().filter(|e| e.element_index.is_none()).collect();
 
         if !direct_refs.is_empty() {
             // Group byte indices by operand
@@ -479,16 +473,13 @@ fn rewrite_text_operations(
         }
 
         // --- TJ array operators ---
-        let array_refs: Vec<&GlyphByteRef> = refs
-            .iter()
-            .filter(|e| e.element_index.is_some())
-            .collect();
+        let array_refs: Vec<&GlyphByteRef> =
+            refs.iter().filter(|e| e.element_index.is_some()).collect();
 
         if !array_refs.is_empty() {
             // Group by (operand_index, element_index)
             let mut element_bytes = BTreeMap::<(usize, usize), BTreeSet<usize>>::new();
-            let mut element_glyph_starts =
-                BTreeMap::<(usize, usize), BTreeMap<usize, f64>>::new();
+            let mut element_glyph_starts = BTreeMap::<(usize, usize), BTreeMap<usize, f64>>::new();
             let mut seen_ranges = BTreeSet::<(usize, usize, usize, usize)>::new();
             for entry in &array_refs {
                 let el = entry.element_index.unwrap();
@@ -526,10 +517,8 @@ fn rewrite_text_operations(
                             if let (Some(bytes), PdfValue::String(string)) =
                                 (element_bytes.get(&key), item)
                             {
-                                let starts = element_glyph_starts
-                                    .get(&key)
-                                    .cloned()
-                                    .unwrap_or_default();
+                                let starts =
+                                    element_glyph_starts.get(&key).cloned().unwrap_or_default();
                                 let sub = build_compensated_array(string, bytes, &starts);
                                 removed += bytes.len();
                                 new_array.extend(sub);
@@ -542,8 +531,7 @@ fn rewrite_text_operations(
                 }
             } else {
                 for ((operand_index, element_index), bytes) in &element_bytes {
-                    if let Some(PdfValue::Array(items)) =
-                        operation.operands.get_mut(*operand_index)
+                    if let Some(PdfValue::Array(items)) = operation.operands.get_mut(*operand_index)
                     {
                         if let Some(PdfValue::String(string)) = items.get_mut(*element_index) {
                             removed += remove_bytes_from_string(string, bytes);
@@ -874,9 +862,7 @@ fn overlay_stream_bytes(
     output.push_str(&format!("{red:.3} {green:.3} {blue:.3} rg\n"));
     for target in targets {
         for quad in &target.quads {
-            let [a, b, c, d] = quad
-                .transform(inverse_page_transform)
-                .points;
+            let [a, b, c, d] = quad.transform(inverse_page_transform).points;
             output.push_str(&format!(
                 "{} {} m\n{} {} l\n{} {} l\n{} {} l\nh\nf\n",
                 format_number(a.x),

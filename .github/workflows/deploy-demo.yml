@@ -20,7 +20,7 @@ jobs:
       contents: read
       deployments: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.2
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -28,13 +28,11 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4.2.0
         with:
           node-version: 22
-
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10
 
       - name: Install wasm-pack
         run: cargo install wasm-pack --locked

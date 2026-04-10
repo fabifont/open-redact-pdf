@@ -251,20 +251,11 @@ impl<'a> ContentParser<'a> {
                 break;
             }
             if byte == b'#' {
-                let high = self
-                    .bytes
-                    .get(self.position + 1)
-                    .copied()
-                    .unwrap_or(b'0');
-                let low = self
-                    .bytes
-                    .get(self.position + 2)
-                    .copied()
-                    .unwrap_or(b'0');
-                if let Ok(decoded) = u8::from_str_radix(
-                    &format!("{}{}", high as char, low as char),
-                    16,
-                ) {
+                let high = self.bytes.get(self.position + 1).copied().unwrap_or(b'0');
+                let low = self.bytes.get(self.position + 2).copied().unwrap_or(b'0');
+                if let Ok(decoded) =
+                    u8::from_str_radix(&format!("{}{}", high as char, low as char), 16)
+                {
                     raw.push(decoded);
                     self.position += 3;
                 } else {
@@ -276,9 +267,7 @@ impl<'a> ContentParser<'a> {
                 self.position += 1;
             }
         }
-        Ok(PdfValue::Name(
-            String::from_utf8_lossy(&raw).to_string(),
-        ))
+        Ok(PdfValue::Name(String::from_utf8_lossy(&raw).to_string()))
     }
 
     fn parse_literal_string(&mut self) -> PdfResult<PdfValue> {
@@ -425,15 +414,17 @@ impl<'a> ContentParser<'a> {
                 break;
             }
             if self.eof() {
-                return Err(PdfError::Parse("unterminated dictionary in content stream".to_string()));
+                return Err(PdfError::Parse(
+                    "unterminated dictionary in content stream".to_string(),
+                ));
             }
             let key = match self.parse_name()? {
                 PdfValue::Name(name) => name,
                 _ => unreachable!(),
             };
-            let value = self
-                .try_parse_operand()?
-                .ok_or_else(|| PdfError::Parse("unsupported dictionary value in content stream".to_string()))?;
+            let value = self.try_parse_operand()?.ok_or_else(|| {
+                PdfError::Parse("unsupported dictionary value in content stream".to_string())
+            })?;
             dictionary.insert(key, value);
         }
         Ok(PdfValue::Dictionary(dictionary))
@@ -482,14 +473,17 @@ impl<'a> ContentParser<'a> {
                     .bytes
                     .get(self.position + 2)
                     .map(|&byte| is_whitespace(byte) || is_delimiter(byte))
-                    .unwrap_or(true) // EOF after EI is fine
+                    .unwrap_or(true)
+            // EOF after EI is fine
             {
                 self.position += 2; // skip "EI"
                 return Ok(());
             }
             self.position += 1;
         }
-        Err(PdfError::Parse("unterminated inline image data".to_string()))
+        Err(PdfError::Parse(
+            "unterminated inline image data".to_string(),
+        ))
     }
 
     fn peek_keyword(&self, keyword: &str) -> bool {
@@ -525,7 +519,8 @@ mod tests {
 
     #[test]
     fn skips_inline_image_data() {
-        let stream = b"BT\n(Hello) Tj\nET\nBI\n/W 1 /H 1 /CS /G /BPC 8\nID \xFF\nEI\nBT\n(World) Tj\nET\n";
+        let stream =
+            b"BT\n(Hello) Tj\nET\nBI\n/W 1 /H 1 /CS /G /BPC 8\nID \xFF\nEI\nBT\n(World) Tj\nET\n";
         let parsed = parse_content_stream(stream).expect("should skip inline image");
         let operators: Vec<&str> = parsed
             .operations

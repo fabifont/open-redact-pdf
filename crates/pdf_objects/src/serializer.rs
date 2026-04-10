@@ -88,7 +88,10 @@ pub fn serialize_value(value: &PdfValue) -> String {
                 if byte == b'#'
                     || byte <= b' '
                     || byte >= 0x7F
-                    || matches!(byte, b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'{' | b'}' | b'/' | b'%')
+                    || matches!(
+                        byte,
+                        b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'{' | b'}' | b'/' | b'%'
+                    )
                 {
                     encoded.push_str(&format!("#{:02X}", byte));
                 } else {

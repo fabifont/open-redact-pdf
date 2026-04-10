@@ -9,8 +9,8 @@ jobs:
   rust:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/setup-node@v4.2.0
         with:
           node-version: 22
       - uses: dtolnay/rust-toolchain@stable
@@ -37,13 +37,11 @@ jobs:
     runs-on: ubuntu-latest
     needs: rust
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v4.2.2
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4.2.0
         with:
           node-version: 22
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10
       - name: Download wasm artifact
         uses: actions/download-artifact@v4
         with:
