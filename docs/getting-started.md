@@ -96,6 +96,6 @@ const output = savePdf(handle);
 
 ## Next reading
 
-- [Rust API](reference/rust-api/)
-- [TypeScript and WASM API](reference/ts-sdk/)
-- [Browser integration](guides/browser-integration/)
+- [Rust API](reference/rust-api.md)
+- [TypeScript and WASM API](reference/ts-sdk.md)
+- [Browser integration](guides/browser-integration.md)

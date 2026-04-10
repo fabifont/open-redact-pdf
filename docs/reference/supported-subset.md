@@ -58,5 +58,5 @@ This subset is intentionally conservative. If the engine cannot safely rewrite t
 
 ## Related docs
 
-- [Security model](../security-model/)
-- [Roadmap](../roadmap/)
+- [Security model](../security-model.md)
+- [Roadmap](../roadmap.md)

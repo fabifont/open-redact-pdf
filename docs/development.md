@@ -44,6 +44,6 @@ Update docs in the same change when you:
 
 ## Related docs
 
-- [Testing and fixtures](guides/testing-and-fixtures/)
-- [Security model](security-model/)
-- [Roadmap](roadmap/)
+- [Testing and fixtures](guides/testing-and-fixtures.md)
+- [Security model](security-model.md)
+- [Roadmap](roadmap.md)

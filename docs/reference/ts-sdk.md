@@ -155,5 +155,5 @@ const sanitized = savePdf(handle)
 
 ## Related docs
 
-- [Browser integration](../guides/browser-integration/)
-- [Canonical target model](target-model/)
+- [Browser integration](../guides/browser-integration.md)
+- [Canonical target model](target-model.md)

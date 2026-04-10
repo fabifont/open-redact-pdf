@@ -1,60 +1,62 @@
 ---
-title: Open Redact PDF Docs
+title: Open Redact PDF
 ---
 
 # Open Redact PDF
 
 Open Redact PDF is a browser-first PDF redaction engine implemented in Rust and exposed to browsers through WebAssembly. The project operates on PDF structure instead of flattening pages into images, removes targeted content for a constrained but real subset of PDFs, and preserves unredacted text where the supported subset allows it.
 
+!!! tip "Live demo"
+    [Try the redaction engine in your browser →](https://open-redact-pdf.fabifont.dev){ .md-button .md-button--primary }
+
 ## Start here
 
-- [Live demo](https://open-redact-pdf.fabifont.dev) — try the redaction engine in your browser
-- [Getting started](getting-started/)
-- [Development workflow](development/)
-- [Publishing and documentation ingestion](publishing/)
+- [Getting started](getting-started.md)
+- [Development workflow](development.md)
+- [Publishing and deployment](publishing.md)
 
 ## Reference
 
-- [Rust API](reference/rust-api/)
-- [TypeScript and WASM API](reference/ts-sdk/)
-- [Canonical target model](reference/target-model/)
-- [Supported PDF subset and failure model](reference/supported-subset/)
-- [Workspace crate map](reference/workspace-crates/)
+- [Rust API](reference/rust-api.md)
+- [TypeScript and WASM API](reference/ts-sdk.md)
+- [Canonical target model](reference/target-model.md)
+- [Supported PDF subset and failure model](reference/supported-subset.md)
+- [Workspace crate map](reference/workspace-crates.md)
 
 ## Design and security
 
-- [Architecture](architecture/)
-- [Security model](security-model/)
-- [Why this is not a canvas overlay tool](why-not-overlays/)
-- [Roadmap](roadmap/)
+- [Architecture](architecture.md)
+- [Security model](security-model.md)
+- [Why this is not a canvas overlay tool](why-not-overlays.md)
+- [Roadmap](roadmap.md)
 
 ## Guides
 
-- [Redaction workflow](guides/redaction-workflow/)
-- [Browser integration](guides/browser-integration/)
-- [Testing and fixtures](guides/testing-and-fixtures/)
+- [Redaction workflow](guides/redaction-workflow.md)
+- [Browser integration](guides/browser-integration.md)
+- [Testing and fixtures](guides/testing-and-fixtures.md)
 
 ## Engine Internals
 
 Deep technical documentation covering PDF spec concepts, implementation decisions, tradeoffs, and code-level explanations. Start with the reading order guide.
 
-- [Reading order for new contributors](internals/00-reading-order/)
-- [Architecture overview](internals/01-architecture-overview/)
-- [PDF primer](internals/02-pdf-primer/)
-- [Parsing model](internals/03-parsing-model/)
-- [Object model and serialization](internals/04-object-model/)
-- [Graphics state and coordinate systems](internals/05-graphics-state/)
-- [Text system and extraction](internals/06-text-system/)
-- [Search geometry and match modeling](internals/07-search-geometry/)
-- [Redaction target model](internals/08-redaction-targets/)
-- [Redaction application pipeline](internals/09-redaction-pipeline/)
-- [Writer and deterministic output](internals/10-writer/)
-- [WASM/JS boundary design](internals/11-wasm-boundary/)
-- [Security and correctness model](internals/12-security-model/)
-- [Known limitations](internals/13-limitations/)
-- [Glossary](internals/14-glossary/)
-- [PDF spec to code map](internals/15-spec-to-code/)
-- [Top 10 implementation decisions](internals/16-top-ten-decisions/)
+- [Reading order for new contributors](internals/00-reading-order.md)
+- [Architecture overview](internals/01-architecture-overview.md)
+- [PDF primer](internals/02-pdf-primer.md)
+- [Parsing model](internals/03-parsing-model.md)
+- [Object model and serialization](internals/04-object-model.md)
+- [Graphics state and coordinate systems](internals/05-graphics-state.md)
+- [Text system and extraction](internals/06-text-system.md)
+- [Search geometry and match modeling](internals/07-search-geometry.md)
+- [Redaction target model](internals/08-redaction-targets.md)
+- [Redaction application pipeline](internals/09-redaction-pipeline.md)
+- [Writer and deterministic output](internals/10-writer.md)
+- [WASM/JS boundary design](internals/11-wasm-boundary.md)
+- [Security and correctness model](internals/12-security-model.md)
+- [Known limitations](internals/13-limitations.md)
+- [Glossary](internals/14-glossary.md)
+- [PDF spec to code map](internals/15-spec-to-code.md)
+- [Top 10 implementation decisions](internals/16-top-ten-decisions.md)
 
 ## Current MVP scope
 
@@ -67,4 +69,5 @@ Deep technical documentation covering PDF spec concepts, implementation decision
 - Three redaction modes: `strip`, `redact` (default), and `erase`
 - Conservative image redaction at invocation level
 
-Unsupported features fail explicitly instead of being silently ignored.
+!!! warning "Fail-explicit design"
+    Unsupported features return an explicit error instead of being silently ignored or producing incorrect output.

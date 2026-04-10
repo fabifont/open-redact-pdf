@@ -165,5 +165,5 @@ let output = document.save()?;
 
 ## Related docs
 
-- [Canonical target model](../target-model/)
-- [Supported subset](../supported-subset/)
+- [Canonical target model](../reference/target-model.md)
+- [Supported subset](../reference/supported-subset.md)

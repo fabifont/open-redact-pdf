@@ -22,14 +22,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4.2.2
-      - uses: actions/configure-pages@v5
-      - uses: actions/jekyll-build-pages@v1
+      - uses: actions/setup-python@v5
         with:
-          source: ./docs
-          destination: ./_site
+          python-version: "3.12"
+      - name: Install MkDocs Material
+        run: pip install "mkdocs-material>=9.5,<10"
+      - name: Build docs
+        run: mkdocs build
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: ./_site
+          path: ./site
 
   deploy:
     runs-on: ubuntu-latest

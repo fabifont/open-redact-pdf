@@ -1,0 +1,112 @@
+site_name: Open Redact PDF
+site_description: Browser-first PDF redaction engine — structural redaction via Rust and WebAssembly
+site_url: https://fabifont.github.io/open-redact-pdf/
+repo_url: https://github.com/fabifont/open-redact-pdf
+repo_name: fabifont/open-redact-pdf
+edit_uri: edit/main/docs/
+
+docs_dir: docs
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: black
+      accent: deep orange
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: black
+      accent: deep orange
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.path
+    - navigation.top
+    - navigation.indexes
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+    - toc.follow
+  icon:
+    repo: fontawesome/brands/github
+  font:
+    text: Inter
+    code: JetBrains Mono
+
+plugins:
+  - search:
+      lang: en
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - tables
+  - md_in_html
+  - toc:
+      permalink: true
+      toc_depth: 3
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+  - pymdownx.details
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.snippets
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Guides:
+    - Redaction Workflow: guides/redaction-workflow.md
+    - Browser Integration: guides/browser-integration.md
+    - Testing and Fixtures: guides/testing-and-fixtures.md
+  - Reference:
+    - Rust API: reference/rust-api.md
+    - TypeScript SDK: reference/ts-sdk.md
+    - Target Model: reference/target-model.md
+    - Supported PDF Subset: reference/supported-subset.md
+    - Workspace Crates: reference/workspace-crates.md
+  - Design:
+    - Architecture: architecture.md
+    - Security Model: security-model.md
+    - Why Not Overlays: why-not-overlays.md
+    - Roadmap: roadmap.md
+  - Development:
+    - Development Workflow: development.md
+    - Publishing and Deployment: publishing.md
+  - Internals:
+    - Reading Order: internals/00-reading-order.md
+    - Architecture Overview: internals/01-architecture-overview.md
+    - PDF Primer: internals/02-pdf-primer.md
+    - Parsing Model: internals/03-parsing-model.md
+    - Object Model: internals/04-object-model.md
+    - Graphics State: internals/05-graphics-state.md
+    - Text System: internals/06-text-system.md
+    - Search Geometry: internals/07-search-geometry.md
+    - Redaction Targets: internals/08-redaction-targets.md
+    - Redaction Pipeline: internals/09-redaction-pipeline.md
+    - Writer: internals/10-writer.md
+    - WASM Boundary: internals/11-wasm-boundary.md
+    - Security Model: internals/12-security-model.md
+    - Limitations: internals/13-limitations.md
+    - Glossary: internals/14-glossary.md
+    - Spec to Code Map: internals/15-spec-to-code.md
+    - Top 10 Decisions: internals/16-top-ten-decisions.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/fabifont/open-redact-pdf
