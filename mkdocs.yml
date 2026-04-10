@@ -88,23 +88,23 @@ nav:
     - Development Workflow: development.md
     - Publishing and Deployment: publishing.md
   - Internals:
-    - Reading Order: internals/00-reading-order.md
-    - Architecture Overview: internals/01-architecture-overview.md
-    - PDF Primer: internals/02-pdf-primer.md
-    - Parsing Model: internals/03-parsing-model.md
-    - Object Model: internals/04-object-model.md
-    - Graphics State: internals/05-graphics-state.md
-    - Text System: internals/06-text-system.md
-    - Search Geometry: internals/07-search-geometry.md
-    - Redaction Targets: internals/08-redaction-targets.md
-    - Redaction Pipeline: internals/09-redaction-pipeline.md
-    - Writer: internals/10-writer.md
-    - WASM Boundary: internals/11-wasm-boundary.md
-    - Security Model: internals/12-security-model.md
-    - Limitations: internals/13-limitations.md
-    - Glossary: internals/14-glossary.md
-    - Spec to Code Map: internals/15-spec-to-code.md
-    - Top 10 Decisions: internals/16-top-ten-decisions.md
+    - "0. Reading Order": internals/00-reading-order.md
+    - "1. Architecture Overview": internals/01-architecture-overview.md
+    - "2. PDF Primer": internals/02-pdf-primer.md
+    - "3. Parsing Model": internals/03-parsing-model.md
+    - "4. Object Model": internals/04-object-model.md
+    - "5. Graphics State": internals/05-graphics-state.md
+    - "6. Text System": internals/06-text-system.md
+    - "7. Search Geometry": internals/07-search-geometry.md
+    - "8. Redaction Targets": internals/08-redaction-targets.md
+    - "9. Redaction Pipeline": internals/09-redaction-pipeline.md
+    - "10. Writer": internals/10-writer.md
+    - "11. WASM Boundary": internals/11-wasm-boundary.md
+    - "12. Security Model": internals/12-security-model.md
+    - "13. Limitations": internals/13-limitations.md
+    - "14. Glossary": internals/14-glossary.md
+    - "15. Spec to Code Map": internals/15-spec-to-code.md
+    - "16. Top 10 Decisions": internals/16-top-ten-decisions.md
 
 extra:
   social:
