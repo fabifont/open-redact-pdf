@@ -1,5 +1,5 @@
 {
-  "name": "@open-redact-pdf/sdk",
+  "name": "@fabifont/open-redact-pdf",
   "version": "0.1.0",
   "private": false,
   "description": "Browser-first PDF redaction SDK for open-redact-pdf.",

@@ -54,7 +54,7 @@ jobs:
         run: node scripts/build-wasm.mjs
 
       - name: Build TS SDK
-        run: pnpm --filter @open-redact-pdf/sdk build
+        run: pnpm --filter @fabifont/open-redact-pdf build
 
       - name: Build demo
         run: pnpm --filter open-redact-pdf-demo-web build

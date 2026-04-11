@@ -38,11 +38,11 @@ See the [getting started guide](https://fabifont.github.io/open-redact-pdf/getti
 | Package | Description |
 |---|---|
 | [`open-redact-pdf`](https://crates.io/crates/open-redact-pdf) | Rust facade crate with the stable public API |
-| [`@open-redact-pdf/sdk`](https://www.npmjs.com/package/@open-redact-pdf/sdk) | Typed TypeScript wrapper for the WASM bundle |
+| [`@fabifont/open-redact-pdf`](https://www.npmjs.com/package/@fabifont/open-redact-pdf) | Typed TypeScript wrapper for the WASM bundle |
 
 ## Releases
 
-Push a version tag (e.g. `v0.1.0`) to trigger the release workflow, which publishes both the Rust crates to crates.io and `@open-redact-pdf/sdk` to npm. Versions must match across `Cargo.toml`, `packages/ts-sdk/package.json`, and the tag.
+Push a version tag (e.g. `v0.1.0`) to trigger the release workflow, which publishes both the Rust crates to crates.io and `@fabifont/open-redact-pdf` to npm. Versions must match across `Cargo.toml`, `packages/ts-sdk/package.json`, and the tag.
 
 ## License
 

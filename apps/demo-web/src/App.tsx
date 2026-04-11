@@ -16,7 +16,7 @@ import {
   type RedactionMode,
   type RedactionPlan,
   type ApplyReport,
-} from "@open-redact-pdf/sdk";
+} from "@fabifont/open-redact-pdf";
 import { GlobalWorkerOptions, getDocument, type PDFDocumentProxy } from "pdfjs-dist";
 import { Toolbar } from "./components/Toolbar";
 import { Sidebar } from "./components/Sidebar";

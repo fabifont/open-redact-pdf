@@ -24,7 +24,7 @@ pnpm install
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 pnpm wasm:build
-pnpm --filter @open-redact-pdf/sdk build
+pnpm --filter @fabifont/open-redact-pdf build
 pnpm --filter open-redact-pdf-demo-web build
 pnpm --filter open-redact-pdf-demo-web test
 ```
@@ -75,7 +75,7 @@ import {
   searchText,
   applyRedactions,
   savePdf,
-} from "@open-redact-pdf/sdk";
+} from "@fabifont/open-redact-pdf";
 
 await initWasm();
 const handle = openPdf(inputBytes);

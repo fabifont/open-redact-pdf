@@ -4,7 +4,7 @@ title: TypeScript and WASM API Reference
 
 # TypeScript and WASM API Reference
 
-The browser-facing API lives in `@open-redact-pdf/sdk`.
+The browser-facing API lives in `@fabifont/open-redact-pdf`.
 
 ## Initialization
 
@@ -131,7 +131,7 @@ import {
   searchText,
   applyRedactions,
   savePdf,
-} from "@open-redact-pdf/sdk"
+} from "@fabifont/open-redact-pdf"
 
 await initWasm()
 const handle = openPdf(bytes)

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import type { PDFDocumentProxy } from "pdfjs-dist";
-import type { Point, QuadGroupTarget, RectTarget } from "@open-redact-pdf/sdk";
+import type { Point, QuadGroupTarget, RectTarget } from "@fabifont/open-redact-pdf";
 
 type PageViewProps = {
   document: PDFDocumentProxy | null;

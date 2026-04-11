@@ -29,7 +29,7 @@ if (wasmStale) {
 
 const tsStale = tsOutputs.some((output) => isStale(output, tsInputs)) || wasmStale;
 if (tsStale) {
-  run("pnpm", ["--filter", "@open-redact-pdf/sdk", "build"]);
+  run("pnpm", ["--filter", "@fabifont/open-redact-pdf", "build"]);
 }
 
 function run(command, args) {

@@ -54,7 +54,7 @@ Keep generated PDFs and the generator script aligned when the subset expands.
 ```bash
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-pnpm --filter @open-redact-pdf/sdk build
+pnpm --filter @fabifont/open-redact-pdf build
 pnpm --filter open-redact-pdf-demo-web build
 pnpm --filter open-redact-pdf-demo-web test
 ```

@@ -38,7 +38,7 @@ jobs:
           cargo test --workspace
           cargo clippy --workspace --all-targets -- -D warnings
           node scripts/build-wasm.mjs
-          pnpm --filter @open-redact-pdf/sdk build
+          pnpm --filter @fabifont/open-redact-pdf build
           pnpm --filter open-redact-pdf-demo-web build
           pnpm --filter open-redact-pdf-demo-web test
 
@@ -65,7 +65,7 @@ jobs:
         run: |
           node scripts/check-release-version.mjs "${GITHUB_REF_NAME}"
           node scripts/build-wasm.mjs
-          pnpm --filter @open-redact-pdf/sdk build
+          pnpm --filter @fabifont/open-redact-pdf build
       - name: Publish npm package
         run: npm publish --access public
         working-directory: packages/ts-sdk

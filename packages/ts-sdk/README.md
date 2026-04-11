@@ -1,17 +1,17 @@
-# @open-redact-pdf/sdk
+# @fabifont/open-redact-pdf
 
 Typed TypeScript and WebAssembly SDK for `open-redact-pdf`.
 
 ## Install
 
 ```bash
-npm install @open-redact-pdf/sdk
+npm install @fabifont/open-redact-pdf
 ```
 
 ## Basic usage
 
 ```ts
-import { initWasm, openPdf, getPageCount } from "@open-redact-pdf/sdk";
+import { initWasm, openPdf, getPageCount } from "@fabifont/open-redact-pdf";
 
 await initWasm();
 const handle = openPdf(pdfBytes);

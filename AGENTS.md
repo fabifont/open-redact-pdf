@@ -33,7 +33,7 @@ Core product rules:
 - Run Rust tests: `cargo test --workspace`
 - Run Rust lint: `cargo clippy --workspace --all-targets -- -D warnings`
 - Build the wasm bundle: `pnpm wasm:build`
-- Build the TS SDK: `pnpm --filter @open-redact-pdf/sdk build`
+- Build the TS SDK: `pnpm --filter @fabifont/open-redact-pdf build`
 - Start the demo: `pnpm --filter open-redact-pdf-demo-web dev`
 - Build the demo: `pnpm --filter open-redact-pdf-demo-web build`
 - Typecheck the demo: `pnpm --filter open-redact-pdf-demo-web test`
@@ -49,7 +49,7 @@ Core product rules:
 ## Testing instructions
 
 - For engine changes, run `cargo test --workspace` and `cargo clippy --workspace --all-targets -- -D warnings`.
-- For TS SDK or demo changes, run `pnpm --filter @open-redact-pdf/sdk build`, `pnpm --filter open-redact-pdf-demo-web build`, and `pnpm --filter open-redact-pdf-demo-web test`.
+- For TS SDK or demo changes, run `pnpm --filter @fabifont/open-redact-pdf build`, `pnpm --filter open-redact-pdf-demo-web build`, and `pnpm --filter open-redact-pdf-demo-web test`.
 - When redaction behavior changes, prefer adding or updating integration coverage in `tests/integration/end_to_end.rs`.
 - Fixture PDFs are generated from `tests/fixtures/generate-fixtures.mjs`; regenerate them when the fixture corpus changes.
 

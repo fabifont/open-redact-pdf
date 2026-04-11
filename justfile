@@ -14,7 +14,7 @@ wasm:
 
 # Build the TS SDK only
 sdk:
-    pnpm --filter @open-redact-pdf/sdk build
+    pnpm --filter @fabifont/open-redact-pdf build
 
 # Build the demo app only (requires wasm + sdk already built)
 demo:
