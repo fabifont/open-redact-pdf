@@ -32,15 +32,17 @@ The workflow:
   - `packages/ts-sdk/package.json`
   - `Cargo.toml` workspace version
 - runs the release validation build
-- publishes `@open-redact-pdf/sdk` to npm
+- publishes `@fabifont/open-redact-pdf` to npm
 - publishes the Rust crate set to crates.io in dependency order
 
 ## Required repository secrets
 
 Set these GitHub Actions secrets before using the release workflow:
 
-- `NPM_TOKEN`: npm automation token with publish access for `@open-redact-pdf/sdk`
+- `NPM_TOKEN`: npm automation token with publish access for the `@fabifont` scope
 - `CARGO_REGISTRY_TOKEN`: crates.io API token with publish access
+
+Before the first npm release, make sure the token owner can publish to the `@fabifont` scope. If the token cannot publish to that scope, `npm publish` commonly fails with `E404` on the scoped package URL.
 
 ## Release versioning model
 
