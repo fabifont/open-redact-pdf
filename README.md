@@ -1,85 +1,49 @@
 # Open Redact PDF
 
-Open Redact PDF is a browser-first PDF redaction engine built in Rust and exposed to the browser through WebAssembly. It works on PDF structure rather than flattening whole pages into images, preserves searchable text outside redacted regions where supported, and removes targeted content inside redactions for a constrained but real subset of unencrypted PDFs.
+A browser-first PDF redaction engine built in Rust and compiled to WebAssembly. Operates on PDF structure rather than flattening pages to images, removes targeted content from content streams, and preserves searchable text outside redacted regions.
 
-## Documentation
+**[Live demo](https://open-redact-pdf.fabifont.dev)** · **[Documentation](https://fabifont.github.io/open-redact-pdf)**
 
-The repository now includes:
+---
 
-- a root [AGENTS.md](AGENTS.md) file for coding-agent workflow guidance
-- a publishable documentation site under [`docs/`](docs/index.md)
-- code-level API docs in the Rust facade crate and TS SDK source
+## Key properties
 
-Key entry points:
+- Redaction removes content from PDF structure — a visible rectangle alone is not a redaction
+- Unredacted text stays searchable and selectable where the supported subset allows
+- Unsupported features return an explicit error rather than silently corrupting output
+- Deterministic full-document rewrite on every save
 
-- [Documentation home](docs/index.md)
-- [Rust API reference](docs/reference/rust-api.md)
-- [TypeScript and WASM API reference](docs/reference/ts-sdk.md)
-- [Publishing and Context7 guidance](docs/publishing.md)
+The [security model](https://fabifont.github.io/open-redact-pdf/security-model/) and [supported PDF subset](https://fabifont.github.io/open-redact-pdf/reference/supported-subset/) are documented in full.
 
-## Release Automation
-
-This repository includes a release workflow that publishes:
-
-- `@open-redact-pdf/sdk` to npm
-- the Rust crate set needed by `open-redact-pdf` to crates.io
-
-Release publishing is triggered by pushing a version tag such as `v0.1.0`.
-
-## Status
-
-This repository currently targets a deliberately narrow MVP:
-
-- Unencrypted PDFs with classic cross-reference tables
-- Unfiltered or `FlateDecode` streams
-- Full-document rewrite on save
-- Common page content streams without Form XObjects on targeted pages
-- `Type1` and `TrueType` text with horizontal writing
-- `Type0` / `Identity-H` text with `ToUnicode` maps and two-byte CIDs
-- Rectangle, quad, and quad-group redaction targets in page space
-- Three redaction modes: `strip` (remove bytes), `redact` (blank space + overlay, default), `erase` (blank space, no overlay)
-- Conservative image redaction by removing intersecting image draws
-
-Unsupported features fail explicitly instead of being silently ignored.
-
-## Monorepo Layout
-
-- `crates/open_redact_pdf`: Rust facade crate with the stable core API
-- `crates/pdf_objects`: low-level PDF object model, parser, and serializer
-- `crates/pdf_content`: content stream parsing and page content loading
-- `crates/pdf_graphics`: page-space geometry and transforms
-- `crates/pdf_text`: text extraction and search geometry
-- `crates/pdf_targets`: canonical redaction target model and normalization
-- `crates/pdf_redact`: redaction planning and application
-- `crates/pdf_writer`: full-save PDF rewrite
-- `crates/pdf_wasm`: `wasm-bindgen` browser wrapper
-- `packages/ts-sdk`: typed TypeScript wrapper for the wasm package
-- `apps/demo-web`: small React demo for manual and search-driven redaction
-- `tests/fixtures`: fixture corpus
-- `tests/integration`: end-to-end integration tests
-
-## Getting Started
-
-### Prerequisites
-
-- Rust stable
-- `wasm32-unknown-unknown` target: `rustup target add wasm32-unknown-unknown`
-- `wasm-pack`: `cargo install wasm-pack --locked`
-- Node.js 22+
-- `pnpm` 10+
-
-### Build
+## Quick start
 
 ```bash
-cargo test --workspace
+# Install JS dependencies
 pnpm install
-pnpm wasm:build
-pnpm --filter @open-redact-pdf/sdk build
-pnpm --filter open-redact-pdf-demo-web dev
+
+# Full build (wasm → ts-sdk → demo)
+just build
+
+# Run all tests
+just test
+
+# Start the demo dev server
+just dev
 ```
 
-## Security Model
+See the [getting started guide](https://fabifont.github.io/open-redact-pdf/getting-started/) for prerequisites and a full walkthrough.
 
-Redaction in this project means the output PDF must not retain the removed text in content streams that continue to be referenced by the output file. A visible black rectangle alone does not count as redaction. The current implementation removes or neutralizes intersecting text glyphs, removes intersecting vector paint operations, removes intersecting image draws conservatively, and (in `redact` mode) paints replacement fill marks after content removal.
+## Packages
 
-See [docs/security-model.md](docs/security-model.md), [docs/architecture.md](docs/architecture.md), [docs/roadmap.md](docs/roadmap.md), and [docs/why-not-overlays.md](docs/why-not-overlays.md).
+| Package | Description |
+|---|---|
+| [`open-redact-pdf`](https://crates.io/crates/open-redact-pdf) | Rust facade crate with the stable public API |
+| [`@open-redact-pdf/sdk`](https://www.npmjs.com/package/@open-redact-pdf/sdk) | Typed TypeScript wrapper for the WASM bundle |
+
+## Releases
+
+Push a version tag (e.g. `v0.1.0`) to trigger the release workflow, which publishes both the Rust crates to crates.io and `@open-redact-pdf/sdk` to npm. Versions must match across `Cargo.toml`, `packages/ts-sdk/package.json`, and the tag.
+
+## License
+
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT), at your option.
