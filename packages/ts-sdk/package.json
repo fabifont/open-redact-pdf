@@ -38,9 +38,10 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "tsc -p tsconfig.json --noEmit",
     "test": "tsc -p tsconfig.json --noEmit",
-    "format": "node -e \"\""
+    "format": "prettier --write \"src/**/*.ts\""
   },
   "devDependencies": {
+    "prettier": "^3.5.3",
     "typescript": "^5.9.3"
   }
 }
