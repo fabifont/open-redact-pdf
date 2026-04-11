@@ -35,6 +35,8 @@ The workflow:
 - publishes `@fabifont/open-redact-pdf` to npm
 - publishes the Rust crate set to crates.io in dependency order
 
+If you need to retry an existing release, you can also run the workflow manually with the `release_tag` input set to a tag like `v0.1.0`. The workflow checks out that tag directly instead of using the branch you launched the run from.
+
 ## Required repository secrets
 
 Set these GitHub Actions secrets before using the release workflow:
