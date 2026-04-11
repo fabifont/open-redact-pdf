@@ -1,10 +1,4 @@
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type PointerEvent,
-} from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import type { Point, QuadGroupTarget, RectTarget } from "@open-redact-pdf/sdk";
 
@@ -69,13 +63,11 @@ export function PageView({
       if (!context) return;
       canvas.width = pageViewport.width;
       canvas.height = pageViewport.height;
-      await page
-        .render({
-          canvas,
-          canvasContext: context,
-          viewport: pageViewport,
-        })
-        .promise;
+      await page.render({
+        canvas,
+        canvasContext: context,
+        viewport: pageViewport,
+      }).promise;
       if (!cancelled) {
         onRenderError(pageIndex, null);
         setViewport({
@@ -88,8 +80,7 @@ export function PageView({
 
     renderPage().catch((caught) => {
       if (!cancelled) {
-        const message =
-          caught instanceof Error ? caught.message : String(caught);
+        const message = caught instanceof Error ? caught.message : String(caught);
         onRenderError(pageIndex, message);
       }
     });
@@ -149,7 +140,8 @@ export function PageView({
     setDrag(null);
   }
 
-  const targetCount = manualTargets.length + searchTargets.reduce((sum, target) => sum + target.quads.length, 0);
+  const targetCount =
+    manualTargets.length + searchTargets.reduce((sum, target) => sum + target.quads.length, 0);
 
   return (
     <div className={`page-card${collapsed ? " page-card-collapsed" : ""}`}>
@@ -163,13 +155,9 @@ export function PageView({
         }}
       >
         <span>
-          <span className="page-collapse-icon">
-            {collapsed ? "\u25b6" : "\u25bc"}
-          </span>
+          <span className="page-collapse-icon">{collapsed ? "\u25b6" : "\u25bc"}</span>
           Page {pageIndex + 1}
-          {targetCount > 0 ? (
-            <span className="page-target-badge">{targetCount}</span>
-          ) : null}
+          {targetCount > 0 ? <span className="page-target-badge">{targetCount}</span> : null}
         </span>
         <span>
           {Math.round(size.width)} x {Math.round(size.height)} pt
@@ -178,9 +166,7 @@ export function PageView({
       {!collapsed ? (
         <div className="page-canvas-wrap">
           <canvas ref={canvasRef} />
-          {renderError ? (
-            <div className="page-render-error">{renderError}</div>
-          ) : null}
+          {renderError ? <div className="page-render-error">{renderError}</div> : null}
           {viewport ? (
             <svg
               ref={overlayRef}
@@ -196,9 +182,7 @@ export function PageView({
                   key={`rect-${pageIndex}-${index}`}
                   className="target-rect"
                   x={target.x * viewport.scale}
-                  y={
-                    (size.height - target.y - target.height) * viewport.scale
-                  }
+                  y={(size.height - target.y - target.height) * viewport.scale}
                   width={target.width * viewport.scale}
                   height={target.height * viewport.scale}
                 />
@@ -210,9 +194,7 @@ export function PageView({
                     key={`quad-${pageIndex}-${index}`}
                     className="target-quad"
                     points={quad
-                      .map((point: Point) =>
-                        toSvgPoint(point, size.height, viewport.scale),
-                      )
+                      .map((point: Point) => toSvgPoint(point, size.height, viewport.scale))
                       .join(" ")}
                   />
                 ))}
@@ -233,10 +215,7 @@ export function PageView({
   );
 }
 
-function clientToOverlay(
-  event: PointerEvent<SVGSVGElement>,
-  element: SVGSVGElement,
-) {
+function clientToOverlay(event: PointerEvent<SVGSVGElement>, element: SVGSVGElement) {
   const bounds = element.getBoundingClientRect();
   return {
     x: event.clientX - bounds.left,
@@ -244,10 +223,6 @@ function clientToOverlay(
   };
 }
 
-function toSvgPoint(
-  point: Point,
-  pageHeight: number,
-  scale: number,
-): string {
+function toSvgPoint(point: Point, pageHeight: number, scale: number): string {
   return `${point.x * scale},${(pageHeight - point.y) * scale}`;
 }

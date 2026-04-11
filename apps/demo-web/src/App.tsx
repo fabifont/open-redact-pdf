@@ -17,18 +17,14 @@ import {
   type RedactionPlan,
   type ApplyReport,
 } from "@open-redact-pdf/sdk";
-import {
-  GlobalWorkerOptions,
-  getDocument,
-  type PDFDocumentProxy,
-} from "pdfjs-dist";
+import { GlobalWorkerOptions, getDocument, type PDFDocumentProxy } from "pdfjs-dist";
 import { Toolbar } from "./components/Toolbar";
 import { Sidebar } from "./components/Sidebar";
 import { PageView } from "./components/PageView";
 
 GlobalWorkerOptions.workerSrc = new URL(
   "pdfjs-dist/build/pdf.worker.min.mjs",
-  import.meta.url,
+  import.meta.url
 ).toString();
 
 export const ZOOM_LEVELS = [0.5, 0.75, 1, 1.25, 1.5, 2] as const;
@@ -44,9 +40,7 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [pdfBytes, setPdfBytes] = useState<Uint8Array | null>(null);
   const [handle, setHandle] = useState<PdfHandle | null>(null);
-  const [pageSizes, setPageSizes] = useState<
-    Array<{ width: number; height: number }>
-  >([]);
+  const [pageSizes, setPageSizes] = useState<Array<{ width: number; height: number }>>([]);
   const [manualTargets, setManualTargets] = useState<RectTarget[]>([]);
   const [searchTargets, setSearchTargets] = useState<QuadGroupTarget[]>([]);
   const [searchMatches, setSearchMatches] = useState<UiTextMatch[]>([]);
@@ -54,12 +48,9 @@ export function App() {
   const [downloadBytes, setDownloadBytes] = useState<Uint8Array | null>(null);
   const [applyReport, setApplyReport] = useState<ApplyReport | null>(null);
   const [redactionMode, setRedactionMode] = useState<RedactionMode>("redact");
-  const [pageTexts, setPageTexts] = useState<
-    Array<{ text: string; error: string | null }>
-  >([]);
+  const [pageTexts, setPageTexts] = useState<Array<{ text: string; error: string | null }>>([]);
   const [renderErrors, setRenderErrors] = useState<Record<number, string>>({});
-  const [previewDocument, setPreviewDocument] =
-    useState<PDFDocumentProxy | null>(null);
+  const [previewDocument, setPreviewDocument] = useState<PDFDocumentProxy | null>(null);
   const [zoom, setZoom] = useState(1);
   const [collapsedPages, setCollapsedPages] = useState<Set<number>>(new Set());
 
@@ -77,8 +68,7 @@ export function App() {
         if (!cancelled) setPreviewDocument(document);
       })
       .catch((caught) => {
-        const message =
-          caught instanceof Error ? caught.message : String(caught);
+        const message = caught instanceof Error ? caught.message : String(caught);
         if (!cancelled) {
           setError(message);
           setStatus("PDF.js preview failed.");
@@ -87,9 +77,7 @@ export function App() {
       });
     return () => {
       cancelled = true;
-      setPreviewDocument((current) =>
-        current === documentRef ? null : current,
-      );
+      setPreviewDocument((current) => (current === documentRef ? null : current));
       void documentRef?.destroy();
     };
   }, [pdfBytes]);
@@ -105,7 +93,7 @@ export function App() {
     const nextHandle = openPdf(Uint8Array.from(bytes));
     const pageCount = getPageCount(nextHandle);
     const sizes = Array.from({ length: pageCount }, (_, pageIndex) =>
-      getPageSize(nextHandle, pageIndex),
+      getPageSize(nextHandle, pageIndex)
     );
     setHandle(nextHandle);
     setPdfBytes(Uint8Array.from(bytes));
@@ -121,8 +109,7 @@ export function App() {
       try {
         return { text: extractText(nextHandle, pageIndex).text, error: null };
       } catch (caught) {
-        const message =
-          caught instanceof Error ? caught.message : String(caught);
+        const message = caught instanceof Error ? caught.message : String(caught);
         return { text: "", error: message };
       }
     });
@@ -130,7 +117,7 @@ export function App() {
     const failureCount = texts.filter((entry) => entry.error !== null).length;
     if (failureCount > 0) {
       setStatus(
-        `Loaded ${pageCount} page${pageCount === 1 ? "" : "s"}; text extraction unsupported on ${failureCount} page${failureCount === 1 ? "" : "s"}.`,
+        `Loaded ${pageCount} page${pageCount === 1 ? "" : "s"}; text extraction unsupported on ${failureCount} page${failureCount === 1 ? "" : "s"}.`
       );
     } else {
       setStatus(`Loaded ${pageCount} page${pageCount === 1 ? "" : "s"}.`);
@@ -175,25 +162,18 @@ export function App() {
     try {
       const matches: UiTextMatch[] = [];
       const failures: string[] = [];
-      for (
-        let pageIndex = 0;
-        pageIndex < pageSizes.length;
-        pageIndex++
-      ) {
+      for (let pageIndex = 0; pageIndex < pageSizes.length; pageIndex++) {
         try {
           for (const match of searchText(handle, pageIndex, searchQuery)) {
             const normalized = normalizeSearchMatch(match);
             if (normalized) {
               matches.push(normalized);
             } else {
-              failures.push(
-                `Page ${pageIndex + 1}: search result geometry was invalid`,
-              );
+              failures.push(`Page ${pageIndex + 1}: search result geometry was invalid`);
             }
           }
         } catch (caught) {
-          const message =
-            caught instanceof Error ? caught.message : String(caught);
+          const message = caught instanceof Error ? caught.message : String(caught);
           failures.push(`Page ${pageIndex + 1}: ${message}`);
         }
       }
@@ -208,9 +188,7 @@ export function App() {
       if (matches.length === 0 && failures.length > 0) {
         setStatus("Search unavailable on one or more pages.");
       } else {
-        setStatus(
-          `Found ${matches.length} match${matches.length === 1 ? "" : "es"}.`,
-        );
+        setStatus(`Found ${matches.length} match${matches.length === 1 ? "" : "es"}.`);
       }
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : String(caught);
@@ -248,7 +226,7 @@ export function App() {
   function downloadSanitizedPdf() {
     if (!downloadBytes) return;
     const url = URL.createObjectURL(
-      new Blob([Uint8Array.from(downloadBytes)], { type: "application/pdf" }),
+      new Blob([Uint8Array.from(downloadBytes)], { type: "application/pdf" })
     );
     const anchor = window.document.createElement("a");
     anchor.href = url;
@@ -260,17 +238,14 @@ export function App() {
     window.setTimeout(() => URL.revokeObjectURL(url), 0);
   }
 
-  const setRenderError = useCallback(
-    (pageIndex: number, message: string | null) => {
-      setRenderErrors((current) => {
-        const next = { ...current };
-        if (message) next[pageIndex] = message;
-        else delete next[pageIndex];
-        return next;
-      });
-    },
-    [],
-  );
+  const setRenderError = useCallback((pageIndex: number, message: string | null) => {
+    setRenderErrors((current) => {
+      const next = { ...current };
+      if (message) next[pageIndex] = message;
+      else delete next[pageIndex];
+      return next;
+    });
+  }, []);
 
   return (
     <div className="app">
@@ -305,9 +280,7 @@ export function App() {
         />
         <div className="page-stage">
           {!pdfBytes ? (
-            <div className="page-stage-empty">
-              Open a PDF file to get started.
-            </div>
+            <div className="page-stage-empty">Open a PDF file to get started.</div>
           ) : (
             pageSizes.map((size, pageIndex) => (
               <PageView
@@ -318,12 +291,8 @@ export function App() {
                 zoom={zoom}
                 collapsed={collapsedPages.has(pageIndex)}
                 onToggleCollapsed={() => togglePageCollapsed(pageIndex)}
-                manualTargets={manualTargets.filter(
-                  (target) => target.pageIndex === pageIndex,
-                )}
-                searchTargets={searchTargets.filter(
-                  (target) => target.pageIndex === pageIndex,
-                )}
+                manualTargets={manualTargets.filter((target) => target.pageIndex === pageIndex)}
+                searchTargets={searchTargets.filter((target) => target.pageIndex === pageIndex)}
                 onCreateRectTarget={addManualTarget}
                 onRenderError={setRenderError}
                 renderError={renderErrors[pageIndex] ?? null}
@@ -345,20 +314,13 @@ function normalizeSearchMatch(match: unknown): UiTextMatch | null {
   const quads = Array.isArray(candidate.quads)
     ? candidate.quads.filter(isQuadCandidate).map(readQuadPoints)
     : [];
-  if (
-    pageIndex === null ||
-    quads.length === 0 ||
-    typeof candidate.text !== "string"
-  )
-    return null;
+  if (pageIndex === null || quads.length === 0 || typeof candidate.text !== "string") return null;
   return { text: candidate.text, pageIndex, quads };
 }
 
 function readPageIndex(candidate: Record<string, unknown>): number | null {
   const value = candidate.pageIndex ?? candidate.page_index;
-  return typeof value === "number" && Number.isInteger(value) && value >= 0
-    ? value
-    : null;
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
 }
 
 function isQuadPoints(value: unknown): value is [Point, Point, Point, Point] {
@@ -377,10 +339,8 @@ function isPoint(value: unknown): value is Point {
 }
 
 function isQuadCandidate(
-  value: unknown,
-): value is
-  | [Point, Point, Point, Point]
-  | { points: [Point, Point, Point, Point] } {
+  value: unknown
+): value is [Point, Point, Point, Point] | { points: [Point, Point, Point, Point] } {
   return (
     isQuadPoints(value) ||
     (!!value &&
@@ -391,9 +351,7 @@ function isQuadCandidate(
 }
 
 function readQuadPoints(
-  quad:
-    | [Point, Point, Point, Point]
-    | { points: [Point, Point, Point, Point] },
+  quad: [Point, Point, Point, Point] | { points: [Point, Point, Point, Point] }
 ): [Point, Point, Point, Point] {
   return Array.isArray(quad) ? quad : quad.points;
 }

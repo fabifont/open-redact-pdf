@@ -1,9 +1,4 @@
-import type {
-  ApplyReport,
-  QuadGroupTarget,
-  RectTarget,
-  RedactionMode,
-} from "@open-redact-pdf/sdk";
+import type { ApplyReport, QuadGroupTarget, RectTarget, RedactionMode } from "@open-redact-pdf/sdk";
 
 type UiTextMatch = {
   text: string;
@@ -94,9 +89,7 @@ export function Sidebar({
           <select
             className="select"
             value={redactionMode}
-            onChange={(event) =>
-              onRedactionModeChange(event.target.value as RedactionMode)
-            }
+            onChange={(event) => onRedactionModeChange(event.target.value as RedactionMode)}
           >
             <option value="redact">Redact (black overlay)</option>
             <option value="erase">Erase (blank space)</option>
@@ -121,9 +114,7 @@ export function Sidebar({
             Clear
           </button>
         </div>
-        {error ? (
-          <div className="sidebar-error">{error}</div>
-        ) : null}
+        {error ? <div className="sidebar-error">{error}</div> : null}
       </div>
 
       {/* Report */}
@@ -136,27 +127,19 @@ export function Sidebar({
           </div>
           <div className="report-row">
             <span className="report-label">Glyphs removed</span>
-            <span className="report-value">
-              {applyReport.textGlyphsRemoved}
-            </span>
+            <span className="report-value">{applyReport.textGlyphsRemoved}</span>
           </div>
           <div className="report-row">
             <span className="report-label">Vector paints</span>
-            <span className="report-value">
-              {applyReport.pathPaintsRemoved}
-            </span>
+            <span className="report-value">{applyReport.pathPaintsRemoved}</span>
           </div>
           <div className="report-row">
             <span className="report-label">Image draws</span>
-            <span className="report-value">
-              {applyReport.imageDrawsRemoved}
-            </span>
+            <span className="report-value">{applyReport.imageDrawsRemoved}</span>
           </div>
           <div className="report-row">
             <span className="report-label">Annotations</span>
-            <span className="report-value">
-              {applyReport.annotationsRemoved}
-            </span>
+            <span className="report-value">{applyReport.annotationsRemoved}</span>
           </div>
           {applyReport.warnings.length > 0 ? (
             <div className="report-warnings">
@@ -167,11 +150,7 @@ export function Sidebar({
           ) : null}
           {downloadReady ? (
             <div className="button-row">
-              <button
-                type="button"
-                className="btn btn-primary"
-                onClick={onDownload}
-              >
+              <button type="button" className="btn btn-primary" onClick={onDownload}>
                 Download PDF
               </button>
             </div>
@@ -182,9 +161,7 @@ export function Sidebar({
       {/* Search matches */}
       {searchMatches.length > 0 ? (
         <div className="sidebar-section">
-          <div className="section-title">
-            Matches ({searchMatches.length})
-          </div>
+          <div className="section-title">Matches ({searchMatches.length})</div>
           <ul className="match-list">
             {searchMatches.map((match, index) => (
               <li key={index} className="match-item">
@@ -204,13 +181,9 @@ export function Sidebar({
             <details key={index} className="text-panel">
               <summary>Page {index + 1}</summary>
               {entry.error ? (
-                <div className="text-panel-content text-panel-error">
-                  {entry.error}
-                </div>
+                <div className="text-panel-content text-panel-error">{entry.error}</div>
               ) : (
-                <div className="text-panel-content">
-                  {entry.text || "[empty]"}
-                </div>
+                <div className="text-panel-content">{entry.text || "[empty]"}</div>
               )}
             </details>
           ))}

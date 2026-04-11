@@ -6,11 +6,11 @@ declare module "../vendor/pdf-wasm/pdf_wasm" {
   export function getPageCount(handle: unknown): number;
   export function getPageSize(
     handle: unknown,
-    pageIndex: number,
+    pageIndex: number
   ): { width: number; height: number };
   export function extractText(
     handle: unknown,
-    pageIndex: number,
+    pageIndex: number
   ): {
     page_index: number;
     text: string;
@@ -25,7 +25,7 @@ declare module "../vendor/pdf-wasm/pdf_wasm" {
   export function searchText(
     handle: unknown,
     pageIndex: number,
-    query: string,
+    query: string
   ): Array<{
     text: string;
     page_index: number;

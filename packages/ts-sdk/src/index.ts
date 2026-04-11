@@ -1,13 +1,16 @@
 import type { ApplyReport, PageSize, PageText, RedactionPlan, TextMatch } from "./types";
 
-export type { ApplyReport, PageSize, PageText, RedactionMode, RedactionPlan, RedactionTarget, TextItem, TextMatch } from "./types";
 export type {
-  FillColor,
-  Point,
-  QuadGroupTarget,
-  QuadTarget,
-  RectTarget,
+  ApplyReport,
+  PageSize,
+  PageText,
+  RedactionMode,
+  RedactionPlan,
+  RedactionTarget,
+  TextItem,
+  TextMatch,
 } from "./types";
+export type { FillColor, Point, QuadGroupTarget, QuadTarget, RectTarget } from "./types";
 
 export type PdfHandle = {
   readonly __brand: "PdfHandle";
@@ -25,7 +28,9 @@ type WasmModule = {
 };
 
 type RawPoint = { x: number; y: number };
-type RawQuad = { points: [RawPoint, RawPoint, RawPoint, RawPoint] } | [RawPoint, RawPoint, RawPoint, RawPoint];
+type RawQuad =
+  | { points: [RawPoint, RawPoint, RawPoint, RawPoint] }
+  | [RawPoint, RawPoint, RawPoint, RawPoint];
 type RawTextItem = {
   text: string;
   bbox: { x: number; y: number; width: number; height: number };
@@ -91,9 +96,7 @@ export function extractText(handle: PdfHandle, pageIndex: number): PageText {
 
 /** Searches page text in visual order and returns page-space match quads. */
 export function searchText(handle: PdfHandle, pageIndex: number, query: string): TextMatch[] {
-  return requireWasm()
-    .searchText(handle, pageIndex, query)
-    .map(normalizeTextMatch);
+  return requireWasm().searchText(handle, pageIndex, query).map(normalizeTextMatch);
 }
 
 type RawApplyReport = {
@@ -147,9 +150,7 @@ function normalizeTextMatch(raw: RawTextMatch): TextMatch {
   };
 }
 
-function normalizeQuad(
-  quad: RawQuad,
-): [RawPoint, RawPoint, RawPoint, RawPoint] {
+function normalizeQuad(quad: RawQuad): [RawPoint, RawPoint, RawPoint, RawPoint] {
   return Array.isArray(quad) ? quad : quad.points;
 }
 

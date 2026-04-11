@@ -9,23 +9,13 @@ type ToolbarProps = {
   onZoomChange: (zoom: number) => void;
 };
 
-export function Toolbar({
-  onFileChange,
-  status,
-  error,
-  zoom,
-  onZoomChange,
-}: ToolbarProps) {
+export function Toolbar({ onFileChange, status, error, zoom, onZoomChange }: ToolbarProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   return (
     <div className="toolbar">
       <span className="toolbar-title">Open Redact PDF</span>
-      <button
-        type="button"
-        className="btn"
-        onClick={() => fileInputRef.current?.click()}
-      >
+      <button type="button" className="btn" onClick={() => fileInputRef.current?.click()}>
         Open PDF
       </button>
       <input
