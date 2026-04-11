@@ -1,6 +1,7 @@
 [package]
 name = "pdf_content"
 description = "PDF content stream parsing and operation modeling for open-redact-pdf."
+publish = false
 edition.workspace = true
 license.workspace = true
 repository.workspace = true

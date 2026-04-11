@@ -1,6 +1,7 @@
 [package]
 name = "pdf_targets"
 description = "Canonical redaction target model and normalization for open-redact-pdf."
+publish = false
 edition.workspace = true
 license.workspace = true
 repository.workspace = true

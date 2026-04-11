@@ -1,6 +1,10 @@
 [package]
 name = "open-redact-pdf"
-description = "Browser-first PDF redaction engine facade for structured, non-overlay PDF redaction."
+description = "Browser-first PDF redaction engine for structured, non-overlay PDF redaction via WebAssembly."
+keywords = ["pdf", "redaction", "wasm", "document", "privacy"]
+categories = ["wasm", "text-processing", "encoding", "parser-implementations"]
+homepage = "https://fabifont.github.io/open-redact-pdf/"
+readme = "../../README.md"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true

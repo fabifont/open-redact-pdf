@@ -1,6 +1,7 @@
 [package]
 name = "pdf_text"
 description = "Text extraction and search geometry for open-redact-pdf."
+publish = false
 edition.workspace = true
 license.workspace = true
 repository.workspace = true

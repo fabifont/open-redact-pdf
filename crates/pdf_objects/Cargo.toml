@@ -1,6 +1,7 @@
 [package]
 name = "pdf_objects"
 description = "Low-level PDF object model, parser, and serializer for open-redact-pdf."
+publish = false
 edition.workspace = true
 license.workspace = true
 repository.workspace = true

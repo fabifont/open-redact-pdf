@@ -1,6 +1,7 @@
 [package]
 name = "pdf_redact"
 description = "Redaction planning and content rewriting for open-redact-pdf."
+publish = false
 edition.workspace = true
 license.workspace = true
 repository.workspace = true

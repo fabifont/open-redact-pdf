@@ -3,22 +3,25 @@
   "version": "0.1.0",
   "private": false,
   "description": "Browser-first PDF redaction SDK for open-redact-pdf.",
+  "keywords": ["pdf", "redaction", "wasm", "typescript", "browser", "privacy"],
   "author": "Fabio Fontana <me@fabifont.dev>",
   "license": "MIT OR Apache-2.0",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "sideEffects": false,
+  "engines": {
+    "node": ">=18"
+  },
   "files": [
     "dist",
-    "src",
     "vendor/pdf-wasm",
     "README.md"
   ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
+      "import": "./dist/index.js"
     }
   },
   "repository": {

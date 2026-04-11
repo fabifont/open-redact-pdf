@@ -1,6 +1,7 @@
 [package]
 name = "pdf_writer"
 description = "Deterministic full-save PDF rewrite support for open-redact-pdf."
+publish = false
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
