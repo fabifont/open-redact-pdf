@@ -19,7 +19,7 @@ The [security model](https://fabifont.github.io/open-redact-pdf/security-model/)
 
 ```bash
 # Install JS dependencies
-pnpm install
+just install
 
 # Full build (wasm → ts-sdk → demo)
 just build
