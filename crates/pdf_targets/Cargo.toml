@@ -1,14 +1,16 @@
 [package]
-name = "pdf_targets"
+name = "open-redact-pdf-targets"
 description = "Canonical redaction target model and normalization for open-redact-pdf."
-publish = false
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
+[lib]
+name = "pdf_targets"
+
 [dependencies]
-pdf_graphics = { path = "../pdf_graphics", version = "0.1.0" }
-pdf_objects = { path = "../pdf_objects", version = "0.1.0" }
+pdf_graphics = { package = "open-redact-pdf-graphics", path = "../pdf_graphics", version = "0.1.0" }
+pdf_objects = { package = "open-redact-pdf-objects", path = "../pdf_objects", version = "0.1.0" }
 serde.workspace = true

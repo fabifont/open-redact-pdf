@@ -1,12 +1,14 @@
 [package]
-name = "pdf_graphics"
+name = "open-redact-pdf-graphics"
 description = "PDF page-space geometry and transform helpers for open-redact-pdf."
-publish = false
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
+
+[lib]
+name = "pdf_graphics"
 
 [dependencies]
 serde.workspace = true

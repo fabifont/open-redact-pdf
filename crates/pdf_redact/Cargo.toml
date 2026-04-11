@@ -1,17 +1,19 @@
 [package]
-name = "pdf_redact"
+name = "open-redact-pdf-redact"
 description = "Redaction planning and content rewriting for open-redact-pdf."
-publish = false
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
+[lib]
+name = "pdf_redact"
+
 [dependencies]
-pdf_content = { path = "../pdf_content", version = "0.1.0" }
-pdf_graphics = { path = "../pdf_graphics", version = "0.1.0" }
-pdf_objects = { path = "../pdf_objects", version = "0.1.0" }
-pdf_targets = { path = "../pdf_targets", version = "0.1.0" }
-pdf_text = { path = "../pdf_text", version = "0.1.0" }
+pdf_content = { package = "open-redact-pdf-content", path = "../pdf_content", version = "0.1.0" }
+pdf_graphics = { package = "open-redact-pdf-graphics", path = "../pdf_graphics", version = "0.1.0" }
+pdf_objects = { package = "open-redact-pdf-objects", path = "../pdf_objects", version = "0.1.0" }
+pdf_targets = { package = "open-redact-pdf-targets", path = "../pdf_targets", version = "0.1.0" }
+pdf_text = { package = "open-redact-pdf-text", path = "../pdf_text", version = "0.1.0" }
 serde.workspace = true

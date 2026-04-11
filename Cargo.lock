@@ -336,71 +336,78 @@ checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
 name = "open-redact-pdf"
 version = "0.1.0"
 dependencies = [
- "pdf_content",
- "pdf_graphics",
- "pdf_objects",
- "pdf_redact",
- "pdf_targets",
- "pdf_text",
- "pdf_writer",
+ "open-redact-pdf-content",
+ "open-redact-pdf-graphics",
+ "open-redact-pdf-objects",
+ "open-redact-pdf-redact",
+ "open-redact-pdf-targets",
+ "open-redact-pdf-text",
+ "open-redact-pdf-writer",
  "serde",
 ]
 
 [[package]]
-name = "pdf_content"
+name = "open-redact-pdf-content"
 version = "0.1.0"
 dependencies = [
- "pdf_graphics",
- "pdf_objects",
+ "open-redact-pdf-graphics",
+ "open-redact-pdf-objects",
  "serde",
 ]
 
 [[package]]
-name = "pdf_graphics"
+name = "open-redact-pdf-graphics"
 version = "0.1.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
-name = "pdf_objects"
+name = "open-redact-pdf-objects"
 version = "0.1.0"
 dependencies = [
  "flate2",
- "pdf_graphics",
+ "open-redact-pdf-graphics",
  "proptest",
  "serde",
 ]
 
 [[package]]
-name = "pdf_redact"
+name = "open-redact-pdf-redact"
 version = "0.1.0"
 dependencies = [
- "pdf_content",
- "pdf_graphics",
- "pdf_objects",
- "pdf_targets",
- "pdf_text",
+ "open-redact-pdf-content",
+ "open-redact-pdf-graphics",
+ "open-redact-pdf-objects",
+ "open-redact-pdf-targets",
+ "open-redact-pdf-text",
  "serde",
 ]
 
 [[package]]
-name = "pdf_targets"
+name = "open-redact-pdf-targets"
 version = "0.1.0"
 dependencies = [
- "pdf_graphics",
- "pdf_objects",
+ "open-redact-pdf-graphics",
+ "open-redact-pdf-objects",
  "serde",
 ]
 
 [[package]]
-name = "pdf_text"
+name = "open-redact-pdf-text"
 version = "0.1.0"
 dependencies = [
- "pdf_content",
- "pdf_graphics",
- "pdf_objects",
+ "open-redact-pdf-content",
+ "open-redact-pdf-graphics",
+ "open-redact-pdf-objects",
  "serde",
+]
+
+[[package]]
+name = "open-redact-pdf-writer"
+version = "0.1.0"
+dependencies = [
+ "open-redact-pdf-objects",
 ]
 
 [[package]]
@@ -413,13 +420,6 @@ dependencies = [
  "serde-wasm-bindgen",
  "wasm-bindgen",
  "wasm-bindgen-test",
-]
-
-[[package]]
-name = "pdf_writer"
-version = "0.1.0"
-dependencies = [
- "pdf_objects",
 ]
 
 [[package]]
