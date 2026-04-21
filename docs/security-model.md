@@ -23,13 +23,15 @@ The key invariant across all modes is that the underlying content is removed or 
 - Intersecting text glyphs are removed from rewritten text-showing operators.
 - Intersecting vector paint operations are neutralized.
 - Intersecting image draws are removed conservatively at the image invocation level.
+- Form XObjects whose bounding quad intersects a target are redacted via per-page copy-on-write (text glyphs, vector paint, and inner Image `Do` invocations), with nested Forms handled recursively.
+- Documents whose default Optional Content configuration hides any layer are refused outright so hidden-layer text cannot slip through unredacted.
 - Optional intersecting annotations can be removed from touched pages.
 
 ## Current limitations
 
-- The MVP fails on unsupported content such as Form XObjects or unsupported font types on targeted pages.
-- Image redaction is conservative and removes whole image draws when they intersect a target.
+- Image redaction is conservative and removes whole image draws when they intersect a target (partial image rewriting is future work).
 - Metadata and attachment stripping are opt-in and limited to supported object layouts.
+- Composite fonts are limited to `Identity-H` with a `ToUnicode` map; other CID encodings still fail explicitly.
 
 ## Non-goals in the MVP
 

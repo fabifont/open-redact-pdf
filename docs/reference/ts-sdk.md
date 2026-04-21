@@ -121,6 +121,22 @@ type TextMatch = {
 }
 ```
 
+### `ApplyReport`
+
+```ts
+type ApplyReport = {
+  pagesTouched: number
+  textGlyphsRemoved: number
+  pathPaintsRemoved: number
+  imageDrawsRemoved: number
+  annotationsRemoved: number
+  formXObjectsRewritten: number
+  warnings: string[]
+}
+```
+
+`formXObjectsRewritten` counts the per-page Form XObject copies produced by copy-on-write redaction — one per Form whose `BBox × Matrix × CTM` intersected a target.
+
 ## Example
 
 ```ts

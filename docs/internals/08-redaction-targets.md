@@ -43,7 +43,7 @@ User-facing `RedactionPlan` values are converted to `NormalizedRedactionPlan` be
 - Validates that `QuadGroup` lists are non-empty.
 - Converts each `Rect` to a single-quad `NormalizedPageTarget` (four corners derived from x, y, width, height).
 - Converts each `QuadGroup` to a single `NormalizedPageTarget` carrying the full quad list and a pre-computed axis-aligned union bounding box.
-- Rejects `overlay_text` if present (replacement text is not implemented; returning an explicit error is safer than silently dropping the field).
+- Passes `overlay_text` through untouched when `mode` is `redact` or unset; rejects it with `UnsupportedOption` when `mode` is `strip` (strip paints nothing, so a label would have nothing to sit on top of) and when the string is empty.
 - Applies option defaults:
   - `mode` → `Redact`
   - `fill_color` → black

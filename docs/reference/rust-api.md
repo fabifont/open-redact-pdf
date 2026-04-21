@@ -120,6 +120,7 @@ Important counters:
 - `path_paints_removed`
 - `image_draws_removed`
 - `annotations_removed`
+- `form_xobjects_rewritten` — Form XObject per-page copies produced by copy-on-write redaction
 - `warnings`
 
 ### `PdfError`

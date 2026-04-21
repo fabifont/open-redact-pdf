@@ -40,8 +40,11 @@ The `mode` field on `RedactionPlan` controls the visual and structural output:
 - text glyphs intersecting a target are removed or replaced according to the selected mode
 - intersecting path paints are neutralized
 - intersecting image draws are removed conservatively at invocation level
+- Form XObjects whose bounding quad intersects a target are redacted via per-page copy-on-write — the copy's content stream is rewritten for text, vector paint, and inner Image `Do` invocations, and nested Forms recurse up to depth 8
+- documents with hidden-by-default Optional Content Groups are refused outright so hidden-layer content cannot slip through
 - optional annotation removal can strip intersecting annotation objects from touched pages
+- when `overlayText` is set in `redact` mode, a Helvetica label is stamped inside each overlay rectangle, auto-sized to fit and coloured for contrast against the fill
 
 ## Save semantics
 
-The writer emits a new PDF with a full save. The output does not rely on hidden references back to the original file.
+The writer emits a new PDF with a full save. Rewritten content streams are FlateDecode-compressed. The output does not rely on hidden references back to the original file, and xref streams + object streams from the input are flattened into a single classic xref table with inline indirect objects.

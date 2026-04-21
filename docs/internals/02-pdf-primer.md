@@ -450,7 +450,7 @@ A form XObject is a stream containing arbitrary PDF operators — essentially a 
 
 Form XObjects are used for repeated elements (logos, headers, backgrounds), watermarks, and PDF stamps. When `Do` invokes a form XObject, the content stream executes within the current graphics state plus the form's own matrix.
 
-This engine neutralizes `Do` operators for image XObjects that intersect a redaction target. Full form XObject traversal for redaction is currently not supported.
+This engine neutralizes `Do` operators for image XObjects that intersect a redaction target. Form XObjects are traversed both for text extraction and for redaction: a Form whose `BBox × Matrix × CTM` intersects a target is cloned per page and its content is rewritten (text glyphs, vector paint, inner Image `Do` invocations). Nested Forms are handled recursively up to depth 8.
 
 ---
 
