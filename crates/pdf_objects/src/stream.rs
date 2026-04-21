@@ -74,11 +74,61 @@ fn apply_predictor(data: &[u8], decode_parms: Option<&PdfValue>) -> PdfResult<Ve
         .unwrap_or(1);
     match predictor {
         1 => Ok(data.to_vec()),
+        2 => tiff_predictor_decode(data, parms),
         10..=15 => png_predictor_decode(data, parms),
         other => Err(PdfError::Unsupported(format!(
             "predictor {other} is not supported"
         ))),
     }
+}
+
+fn tiff_predictor_decode(
+    data: &[u8],
+    parms: &crate::types::PdfDictionary,
+) -> PdfResult<Vec<u8>> {
+    let columns = parms
+        .get("Columns")
+        .and_then(PdfValue::as_integer)
+        .unwrap_or(1) as usize;
+    let colors = parms
+        .get("Colors")
+        .and_then(PdfValue::as_integer)
+        .unwrap_or(1) as usize;
+    let bits_per_component = parms
+        .get("BitsPerComponent")
+        .and_then(PdfValue::as_integer)
+        .unwrap_or(8) as usize;
+
+    if bits_per_component != 8 {
+        return Err(PdfError::Unsupported(format!(
+            "TIFF predictor with BitsPerComponent {bits_per_component} is not supported"
+        )));
+    }
+    if columns == 0 || colors == 0 {
+        return Err(PdfError::Corrupt(
+            "TIFF predictor Columns/Colors must be positive".to_string(),
+        ));
+    }
+    let row_stride = columns * colors;
+    if data.len() % row_stride != 0 {
+        return Err(PdfError::Corrupt(format!(
+            "TIFF predictor row length mismatch: data={} stride={row_stride}",
+            data.len()
+        )));
+    }
+    let mut output = Vec::with_capacity(data.len());
+    for row in data.chunks_exact(row_stride) {
+        for (component_index, byte) in row.iter().enumerate() {
+            if component_index < colors {
+                // First pixel in a row is stored as-is per component.
+                output.push(*byte);
+            } else {
+                let previous = output[output.len() - colors];
+                output.push(previous.wrapping_add(*byte));
+            }
+        }
+    }
+    Ok(output)
 }
 
 fn png_predictor_decode(data: &[u8], parms: &crate::types::PdfDictionary) -> PdfResult<Vec<u8>> {
@@ -265,10 +315,41 @@ mod tests {
     }
 
     #[test]
+    fn applies_tiff_predictor() {
+        // Original 2 rows of 4 bytes each, 1 color, 8 bits per component.
+        let original: [u8; 8] = [10, 20, 30, 40, 15, 22, 33, 44];
+
+        // TIFF predictor encodes each row independently: first byte as-is,
+        // subsequent bytes as (current - previous). No filter byte prefix.
+        let mut encoded = Vec::new();
+        for row in original.chunks(4) {
+            encoded.push(row[0]);
+            for index in 1..row.len() {
+                encoded.push(row[index].wrapping_sub(row[index - 1]));
+            }
+        }
+
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&encoded).unwrap();
+        let compressed = encoder.finish().unwrap();
+
+        let mut dict = PdfDictionary::new();
+        dict.insert("Filter".to_string(), PdfValue::Name("FlateDecode".into()));
+        let mut parms = PdfDictionary::new();
+        parms.insert("Predictor".to_string(), PdfValue::Integer(2));
+        parms.insert("Columns".to_string(), PdfValue::Integer(4));
+        dict.insert("DecodeParms".to_string(), PdfValue::Dictionary(parms));
+
+        let stream = make_stream(dict, compressed);
+        let decoded = decode_stream(&stream).expect("decode");
+        assert_eq!(decoded, original.to_vec());
+    }
+
+    #[test]
     fn rejects_unsupported_predictor() {
         let mut dict = PdfDictionary::new();
         let mut parms = PdfDictionary::new();
-        parms.insert("Predictor".to_string(), PdfValue::Integer(2));
+        parms.insert("Predictor".to_string(), PdfValue::Integer(3));
         dict.insert("DecodeParms".to_string(), PdfValue::Dictionary(parms));
         let stream = make_stream(dict, vec![0, 0, 0, 0]);
         match decode_stream(&stream) {
