@@ -160,7 +160,8 @@ pub fn apply_redactions(
                     file,
                     page.page_ref,
                     &page.resources,
-                    overlay_font_ref.expect("overlay font must be allocated when overlay_spec is some"),
+                    overlay_font_ref
+                        .expect("overlay font must be allocated when overlay_spec is some"),
                 )?;
             }
             let overlay = overlay_stream_bytes(
@@ -451,12 +452,14 @@ fn parse_form_bbox(dict: &PdfDictionary) -> Rect {
         for (slot, value) in nums.iter_mut().zip(values.iter()) {
             match value.as_number() {
                 Some(n) => *slot = n,
-                None => return Rect {
-                    x: 0.0,
-                    y: 0.0,
-                    width: 1.0,
-                    height: 1.0,
-                },
+                None => {
+                    return Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 1.0,
+                        height: 1.0,
+                    };
+                }
             }
         }
         Some(nums)
@@ -1022,10 +1025,7 @@ fn write_page_contents_without_removal(
     if filter {
         dict.insert("Filter".to_string(), PdfValue::Name("FlateDecode".into()));
     }
-    file.insert_object(
-        content_ref,
-        PdfObject::Stream(PdfStream { dict, data }),
-    );
+    file.insert_object(content_ref, PdfObject::Stream(PdfStream { dict, data }));
     if let PdfObject::Value(PdfValue::Dictionary(dictionary)) =
         file.get_object_mut(page.page_ref)?
     {
@@ -1105,11 +1105,7 @@ fn overlay_stream_bytes(
             let x = bounds.x + size * 0.25;
             let y = bounds.y + size * 0.2;
             output.push_str("BT\n");
-            output.push_str(&format!(
-                "/{} {} Tf\n",
-                font_name,
-                format_number(size)
-            ));
+            output.push_str(&format!("/{} {} Tf\n", font_name, format_number(size)));
             output.push_str(&format!("{} {} Td\n", format_number(x), format_number(y)));
             output.push('(');
             output.push_str(&escape_pdf_string(text));
@@ -1127,10 +1123,7 @@ fn overlay_stream_bytes(
 /// any real PDF producer is likely to pick for its own fonts.
 const OVERLAY_FONT_NAME: &str = "_ORP_Overlay";
 
-fn ensure_overlay_font(
-    file: &mut PdfFile,
-    current: Option<ObjectRef>,
-) -> PdfResult<ObjectRef> {
+fn ensure_overlay_font(file: &mut PdfFile, current: Option<ObjectRef>) -> PdfResult<ObjectRef> {
     if let Some(existing) = current {
         return Ok(existing);
     }
@@ -1143,10 +1136,7 @@ fn ensure_overlay_font(
         PdfValue::Name("WinAnsiEncoding".into()),
     );
     let font_ref = file.allocate_object_ref();
-    file.insert_object(
-        font_ref,
-        PdfObject::Value(PdfValue::Dictionary(font_dict)),
-    );
+    file.insert_object(font_ref, PdfObject::Value(PdfValue::Dictionary(font_dict)));
     Ok(font_ref)
 }
 
@@ -1164,18 +1154,12 @@ fn register_overlay_font_on_page(
         None => PdfDictionary::new(),
     };
     let mut new_fonts = existing_fonts;
-    new_fonts.insert(
-        OVERLAY_FONT_NAME.to_string(),
-        PdfValue::Reference(font_ref),
-    );
+    new_fonts.insert(OVERLAY_FONT_NAME.to_string(), PdfValue::Reference(font_ref));
     let mut new_resources = effective_resources.clone();
     new_resources.insert("Font".to_string(), PdfValue::Dictionary(new_fonts));
     match file.get_object_mut(page_ref)? {
         PdfObject::Value(PdfValue::Dictionary(page_dict)) => {
-            page_dict.insert(
-                "Resources".to_string(),
-                PdfValue::Dictionary(new_resources),
-            );
+            page_dict.insert("Resources".to_string(), PdfValue::Dictionary(new_resources));
             Ok(())
         }
         _ => Err(PdfError::Corrupt(format!(
@@ -1289,7 +1273,10 @@ fn redact_intersecting_forms(
 
     let mut redactions = Vec::with_capacity(intersecting.len());
     for (name, form_ref) in intersecting {
-        let base_ctm = invocation_ctms.get(&form_ref).copied().unwrap_or(Matrix::identity());
+        let base_ctm = invocation_ctms
+            .get(&form_ref)
+            .copied()
+            .unwrap_or(Matrix::identity());
         let (new_ref, removed) = redact_form_xobject(
             file,
             form_ref,
@@ -1483,7 +1470,13 @@ fn redact_form_xobject(
     }
 
     let new_ref = file.allocate_object_ref();
-    file.insert_object(new_ref, PdfObject::Stream(PdfStream { dict: new_dict, data }));
+    file.insert_object(
+        new_ref,
+        PdfObject::Stream(PdfStream {
+            dict: new_dict,
+            data,
+        }),
+    );
     Ok((new_ref, glyphs_removed_total))
 }
 
@@ -1509,10 +1502,7 @@ fn override_page_xobject_refs(
 
     match file.get_object_mut(page_ref)? {
         PdfObject::Value(PdfValue::Dictionary(page_dict)) => {
-            page_dict.insert(
-                "Resources".to_string(),
-                PdfValue::Dictionary(new_resources),
-            );
+            page_dict.insert("Resources".to_string(), PdfValue::Dictionary(new_resources));
             Ok(())
         }
         _ => Err(PdfError::Corrupt(format!(
@@ -1566,10 +1556,7 @@ fn reject_hidden_optional_content(file: &PdfFile) -> PdfResult<()> {
     }
     // Also refuse documents that declare a non-default BaseState of "OFF",
     // which hides every OCG unless explicitly turned on.
-    if let Some(base_state) = default_config
-        .get("BaseState")
-        .and_then(PdfValue::as_name)
-    {
+    if let Some(base_state) = default_config.get("BaseState").and_then(PdfValue::as_name) {
         if base_state == "OFF" || base_state == "Unchanged" {
             return Err(PdfError::Unsupported(format!(
                 "documents with /OCProperties /D /BaseState /{base_state} are not supported for \

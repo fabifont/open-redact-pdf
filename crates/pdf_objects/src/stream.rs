@@ -25,9 +25,7 @@ pub fn decode_stream(stream: &PdfStream) -> PdfResult<Vec<u8>> {
         None => stream.data.clone(),
         Some(PdfValue::Name(name)) if name == "FlateDecode" => inflate(stream.data.as_slice())?,
         Some(PdfValue::Array(filters)) if filters.len() == 1 => match filters.first() {
-            Some(PdfValue::Name(name)) if name == "FlateDecode" => {
-                inflate(stream.data.as_slice())?
-            }
+            Some(PdfValue::Name(name)) if name == "FlateDecode" => inflate(stream.data.as_slice())?,
             _ => {
                 return Err(PdfError::Unsupported(
                     "only a single FlateDecode filter is supported".to_string(),
@@ -97,10 +95,7 @@ fn apply_predictor(data: &[u8], decode_parms: Option<&PdfValue>) -> PdfResult<Ve
     }
 }
 
-fn tiff_predictor_decode(
-    data: &[u8],
-    parms: &crate::types::PdfDictionary,
-) -> PdfResult<Vec<u8>> {
+fn tiff_predictor_decode(data: &[u8], parms: &crate::types::PdfDictionary) -> PdfResult<Vec<u8>> {
     let columns = parms
         .get("Columns")
         .and_then(PdfValue::as_integer)

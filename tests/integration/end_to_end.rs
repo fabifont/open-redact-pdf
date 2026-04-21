@@ -336,15 +336,15 @@ fn ocg_hidden_layer_refuses_redaction() {
     // a document because the hidden layer may carry text that the user never
     // saw and therefore cannot target. Text extraction must still work so
     // callers can inspect what is there.
-    let document = PdfDocument::open(&fixture("ocg-hidden-layer.pdf"))
-        .expect("ocg fixture should open");
+    let document =
+        PdfDocument::open(&fixture("ocg-hidden-layer.pdf")).expect("ocg fixture should open");
     let extracted = document
         .extract_text(0)
         .expect("text extraction should still succeed");
     assert!(extracted.text.contains("Visible Line"));
 
-    let mut document = PdfDocument::open(&fixture("ocg-hidden-layer.pdf"))
-        .expect("ocg fixture should open");
+    let mut document =
+        PdfDocument::open(&fixture("ocg-hidden-layer.pdf")).expect("ocg fixture should open");
     let err = document
         .apply_redactions(RedactionPlan {
             targets: vec![RedactionTarget::Rect {
@@ -375,8 +375,7 @@ fn ocg_hidden_layer_refuses_redaction() {
 fn overlay_text_is_stamped_over_redacted_regions() {
     use open_redact_pdf::{FillColor, RedactionMode};
 
-    let mut document =
-        PdfDocument::open(&fixture("simple-text.pdf")).expect("fixture should open");
+    let mut document = PdfDocument::open(&fixture("simple-text.pdf")).expect("fixture should open");
     let report = document
         .apply_redactions(RedactionPlan {
             targets: vec![RedactionTarget::Rect {
@@ -387,11 +386,7 @@ fn overlay_text_is_stamped_over_redacted_regions() {
                 height: 30.0,
             }],
             mode: Some(RedactionMode::Redact),
-            fill_color: Some(FillColor {
-                r: 0,
-                g: 0,
-                b: 0,
-            }),
+            fill_color: Some(FillColor { r: 0, g: 0, b: 0 }),
             overlay_text: Some("REDACTED".to_string()),
             remove_intersecting_annotations: Some(false),
             strip_metadata: Some(false),
@@ -419,8 +414,7 @@ fn overlay_text_is_stamped_over_redacted_regions() {
 fn overlay_text_rejected_for_strip_mode() {
     use open_redact_pdf::RedactionMode;
 
-    let mut document =
-        PdfDocument::open(&fixture("simple-text.pdf")).expect("fixture should open");
+    let mut document = PdfDocument::open(&fixture("simple-text.pdf")).expect("fixture should open");
     let err = document
         .apply_redactions(RedactionPlan {
             targets: vec![RedactionTarget::Rect {
@@ -482,8 +476,8 @@ fn vector_v_and_y_curve_segments_are_included_in_path_bounds() {
     // The fixture draws a filled curved shape built from v and y Bezier
     // shorthands directly under "Curve Secret". A search-driven redaction
     // that hits the text must also neutralize the underlying path.
-    let mut document = PdfDocument::open(&fixture("vector-vy-curves.pdf"))
-        .expect("vector-vy fixture should open");
+    let mut document =
+        PdfDocument::open(&fixture("vector-vy-curves.pdf")).expect("vector-vy fixture should open");
     let matches = document
         .search_text(0, "Curve Secret")
         .expect("search should succeed");

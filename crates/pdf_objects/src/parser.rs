@@ -1045,7 +1045,10 @@ mod tests {
         // Pages dictionary should be materialized.
         let pages_ref = document.catalog.pages_ref;
         let pages_dict = document.file.get_dictionary(pages_ref).unwrap();
-        assert_eq!(pages_dict.get("Type").and_then(|v| v.as_name()), Some("Pages"));
+        assert_eq!(
+            pages_dict.get("Type").and_then(|v| v.as_name()),
+            Some("Pages")
+        );
     }
 
     #[test]
@@ -1109,10 +1112,9 @@ mod tests {
         pdf.extend_from_slice(format!("startxref\n{}\n%%EOF\n", obj4_offset).as_bytes());
 
         match parse_pdf(&pdf) {
-            Err(PdfError::Unsupported(message)) => assert!(
-                message.contains("nested object streams"),
-                "got: {message}"
-            ),
+            Err(PdfError::Unsupported(message)) => {
+                assert!(message.contains("nested object streams"), "got: {message}")
+            }
             other => panic!("expected Unsupported, got: {other:?}"),
         }
     }
