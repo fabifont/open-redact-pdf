@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ChangeEvent } from "react";
+import { useCallback, useEffect, useState, type ChangeEvent, type FormEvent } from "react";
 import {
   applyRedactions,
   extractText,
@@ -7,6 +7,7 @@ import {
   getPageSize,
   initWasm,
   openPdf,
+  openPdfWithPassword,
   savePdf,
   searchText,
   type PdfHandle,
@@ -28,6 +29,13 @@ GlobalWorkerOptions.workerSrc = new URL(
 ).toString();
 
 export const ZOOM_LEVELS = [0.5, 0.75, 1, 1.25, 1.5, 2] as const;
+
+function isPasswordError(message: string): boolean {
+  // The Rust `PdfError::InvalidPassword` surfaces as an error whose
+  // Display string starts with "invalid password". Match case-
+  // insensitively so future phrasing tweaks still route correctly.
+  return /invalid password/i.test(message);
+}
 
 type UiTextMatch = {
   text: string;
@@ -53,6 +61,10 @@ export function App() {
   const [previewDocument, setPreviewDocument] = useState<PDFDocumentProxy | null>(null);
   const [zoom, setZoom] = useState(1);
   const [collapsedPages, setCollapsedPages] = useState<Set<number>>(new Set());
+  // When opening an encrypted PDF fails with PdfError::InvalidPassword we
+  // stash the bytes here so the user can enter a password and retry.
+  const [pendingEncryptedBytes, setPendingEncryptedBytes] = useState<Uint8Array | null>(null);
+  const [passwordInput, setPasswordInput] = useState("");
 
   useEffect(() => {
     if (!pdfBytes) {
@@ -82,7 +94,7 @@ export function App() {
     };
   }, [pdfBytes]);
 
-  async function loadPdfBytes(bytes: Uint8Array) {
+  async function loadPdfBytes(bytes: Uint8Array, password: string | null = null) {
     setError(null);
     setStatus("Initializing WebAssembly...");
     await initWasm();
@@ -90,7 +102,9 @@ export function App() {
       freePdf(handle);
       setHandle(null);
     }
-    const nextHandle = openPdf(Uint8Array.from(bytes));
+    const input = Uint8Array.from(bytes);
+    const nextHandle =
+      password === null ? openPdf(input) : openPdfWithPassword(input, password);
     const pageCount = getPageCount(nextHandle);
     const sizes = Array.from({ length: pageCount }, (_, pageIndex) =>
       getPageSize(nextHandle, pageIndex)
@@ -127,14 +141,58 @@ export function App() {
   async function onFileChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
+    let bytes: Uint8Array;
     try {
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      await loadPdfBytes(bytes);
+      bytes = new Uint8Array(await file.arrayBuffer());
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : String(caught);
       setError(message);
-      setStatus("Failed to load PDF.");
+      setStatus("Failed to read file.");
+      return;
     }
+    try {
+      await loadPdfBytes(bytes);
+      setPendingEncryptedBytes(null);
+      setPasswordInput("");
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : String(caught);
+      if (isPasswordError(message)) {
+        setPendingEncryptedBytes(bytes);
+        setPasswordInput("");
+        setStatus("Enter the password to open this encrypted PDF.");
+        setError(null);
+      } else {
+        setError(message);
+        setStatus("Failed to load PDF.");
+      }
+    }
+  }
+
+  async function submitPasswordAttempt(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!pendingEncryptedBytes) return;
+    try {
+      await loadPdfBytes(pendingEncryptedBytes, passwordInput);
+      setPendingEncryptedBytes(null);
+      setPasswordInput("");
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : String(caught);
+      if (isPasswordError(message)) {
+        setError("Password did not authenticate. Try again.");
+      } else {
+        setError(message);
+        setStatus("Failed to load PDF.");
+        setPendingEncryptedBytes(null);
+        setPasswordInput("");
+      }
+    }
+  }
+
+  function cancelPasswordPrompt() {
+    setPendingEncryptedBytes(null);
+    setPasswordInput("");
+    setStatus("Load a PDF to start.");
+    setError(null);
   }
 
   function addManualTarget(target: RectTarget) {
@@ -256,6 +314,30 @@ export function App() {
         zoom={zoom}
         onZoomChange={setZoom}
       />
+      {pendingEncryptedBytes && (
+        <form className="password-prompt" onSubmit={submitPasswordAttempt}>
+          <label className="password-prompt-label">
+            <span>Password</span>
+            <input
+              type="password"
+              value={passwordInput}
+              autoFocus
+              onChange={(event) => setPasswordInput(event.target.value)}
+              placeholder="User or owner password"
+            />
+          </label>
+          <button type="submit" className="password-prompt-submit">
+            Open
+          </button>
+          <button
+            type="button"
+            className="password-prompt-cancel"
+            onClick={cancelPasswordPrompt}
+          >
+            Cancel
+          </button>
+        </form>
+      )}
       <div className="main-layout">
         <Sidebar
           hasHandle={handle !== null}
