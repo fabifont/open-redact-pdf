@@ -330,6 +330,74 @@ fn inline_image_and_dictionary_operand_pages_are_parseable() {
 }
 
 #[test]
+fn winansi_encoded_simple_font_decodes_non_ascii_bytes() {
+    let mut document =
+        PdfDocument::open(&fixture("winansi-font.pdf")).expect("winansi fixture should open");
+    let extracted = document
+        .extract_text(0)
+        .expect("text extraction should succeed");
+    assert!(
+        extracted.text.contains("CaffÉ"),
+        "É byte (0xC9) should decode under WinAnsi, got: {}",
+        extracted.text
+    );
+    assert!(
+        extracted.text.contains("50°"),
+        "° byte should decode under WinAnsi, got: {}",
+        extracted.text
+    );
+    assert!(
+        extracted.text.contains("€"),
+        "€ byte (0x80) should decode under WinAnsi, got: {}",
+        extracted.text
+    );
+    assert!(
+        extracted.text.contains("l’anno"),
+        "’ byte (0x92) should decode to U+2019, got: {}",
+        extracted.text
+    );
+    assert!(
+        !extracted.text.contains('\u{FFFD}'),
+        "no replacement characters should appear, got: {}",
+        extracted.text
+    );
+
+    // Search + redact should still work end-to-end on the decoded text.
+    let matches = document
+        .search_text(0, "50°")
+        .expect("search should succeed");
+    assert_eq!(matches.len(), 1);
+    let quads = matches[0]
+        .quads
+        .iter()
+        .map(|quad| quad.points)
+        .collect::<Vec<_>>();
+    let report = document
+        .apply_redactions(RedactionPlan {
+            targets: vec![RedactionTarget::QuadGroup {
+                page_index: 0,
+                quads,
+            }],
+            mode: None,
+            fill_color: None,
+            overlay_text: None,
+            remove_intersecting_annotations: Some(false),
+            strip_metadata: Some(false),
+            strip_attachments: Some(false),
+        })
+        .expect("redaction should succeed");
+    assert!(report.text_glyphs_removed > 0);
+
+    let saved = document.save().expect("save should succeed");
+    let reopened = PdfDocument::open(&saved).expect("saved pdf should reopen");
+    let extracted_after = reopened
+        .extract_text(0)
+        .expect("reopened extraction should succeed");
+    assert!(!extracted_after.text.contains("50°"));
+    assert!(extracted_after.text.contains("CaffÉ"));
+}
+
+#[test]
 fn xref_stream_and_object_stream_fixture_is_parseable_and_redactable() {
     let mut document = PdfDocument::open(&fixture("xref-object-stream.pdf"))
         .expect("xref+ObjStm fixture should open");

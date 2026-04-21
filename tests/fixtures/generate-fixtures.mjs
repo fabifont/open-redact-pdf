@@ -457,6 +457,41 @@ function buildIncrementalPdf() {
 
 fs.writeFileSync(path.join(fixturesDir, "incremental-update.pdf"), buildIncrementalPdf(), "binary");
 
+// Single-byte Type1 font declaring /Encoding /WinAnsiEncoding so that
+// bytes like 0xC9, 0xE0, 0xB0, 0x92, 0x80 decode to É, à, °, ’, € instead
+// of replacement characters. The content stream shows a string built
+// directly from those WinAnsi byte values.
+writeFixture("winansi-font.pdf", {
+  objects: [
+    { id: 1, value: { Type: "/Catalog", Pages: { ref: [2, 0] } } },
+    { id: 2, value: { Type: "/Pages", Count: 1, Kids: [{ ref: [3, 0] }] } },
+    basePageObjects({
+      pageId: 3,
+      pagesId: 2,
+      contentId: 4,
+      resources: { Font: { F1: { ref: [5, 0] } } },
+    }),
+    {
+      id: 4,
+      stream: {
+        dict: {},
+        // (Caff\xC9 50\xB0 \x80 l\x92anno) — WinAnsi encoding of "Caffé 50° € l’anno"
+        data: "BT\n/F1 24 Tf\n72 700 Td\n(Caff\xC9 50\xB0 \x80 l\x92anno) Tj\nET\n",
+      },
+    },
+    {
+      id: 5,
+      value: {
+        Type: "/Font",
+        Subtype: "/Type1",
+        BaseFont: "/Helvetica",
+        Encoding: "/WinAnsiEncoding",
+      },
+    },
+  ],
+  trailer: { Root: { ref: [1, 0] } },
+});
+
 // --- PDF 1.5 xref stream + object stream fixture ---
 // Builds a PDF where Catalog, Pages, Page, and Font dictionaries live inside
 // an object stream (ObjStm). The content stream cannot be stored inside an
