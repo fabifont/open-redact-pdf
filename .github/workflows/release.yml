@@ -33,7 +33,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-          components: clippy
+          components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - name: Install wasm-pack
         run: cargo install wasm-pack --locked
@@ -43,6 +43,7 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Run release validation
         run: |
+          cargo fmt --all --check
           cargo test --workspace
           cargo clippy --workspace --all-targets -- -D warnings
           node scripts/build-wasm.mjs

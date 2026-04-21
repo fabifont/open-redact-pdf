@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 
 const repoRoot = resolve(import.meta.dirname, "..");
@@ -25,7 +25,45 @@ if (rootPackage.version !== version || sdkPackage.version !== version || cargoVe
   process.exit(1);
 }
 
-console.log(`release version ${version} matches root package, TS SDK, and Cargo workspace`);
+// Every crates/*/Cargo.toml inter-crate dep pin must match the workspace
+// version. Otherwise `cargo publish` resolves path-dep siblings from
+// crates.io at a stale version, which either fails to compile (if the new
+// crate uses a symbol only the new sibling exposes) or silently ships a
+// build that does not match what the workspace was tested against.
+const cratesDir = resolve(repoRoot, "crates");
+const crateEntries = readdirSync(cratesDir).filter((entry) =>
+  statSync(resolve(cratesDir, entry)).isDirectory(),
+);
+const pinPattern = /^\s*[A-Za-z0-9_-]+\s*=\s*\{[^}]*package\s*=\s*"(open-redact-pdf[A-Za-z0-9_-]*)"[^}]*version\s*=\s*"([^"]+)"[^}]*\}/gm;
+const pinMismatches = [];
+for (const entry of crateEntries) {
+  const manifestPath = resolve(cratesDir, entry, "Cargo.toml");
+  let manifest;
+  try {
+    manifest = readFileSync(manifestPath, "utf8");
+  } catch {
+    continue;
+  }
+  pinPattern.lastIndex = 0;
+  let match;
+  while ((match = pinPattern.exec(manifest)) !== null) {
+    const [, pkg, pinned] = match;
+    if (pinned !== version) {
+      pinMismatches.push(`${manifestPath}: ${pkg} pinned at "${pinned}" (expected "${version}")`);
+    }
+  }
+}
+if (pinMismatches.length > 0) {
+  console.error("inter-crate version pin mismatch:");
+  for (const line of pinMismatches) {
+    console.error(`  ${line}`);
+  }
+  process.exit(1);
+}
+
+console.log(
+  `release version ${version} matches root package, TS SDK, Cargo workspace, and ${crateEntries.length} inter-crate pins`,
+);
 
 function matchValue(source, pattern) {
   const match = source.match(pattern);
