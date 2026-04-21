@@ -330,6 +330,42 @@ fn inline_image_and_dictionary_operand_pages_are_parseable() {
 }
 
 #[test]
+fn form_xobject_text_is_extracted_and_searchable() {
+    let document = PdfDocument::open(&fixture("form-xobject-text.pdf"))
+        .expect("form-xobject fixture should open");
+    let extracted = document
+        .extract_text(0)
+        .expect("text extraction should succeed");
+    assert!(
+        extracted.text.contains("Page Outer"),
+        "outer page text should still be extracted, got: {}",
+        extracted.text
+    );
+    assert!(
+        extracted.text.contains("Form Inner Secret"),
+        "Form XObject text should be extracted, got: {}",
+        extracted.text
+    );
+
+    // Search should locate the Form XObject text and produce a valid quad.
+    let matches = document
+        .search_text(0, "Form Inner Secret")
+        .expect("search should succeed");
+    assert_eq!(matches.len(), 1);
+    assert!(!matches[0].quads.is_empty());
+
+    // The quad should land inside the page bounds (612 x 792). The Form's
+    // Matrix translates content by +100 in y, and the page content stream
+    // places the Form origin at (72, 600), so the glyphs sit near y=700.
+    let bbox = matches[0].quads[0].bounding_rect();
+    assert!(
+        bbox.x >= 0.0 && bbox.max_x() <= 612.0 && bbox.y >= 0.0 && bbox.max_y() <= 792.0,
+        "quad should be within page bounds, got bbox: {:?}",
+        bbox
+    );
+}
+
+#[test]
 fn winansi_encoded_simple_font_decodes_non_ascii_bytes() {
     let mut document =
         PdfDocument::open(&fixture("winansi-font.pdf")).expect("winansi fixture should open");

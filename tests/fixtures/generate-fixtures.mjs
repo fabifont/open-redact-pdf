@@ -457,6 +457,61 @@ function buildIncrementalPdf() {
 
 fs.writeFileSync(path.join(fixturesDir, "incremental-update.pdf"), buildIncrementalPdf(), "binary");
 
+// Form XObject fixture. Page text is split between the page content stream
+// ("Page Outer") and a referenced Form XObject ("Form Inner Secret"). The
+// Form has its own Matrix (translating the inner text by +100 in y) and its
+// own Font resource (F2) to prove that Form-local resources are used while
+// still inheriting any unmentioned names from the parent.
+writeFixture("form-xobject-text.pdf", {
+  objects: [
+    { id: 1, value: { Type: "/Catalog", Pages: { ref: [2, 0] } } },
+    { id: 2, value: { Type: "/Pages", Count: 1, Kids: [{ ref: [3, 0] }] } },
+    basePageObjects({
+      pageId: 3,
+      pagesId: 2,
+      contentId: 4,
+      resources: {
+        Font: { F1: { ref: [5, 0] } },
+        XObject: { Fm1: { ref: [6, 0] } },
+      },
+    }),
+    {
+      id: 4,
+      stream: {
+        dict: {},
+        data:
+          "BT\n/F1 18 Tf\n72 750 Td\n(Page Outer) Tj\nET\n" +
+          "q\n1 0 0 1 72 400 cm\n/Fm1 Do\nQ\n",
+      },
+    },
+    fontObject,
+    {
+      id: 6,
+      stream: {
+        dict: {
+          Type: "/XObject",
+          Subtype: "/Form",
+          FormType: 1,
+          BBox: [0, 0, 400, 200],
+          Matrix: [1, 0, 0, 1, 0, 100],
+          Resources: { Font: { F2: { ref: [7, 0] } } },
+        },
+        data: "BT\n/F2 14 Tf\n0 0 Td\n(Form Inner Secret) Tj\nET\n",
+      },
+    },
+    {
+      id: 7,
+      value: {
+        Type: "/Font",
+        Subtype: "/Type1",
+        BaseFont: "/Helvetica",
+        Encoding: "/WinAnsiEncoding",
+      },
+    },
+  ],
+  trailer: { Root: { ref: [1, 0] } },
+});
+
 // Single-byte Type1 font declaring /Encoding /WinAnsiEncoding so that
 // bytes like 0xC9, 0xE0, 0xB0, 0x92, 0x80 decode to É, à, °, ’, € instead
 // of replacement characters. The content stream shows a string built
