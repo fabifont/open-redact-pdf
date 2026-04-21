@@ -1,16 +1,23 @@
 //! PDF Standard Security Handler (encryption) — decryption side only.
 //!
 //! This module implements enough of the PDF 1.7 Standard Security Handler
-//! to decrypt documents produced by revisions 2 and 3 (RC4 with a 40-bit
-//! or 128-bit key) under either the user password or the owner password.
-//! The empty user password is accepted as a special case of the general
-//! user-password path.
+//! to decrypt documents produced by:
 //!
-//! AES (V=4 / V=5, R=4..6) and public-key security handlers are not
-//! implemented here and still fail up front with `PdfError::Unsupported`.
+//! - revisions 2 and 3 (V=1 or V=2, RC4 with a 40-bit or 128-bit key),
+//! - revision 4 with V=4 crypt filters naming `/V2` (RC4-128) or
+//!   `/AESV2` (AES-128-CBC) as the stream and string method,
+//!
+//! under either the user password or the owner password. The empty user
+//! password is accepted as a special case of the general user-password
+//! path.
+//!
+//! V=5 / R=6 (AES-256) and public-key security handlers are not yet
+//! implemented and still fail up front with `PdfError::Unsupported`.
 //! They can be layered on top without changing this module's public
 //! surface.
 
+use aes::Aes128;
+use aes::cipher::{BlockDecrypt, KeyInit, generic_array::GenericArray};
 use md5::{Digest, Md5};
 
 use crate::error::{PdfError, PdfResult};
@@ -26,11 +33,40 @@ const PASSWORD_PADDING: [u8; 32] = [
 pub enum SecurityRevision {
     R2,
     R3,
+    R4,
+}
+
+/// Which crypt filter method applies to a given piece of ciphertext.
+///
+/// V=1/2 documents always use [`CryptMethod::V2`] (RC4) for everything.
+/// V=4 documents name a crypt filter per kind (`/StmF`, `/StrF`, `/EFF`);
+/// each may point at `/Identity` (no encryption), a V2 filter (RC4), or
+/// an AESV2 filter (AES-128-CBC).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CryptMethod {
+    Identity,
+    V2,
+    AesV2,
+}
+
+/// Which slot the ciphertext belongs to. Drives the crypt-method choice
+/// (string vs stream) on V=4 documents and is a no-op on V=1/2.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BytesKind {
+    String,
+    Stream,
 }
 
 #[derive(Debug, Clone)]
 pub struct StandardSecurityHandler {
     file_key: Vec<u8>,
+    string_method: CryptMethod,
+    stream_method: CryptMethod,
+    /// `false` only for V=4 documents that explicitly set
+    /// `/EncryptMetadata false`; `true` everywhere else. When `false`,
+    /// streams with `/Type /Metadata` and `/Subtype /XML` skip
+    /// decryption.
+    encrypt_metadata: bool,
 }
 
 impl StandardSecurityHandler {
@@ -62,28 +98,50 @@ impl StandardSecurityHandler {
         let revision = match r {
             2 => SecurityRevision::R2,
             3 => SecurityRevision::R3,
+            4 => SecurityRevision::R4,
             other => {
                 return Err(PdfError::Unsupported(format!(
-                    "Standard security handler revision {other} is not supported (only R=2 and R=3 handled)"
+                    "Standard security handler revision {other} is not supported (only R=2, R=3, and R=4 handled)"
                 )));
             }
         };
-        if !(1..=2).contains(&v) {
-            return Err(PdfError::Unsupported(format!(
-                "Standard security handler V={v} is not supported (only V=1 and V=2 handled)"
-            )));
-        }
 
-        let key_length_bits = encrypt_dict
-            .get("Length")
-            .and_then(PdfValue::as_integer)
-            .unwrap_or(40);
-        if key_length_bits % 8 != 0 || !(40..=128).contains(&key_length_bits) {
-            return Err(PdfError::Corrupt(format!(
-                "invalid /Length {key_length_bits} in Encrypt dictionary"
-            )));
-        }
-        let key_length_bytes = (key_length_bits / 8) as usize;
+        let (string_method, stream_method, key_length_bytes) = match v {
+            1 | 2 => {
+                let bits = encrypt_dict
+                    .get("Length")
+                    .and_then(PdfValue::as_integer)
+                    .unwrap_or(40);
+                if bits % 8 != 0 || !(40..=128).contains(&bits) {
+                    return Err(PdfError::Corrupt(format!(
+                        "invalid /Length {bits} in Encrypt dictionary"
+                    )));
+                }
+                (CryptMethod::V2, CryptMethod::V2, (bits / 8) as usize)
+            }
+            4 => {
+                // V=4: crypt filters decide the method per slot. The file
+                // key is always 128-bit (16 bytes).
+                let (strf, stmf) = resolve_v4_crypt_filters(encrypt_dict)?;
+                (strf, stmf, 16)
+            }
+            other => {
+                return Err(PdfError::Unsupported(format!(
+                    "Standard security handler V={other} is not supported (only V=1, V=2, and V=4 handled)"
+                )));
+            }
+        };
+
+        // V=4's Algorithm 2 step 5: when /EncryptMetadata is explicitly
+        // false, 0xFFFFFFFF is appended before the 50-round rehash.
+        let encrypt_metadata = if matches!(revision, SecurityRevision::R4) {
+            encrypt_dict
+                .get("EncryptMetadata")
+                .and_then(PdfValue::as_bool)
+                .unwrap_or(true)
+        } else {
+            true
+        };
 
         let o = pdf_string_bytes(encrypt_dict, "O")?;
         let u = pdf_string_bytes(encrypt_dict, "U")?;
@@ -98,10 +156,21 @@ impl StandardSecurityHandler {
         }
 
         // First try the supplied password as the user password.
-        let user_file_key = compute_file_key(password, &o, p as i32, id_first, key_length_bytes);
+        let user_file_key = compute_file_key(
+            password,
+            &o,
+            p as i32,
+            id_first,
+            key_length_bytes,
+            revision,
+            encrypt_metadata,
+        );
         if authenticate_user_password(&user_file_key, revision, &u, id_first) {
             return Ok(Some(Self {
                 file_key: user_file_key,
+                string_method,
+                stream_method,
+                encrypt_metadata,
             }));
         }
 
@@ -118,25 +187,60 @@ impl StandardSecurityHandler {
             p as i32,
             id_first,
             key_length_bytes,
+            revision,
+            encrypt_metadata,
         );
         if authenticate_user_password(&owner_file_key, revision, &u, id_first) {
             return Ok(Some(Self {
                 file_key: owner_file_key,
+                string_method,
+                stream_method,
+                encrypt_metadata,
             }));
         }
 
         Ok(None)
     }
 
-    /// Decrypts `bytes` produced for the indirect object `(num, gen)` under
-    /// RC4 with the per-object key described in PDF 1.7 algorithm 1.
-    pub fn decrypt_bytes(&self, bytes: &[u8], object_ref: ObjectRef) -> Vec<u8> {
-        let object_key = self.object_key(object_ref);
-        rc4(&object_key, bytes)
+    /// Returns true when this handler was configured with
+    /// `/EncryptMetadata false`. Parser uses this to skip
+    /// `/Type /Metadata` streams.
+    pub fn encrypts_metadata(&self) -> bool {
+        self.encrypt_metadata
     }
 
-    fn object_key(&self, object_ref: ObjectRef) -> Vec<u8> {
-        let mut material = Vec::with_capacity(self.file_key.len() + 5);
+    /// Decrypts `bytes` produced for the indirect object `(num, gen)`.
+    /// The crypt method is chosen per `kind` — strings use `/StrF`,
+    /// streams use `/StmF`. Returns the ciphertext unchanged for
+    /// `/Identity` filters; returns an error for malformed AES input
+    /// (wrong length, bad PKCS#7 padding).
+    pub fn decrypt_bytes(
+        &self,
+        bytes: &[u8],
+        object_ref: ObjectRef,
+        kind: BytesKind,
+    ) -> PdfResult<Vec<u8>> {
+        let method = match kind {
+            BytesKind::String => self.string_method,
+            BytesKind::Stream => self.stream_method,
+        };
+        match method {
+            CryptMethod::Identity => Ok(bytes.to_vec()),
+            CryptMethod::V2 => Ok(rc4(&self.object_key(object_ref, method), bytes)),
+            CryptMethod::AesV2 => aes_128_cbc_decrypt(&self.object_key(object_ref, method), bytes),
+        }
+    }
+
+    fn object_key(&self, object_ref: ObjectRef, method: CryptMethod) -> Vec<u8> {
+        // Algorithm 1 / 1a. Append the 4-byte ASCII suffix "sAlT" when
+        // the method is AES so keys derived for the same object under
+        // different methods never collide.
+        let suffix_len = if matches!(method, CryptMethod::AesV2) {
+            9
+        } else {
+            5
+        };
+        let mut material = Vec::with_capacity(self.file_key.len() + suffix_len);
         material.extend_from_slice(&self.file_key);
         let num = object_ref.object_number.to_le_bytes();
         material.push(num[0]);
@@ -145,10 +249,119 @@ impl StandardSecurityHandler {
         let generation = object_ref.generation.to_le_bytes();
         material.push(generation[0]);
         material.push(generation[1]);
+        if matches!(method, CryptMethod::AesV2) {
+            material.extend_from_slice(b"sAlT");
+        }
         let digest = md5_bytes(&material);
         let truncated_len = (self.file_key.len() + 5).min(16);
         digest[..truncated_len].to_vec()
     }
+}
+
+fn resolve_v4_crypt_filters(encrypt_dict: &PdfDictionary) -> PdfResult<(CryptMethod, CryptMethod)> {
+    let strf = encrypt_dict
+        .get("StrF")
+        .and_then(PdfValue::as_name)
+        .unwrap_or("Identity");
+    let stmf = encrypt_dict
+        .get("StmF")
+        .and_then(PdfValue::as_name)
+        .unwrap_or("Identity");
+    let cf = encrypt_dict.get("CF").and_then(|value| match value {
+        PdfValue::Dictionary(dict) => Some(dict),
+        _ => None,
+    });
+    Ok((
+        resolve_crypt_filter_method(cf, strf)?,
+        resolve_crypt_filter_method(cf, stmf)?,
+    ))
+}
+
+fn resolve_crypt_filter_method(cf: Option<&PdfDictionary>, name: &str) -> PdfResult<CryptMethod> {
+    // The spec reserves the `Identity` filter name for "no encryption"
+    // and specifies that it never appears in /CF; treat it as a pass-
+    // through without consulting the dictionary.
+    if name == "Identity" {
+        return Ok(CryptMethod::Identity);
+    }
+    let subfilter = cf
+        .and_then(|dict| dict.get(name))
+        .and_then(|value| match value {
+            PdfValue::Dictionary(dict) => Some(dict),
+            _ => None,
+        })
+        .ok_or_else(|| {
+            PdfError::Corrupt(format!(
+                "Encrypt /CF is missing the crypt filter entry /{name}"
+            ))
+        })?;
+    let cfm = subfilter
+        .get("CFM")
+        .and_then(PdfValue::as_name)
+        .ok_or_else(|| {
+            PdfError::Corrupt(format!("crypt filter /{name} is missing the /CFM entry"))
+        })?;
+    match cfm {
+        "V2" => Ok(CryptMethod::V2),
+        "AESV2" => Ok(CryptMethod::AesV2),
+        "None" => Ok(CryptMethod::Identity),
+        other => Err(PdfError::Unsupported(format!(
+            "crypt filter method /{other} is not supported (only /V2 and /AESV2 handled)"
+        ))),
+    }
+}
+
+/// Decrypts AES-128-CBC ciphertext whose first 16 bytes are the IV and
+/// whose payload is PKCS#7-padded. Used for V=4 /AESV2 streams and
+/// strings.
+fn aes_128_cbc_decrypt(key: &[u8], data: &[u8]) -> PdfResult<Vec<u8>> {
+    if key.len() != 16 {
+        return Err(PdfError::Corrupt(format!(
+            "AES-128 object key must be 16 bytes, got {}",
+            key.len()
+        )));
+    }
+    if data.len() < 32 || data.len() % 16 != 0 {
+        return Err(PdfError::Corrupt(format!(
+            "AES-128-CBC ciphertext must be at least 32 bytes and a multiple of 16; got {}",
+            data.len()
+        )));
+    }
+    let cipher = Aes128::new_from_slice(key)
+        .map_err(|error| PdfError::Corrupt(format!("AES-128 key rejected by cipher: {error}")))?;
+    let mut prev_block: [u8; 16] = data[..16].try_into().expect("slice is 16 bytes");
+    let mut output = Vec::with_capacity(data.len() - 16);
+    for chunk in data[16..].chunks(16) {
+        let mut block = GenericArray::clone_from_slice(chunk);
+        cipher.decrypt_block(&mut block);
+        for (plain_byte, iv_byte) in block.iter_mut().zip(prev_block.iter()) {
+            *plain_byte ^= iv_byte;
+        }
+        output.extend_from_slice(block.as_slice());
+        prev_block.copy_from_slice(chunk);
+    }
+    strip_pkcs7(output)
+}
+
+fn strip_pkcs7(mut data: Vec<u8>) -> PdfResult<Vec<u8>> {
+    let Some(&pad) = data.last() else {
+        return Err(PdfError::Corrupt(
+            "AES-128-CBC plaintext is empty — missing PKCS#7 padding".to_string(),
+        ));
+    };
+    if pad == 0 || pad > 16 || (pad as usize) > data.len() {
+        return Err(PdfError::Corrupt(format!(
+            "AES-128-CBC PKCS#7 padding byte {pad} is out of range"
+        )));
+    }
+    let new_len = data.len() - pad as usize;
+    if !data[new_len..].iter().all(|byte| *byte == pad) {
+        return Err(PdfError::Corrupt(
+            "AES-128-CBC PKCS#7 padding bytes do not match".to_string(),
+        ));
+    }
+    data.truncate(new_len);
+    Ok(data)
 }
 
 fn pdf_string_bytes(dict: &PdfDictionary, key: &str) -> PdfResult<Vec<u8>> {
@@ -167,6 +380,8 @@ fn compute_file_key(
     permissions: i32,
     id_first: &[u8],
     key_length_bytes: usize,
+    revision: SecurityRevision,
+    encrypt_metadata: bool,
 ) -> Vec<u8> {
     // Algorithm 2 (PDF 1.7 section 7.6.3.3):
     //   1. Pad the password to 32 bytes.
@@ -179,14 +394,19 @@ fn compute_file_key(
     hasher.update(permissions.to_le_bytes());
     //   4. Append the first element of /ID.
     hasher.update(id_first);
-    //   (Step 5 — append 0xFFFFFFFF when /EncryptMetadata is false — is an
-    //   R=4+ rule; our MVP only handles R<=3 so skip it.)
+    //   5. (R>=4 only) When /EncryptMetadata is explicitly false, append
+    //      0xFFFFFFFF. R<=3 skips this step.
+    if matches!(revision, SecurityRevision::R4) && !encrypt_metadata {
+        hasher.update([0xFFu8; 4]);
+    }
     let mut digest = hasher.finalize_reset();
 
     // Algorithm 2, step 6: for R>=3, re-MD5 the first n bytes 50 times.
-    for _ in 0..50 {
-        hasher.update(&digest[..key_length_bytes]);
-        digest = hasher.finalize_reset();
+    if matches!(revision, SecurityRevision::R3 | SecurityRevision::R4) {
+        for _ in 0..50 {
+            hasher.update(&digest[..key_length_bytes]);
+            digest = hasher.finalize_reset();
+        }
     }
     digest[..key_length_bytes].to_vec()
 }
@@ -209,17 +429,17 @@ fn recover_user_password_from_owner(
 ) -> Vec<u8> {
     // Algorithm 7 (PDF 1.7 §7.6.3.4). Symmetric inverse of Algorithm 3:
     //   1. Pad the owner password and MD5 it.
-    //   2. For R=3 re-hash 50 times.
+    //   2. For R>=3 re-hash 50 times.
     //   3. Truncate to `key_length_bytes` — this is the RC4 key used on /O.
     //   4. For R=2, RC4-decrypt /O once with that key.
-    //      For R=3, RC4-decrypt /O 20 times with keys (base XOR i) for i
+    //      For R>=3, RC4-decrypt /O 20 times with keys (base XOR i) for i
     //      decreasing from 19 down to 0.
     //   5. The result is the padded user password.
     let padded = pad_password(owner_password);
     let mut hasher = Md5::new();
     hasher.update(padded);
     let mut digest = hasher.finalize_reset();
-    if matches!(revision, SecurityRevision::R3) {
+    if matches!(revision, SecurityRevision::R3 | SecurityRevision::R4) {
         for _ in 0..50 {
             hasher.update(&digest[..key_length_bytes]);
             digest = hasher.finalize_reset();
@@ -229,7 +449,7 @@ fn recover_user_password_from_owner(
 
     match revision {
         SecurityRevision::R2 => rc4(&base_key, o_entry),
-        SecurityRevision::R3 => {
+        SecurityRevision::R3 | SecurityRevision::R4 => {
             let mut buffer = o_entry.to_vec();
             for i in (0u8..=19).rev() {
                 let key: Vec<u8> = base_key.iter().map(|byte| byte ^ i).collect();
@@ -253,7 +473,7 @@ fn authenticate_user_password(
             let encrypted = rc4(file_key, &PASSWORD_PADDING);
             encrypted == u_entry
         }
-        SecurityRevision::R3 => {
+        SecurityRevision::R3 | SecurityRevision::R4 => {
             // Algorithm 5.
             let mut hasher = Md5::new();
             hasher.update(PASSWORD_PADDING);
@@ -320,7 +540,58 @@ pub(crate) mod test_helpers {
         id_first: &[u8],
         key_length_bytes: usize,
     ) -> Vec<u8> {
-        super::compute_file_key(password, o_entry, permissions, id_first, key_length_bytes)
+        // Callers that do not care about the revision use the R=3 variant,
+        // which matches the write side of the existing RC4 fixtures.
+        super::compute_file_key(
+            password,
+            o_entry,
+            permissions,
+            id_first,
+            key_length_bytes,
+            SecurityRevision::R3,
+            true,
+        )
+    }
+
+    pub fn compute_file_key_with_revision(
+        password: &[u8],
+        o_entry: &[u8],
+        permissions: i32,
+        id_first: &[u8],
+        key_length_bytes: usize,
+        revision: SecurityRevision,
+    ) -> Vec<u8> {
+        super::compute_file_key(
+            password,
+            o_entry,
+            permissions,
+            id_first,
+            key_length_bytes,
+            revision,
+            true,
+        )
+    }
+
+    /// R=4 variant of the file-key derivation, exposed so AES-128 test
+    /// fixtures can build a matching file key and `/U` entry. Mirrors
+    /// [`compute_file_key`] but honours `encrypt_metadata` so the
+    /// Algorithm 2 step-5 branch (append 0xFFFFFFFF) can be exercised.
+    pub fn compute_file_key_r4(
+        password: &[u8],
+        o_entry: &[u8],
+        permissions: i32,
+        id_first: &[u8],
+        encrypt_metadata: bool,
+    ) -> Vec<u8> {
+        super::compute_file_key(
+            password,
+            o_entry,
+            permissions,
+            id_first,
+            16,
+            SecurityRevision::R4,
+            encrypt_metadata,
+        )
     }
 
     /// Produce the 32-byte `/U` value that corresponds to the empty user
@@ -356,7 +627,7 @@ pub(crate) mod test_helpers {
         let mut hasher = Md5::new();
         hasher.update(padded_owner);
         let mut digest = hasher.finalize_reset();
-        if matches!(revision, SecurityRevision::R3) {
+        if matches!(revision, SecurityRevision::R3 | SecurityRevision::R4) {
             for _ in 0..50 {
                 hasher.update(&digest[..key_length_bytes]);
                 digest = hasher.finalize_reset();
@@ -367,7 +638,7 @@ pub(crate) mod test_helpers {
         let padded_user = pad_password(user_password);
         match revision {
             SecurityRevision::R2 => super::rc4(&base_key, &padded_user),
-            SecurityRevision::R3 => {
+            SecurityRevision::R3 | SecurityRevision::R4 => {
                 let mut buffer = super::rc4(&base_key, &padded_user);
                 for i in 1u8..=19 {
                     let key: Vec<u8> = base_key.iter().map(|byte| byte ^ i).collect();
@@ -394,6 +665,56 @@ pub(crate) mod test_helpers {
         let digest = super::md5_bytes(&material);
         let truncated_len = (file_key.len() + 5).min(16);
         digest[..truncated_len].to_vec()
+    }
+
+    /// AES variant of [`object_key`]: appends the literal `sAlT` suffix
+    /// before the MD5 so the V=4 /AESV2 path derives a distinct key
+    /// from the RC4 path for the same indirect object.
+    pub fn object_key_aes(file_key: &[u8], object_number: u32, generation: u16) -> Vec<u8> {
+        let mut material = Vec::with_capacity(file_key.len() + 9);
+        material.extend_from_slice(file_key);
+        let num = object_number.to_le_bytes();
+        material.push(num[0]);
+        material.push(num[1]);
+        material.push(num[2]);
+        let gen_bytes = generation.to_le_bytes();
+        material.push(gen_bytes[0]);
+        material.push(gen_bytes[1]);
+        material.extend_from_slice(b"sAlT");
+        let digest = super::md5_bytes(&material);
+        let truncated_len = (file_key.len() + 5).min(16);
+        digest[..truncated_len].to_vec()
+    }
+
+    /// Encrypt `plaintext` with AES-128-CBC, PKCS#7-padded, and prefix
+    /// the 16-byte IV — matching exactly what the parser's decryption
+    /// path expects. Used by tests to build synthetic V=4 fixtures.
+    pub fn aes_128_cbc_encrypt(key: &[u8], iv: &[u8; 16], plaintext: &[u8]) -> Vec<u8> {
+        use aes::cipher::BlockEncrypt;
+
+        assert_eq!(key.len(), 16, "AES-128 key must be 16 bytes");
+        let cipher = Aes128::new_from_slice(key).expect("key length validated");
+
+        // Pad with PKCS#7, always appending at least one byte of padding.
+        let pad_len = 16 - (plaintext.len() % 16);
+        let mut padded = Vec::with_capacity(plaintext.len() + pad_len);
+        padded.extend_from_slice(plaintext);
+        padded.extend(std::iter::repeat_n(pad_len as u8, pad_len));
+
+        let mut output = Vec::with_capacity(16 + padded.len());
+        output.extend_from_slice(iv);
+        let mut prev: [u8; 16] = *iv;
+        for chunk in padded.chunks(16) {
+            let mut block = [0u8; 16];
+            for ((b, plain), iv_byte) in block.iter_mut().zip(chunk.iter()).zip(prev.iter()) {
+                *b = plain ^ iv_byte;
+            }
+            let mut arr = GenericArray::clone_from_slice(&block);
+            cipher.encrypt_block(&mut arr);
+            output.extend_from_slice(arr.as_slice());
+            prev.copy_from_slice(arr.as_slice());
+        }
+        output
     }
 }
 
@@ -526,6 +847,175 @@ mod tests {
         assert_eq!(handler.file_key.len(), 16);
     }
 
+    fn build_encrypt_dict_v4_aesv2(
+        o_entry: Vec<u8>,
+        u_entry: Vec<u8>,
+        permissions: i32,
+        encrypt_metadata: Option<bool>,
+    ) -> PdfDictionary {
+        let mut std_cf = PdfDictionary::default();
+        std_cf.insert("CFM".to_string(), PdfValue::Name("AESV2".to_string()));
+        std_cf.insert("Length".to_string(), PdfValue::Integer(16));
+        std_cf.insert(
+            "AuthEvent".to_string(),
+            PdfValue::Name("DocOpen".to_string()),
+        );
+
+        let mut cf = PdfDictionary::default();
+        cf.insert("StdCF".to_string(), PdfValue::Dictionary(std_cf));
+
+        let mut dict = PdfDictionary::default();
+        dict.insert("Filter".to_string(), PdfValue::Name("Standard".to_string()));
+        dict.insert("V".to_string(), PdfValue::Integer(4));
+        dict.insert("R".to_string(), PdfValue::Integer(4));
+        dict.insert("Length".to_string(), PdfValue::Integer(128));
+        dict.insert("CF".to_string(), PdfValue::Dictionary(cf));
+        dict.insert("StmF".to_string(), PdfValue::Name("StdCF".to_string()));
+        dict.insert("StrF".to_string(), PdfValue::Name("StdCF".to_string()));
+        dict.insert(
+            "O".to_string(),
+            PdfValue::String(crate::types::PdfString(o_entry)),
+        );
+        dict.insert(
+            "U".to_string(),
+            PdfValue::String(crate::types::PdfString(u_entry)),
+        );
+        dict.insert("P".to_string(), PdfValue::Integer(permissions as i64));
+        if let Some(value) = encrypt_metadata {
+            dict.insert("EncryptMetadata".to_string(), PdfValue::Bool(value));
+        }
+        dict
+    }
+
+    fn build_v4_handler_inputs(
+        user_password: &[u8],
+        owner_password: &[u8],
+        id_first: &[u8],
+        encrypt_metadata: Option<bool>,
+    ) -> (PdfDictionary, Vec<u8>) {
+        let permissions: i32 = -4;
+        let o = test_helpers::compute_o(owner_password, user_password, SecurityRevision::R4, 16);
+        let file_key = test_helpers::compute_file_key_r4(
+            user_password,
+            &o,
+            permissions,
+            id_first,
+            encrypt_metadata.unwrap_or(true),
+        );
+        let u = test_helpers::compute_u_r3(&file_key, id_first);
+        (
+            build_encrypt_dict_v4_aesv2(o, u, permissions, encrypt_metadata),
+            file_key,
+        )
+    }
+
+    #[test]
+    fn open_v4_aesv2_handler_authenticates_user_password() {
+        let id_first = b"v4-synthetic-id-0123456789";
+        let (dict, expected_file_key) =
+            build_v4_handler_inputs(b"userpw", b"ownerpw", id_first, None);
+        let handler = StandardSecurityHandler::open(&dict, id_first, b"userpw")
+            .expect("open succeeds")
+            .expect("user password authenticates on V=4");
+        assert_eq!(handler.file_key, expected_file_key);
+        assert_eq!(handler.string_method, CryptMethod::AesV2);
+        assert_eq!(handler.stream_method, CryptMethod::AesV2);
+        assert!(handler.encrypt_metadata);
+    }
+
+    #[test]
+    fn open_v4_aesv2_handler_authenticates_owner_password() {
+        let id_first = b"v4-synthetic-id-0123456789";
+        let (dict, expected_file_key) =
+            build_v4_handler_inputs(b"userpw", b"ownerpw", id_first, None);
+        let handler = StandardSecurityHandler::open(&dict, id_first, b"ownerpw")
+            .expect("open succeeds")
+            .expect("owner password authenticates on V=4");
+        assert_eq!(handler.file_key, expected_file_key);
+    }
+
+    #[test]
+    fn open_v4_honours_encrypt_metadata_false() {
+        let id_first = b"v4-metadata-id";
+        let (dict, _) = build_v4_handler_inputs(b"", b"ownerpw", id_first, Some(false));
+        let handler = StandardSecurityHandler::open(&dict, id_first, b"")
+            .expect("open succeeds")
+            .expect("empty password authenticates");
+        assert!(!handler.encrypts_metadata());
+    }
+
+    #[test]
+    fn open_v4_identity_crypt_filter_is_passthrough() {
+        let id_first = b"v4-identity-id";
+        let (dict_v4, _) = build_v4_handler_inputs(b"", b"ownerpw", id_first, None);
+        let mut dict = dict_v4;
+        dict.insert("StrF".to_string(), PdfValue::Name("Identity".to_string()));
+        dict.insert("StmF".to_string(), PdfValue::Name("Identity".to_string()));
+
+        let handler = StandardSecurityHandler::open(&dict, id_first, b"")
+            .expect("open succeeds")
+            .expect("empty password authenticates");
+        assert_eq!(handler.string_method, CryptMethod::Identity);
+        assert_eq!(handler.stream_method, CryptMethod::Identity);
+
+        let ciphertext = b"hello";
+        let plaintext = handler
+            .decrypt_bytes(ciphertext, ObjectRef::new(4, 0), BytesKind::Stream)
+            .expect("identity passes bytes through");
+        assert_eq!(plaintext, ciphertext);
+    }
+
+    #[test]
+    fn open_v4_rejects_unsupported_cfm() {
+        let id_first = b"v4-unsupported-id";
+
+        let (dict_v4, _) = build_v4_handler_inputs(b"", b"ownerpw", id_first, None);
+        let mut dict = dict_v4;
+        let mut std_cf = PdfDictionary::default();
+        std_cf.insert("CFM".to_string(), PdfValue::Name("AESV3".to_string()));
+        std_cf.insert("Length".to_string(), PdfValue::Integer(32));
+        let mut cf = PdfDictionary::default();
+        cf.insert("StdCF".to_string(), PdfValue::Dictionary(std_cf));
+        dict.insert("CF".to_string(), PdfValue::Dictionary(cf));
+
+        let error = StandardSecurityHandler::open(&dict, id_first, b"")
+            .expect_err("AESV3 must be rejected as unsupported");
+        assert!(matches!(error, PdfError::Unsupported(_)), "got {error:?}");
+    }
+
+    #[test]
+    fn aes_128_cbc_round_trip() {
+        let key = [0x11u8; 16];
+        let iv = [0x22u8; 16];
+        let plaintext = b"redact me, please";
+        let ciphertext = test_helpers::aes_128_cbc_encrypt(&key, &iv, plaintext);
+        let decrypted = aes_128_cbc_decrypt(&key, &ciphertext).expect("round trip succeeds");
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn aes_128_cbc_rejects_bad_pkcs7_padding() {
+        let key = [0x11u8; 16];
+        let iv = [0x22u8; 16];
+        let plaintext = b"abcdef";
+        let mut ciphertext = test_helpers::aes_128_cbc_encrypt(&key, &iv, plaintext);
+        // Flip the last ciphertext byte so the plaintext padding becomes
+        // invalid (with high probability) after decryption.
+        let last = ciphertext.len() - 1;
+        ciphertext[last] ^= 0xFF;
+        let error =
+            aes_128_cbc_decrypt(&key, &ciphertext).expect_err("corrupted padding must be rejected");
+        assert!(matches!(error, PdfError::Corrupt(_)), "got {error:?}");
+    }
+
+    #[test]
+    fn aes_128_cbc_rejects_short_ciphertext() {
+        let key = [0x11u8; 16];
+        let error = aes_128_cbc_decrypt(&key, &[0u8; 16])
+            .expect_err("ciphertext shorter than IV+1 block must be rejected");
+        assert!(matches!(error, PdfError::Corrupt(_)), "got {error:?}");
+    }
+
     #[test]
     fn open_r2_authenticates_owner_password() {
         // Algorithm 4 / 7 divergence from R=3: single RC4 round for /O,
@@ -541,12 +1031,13 @@ mod tests {
             SecurityRevision::R2,
             key_length_bytes,
         );
-        let file_key = test_helpers::compute_file_key(
+        let file_key = test_helpers::compute_file_key_with_revision(
             user_password,
             &o,
             permissions,
             id_first,
             key_length_bytes,
+            SecurityRevision::R2,
         );
         // Algorithm 4: /U is RC4(file_key, PASSWORD_PADDING).
         let u = test_helpers::rc4(&file_key, &PASSWORD_PADDING);

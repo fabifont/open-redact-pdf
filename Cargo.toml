@@ -21,6 +21,7 @@ rust-version = "1.85"
 version = "0.3.0"
 
 [workspace.dependencies]
+aes = "0.8"
 flate2 = "1.1"
 js-sys = "0.3"
 md-5 = "0.10"

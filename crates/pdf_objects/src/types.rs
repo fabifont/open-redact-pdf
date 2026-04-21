@@ -51,6 +51,13 @@ impl PdfValue {
         }
     }
 
+    pub fn as_bool(&self) -> Option<bool> {
+        match self {
+            PdfValue::Bool(value) => Some(*value),
+            _ => None,
+        }
+    }
+
     pub fn as_integer(&self) -> Option<i64> {
         match self {
             PdfValue::Integer(value) => Some(*value),
