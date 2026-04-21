@@ -38,6 +38,7 @@ This project intentionally targets a narrow, explicit MVP.
 - Encrypted PDFs
 - Incremental update preservation (output is always a flat rewrite; xref streams are rewritten as a classic xref table)
 - Redaction of pages where a redaction target actually falls inside a Form XObject — the engine checks each Form's `BBox` (transformed through its `Matrix` and the current CTM) against the targets and only errors when they intersect; Forms that sit away from the targets are left untouched and the page is redacted normally
+- Redaction of documents whose catalog has `/OCProperties` with any layer off in the default configuration, or with `/BaseState /OFF`/`/Unchanged` — the engine rejects these up front because hidden-layer content would otherwise survive the redaction
 - Type3 fonts
 - broad CID font support beyond the current `Identity-H` path
 - partial image rewriting

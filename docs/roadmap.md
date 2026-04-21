@@ -27,7 +27,7 @@ title: Roadmap
 - Form XObject redaction (text extraction already traverses Form XObjects; redaction on pages that invoke a Form still errors explicitly)
 - Better vector-path bounds
 - Partial image rewriting
-- Optional-content and hidden-layer sanitization
+- Optional-content and hidden-layer sanitization (redaction currently refuses documents with hidden-by-default layers; sanitizing or surfacing the hidden text is a future change)
 - Overlay text stamping
 - Incremental-save preservation (reading is supported; output is always a flat rewrite)
 - Parse encrypted pdfs
