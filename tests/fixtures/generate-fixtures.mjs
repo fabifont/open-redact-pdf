@@ -490,6 +490,50 @@ function buildIncrementalPdf() {
 
 fs.writeFileSync(path.join(fixturesDir, "incremental-update.pdf"), buildIncrementalPdf(), "binary");
 
+// Simple-font /Encoding dictionary with /BaseEncoding /WinAnsiEncoding and a
+// /Differences array that overrides a handful of bytes with glyph names that
+// must be resolved through the Adobe Glyph List. Byte 0x40 (normally '@' in
+// WinAnsi) is overridden to /AE → Æ, and byte 0x7B (normally '{') to
+// /fi → ﬁ (ligature).
+writeFixture("encoding-differences.pdf", {
+  objects: [
+    { id: 1, value: { Type: "/Catalog", Pages: { ref: [2, 0] } } },
+    { id: 2, value: { Type: "/Pages", Count: 1, Kids: [{ ref: [3, 0] }] } },
+    basePageObjects({
+      pageId: 3,
+      pagesId: 2,
+      contentId: 4,
+      resources: { Font: { F1: { ref: [5, 0] } } },
+    }),
+    {
+      id: 4,
+      stream: {
+        dict: {},
+        // Bytes:  0x40 0x20 0x7B 0x20 "nice"
+        data: "BT\n/F1 24 Tf\n72 700 Td\n(@ { nice) Tj\nET\n",
+      },
+    },
+    {
+      id: 5,
+      value: {
+        Type: "/Font",
+        Subtype: "/Type1",
+        BaseFont: "/Helvetica",
+        Encoding: { ref: [6, 0] },
+      },
+    },
+    {
+      id: 6,
+      value: {
+        Type: "/Encoding",
+        BaseEncoding: "/WinAnsiEncoding",
+        Differences: [64, "/AE", 123, "/fi"],
+      },
+    },
+  ],
+  trailer: { Root: { ref: [1, 0] } },
+});
+
 // Form XObject fixture. Page text is split between the page content stream
 // ("Page Outer") and a referenced Form XObject ("Form Inner Secret"). The
 // Form has its own Matrix (translating the inner text by +100 in y) and its

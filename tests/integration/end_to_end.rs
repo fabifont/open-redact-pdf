@@ -330,6 +330,38 @@ fn inline_image_and_dictionary_operand_pages_are_parseable() {
 }
 
 #[test]
+fn encoding_differences_array_resolves_glyph_names() {
+    // /Encoding is a dict with /BaseEncoding /WinAnsiEncoding and a
+    // /Differences array that remaps byte 0x40 to /AE (Æ) and 0x7B to /fi
+    // (the fi ligature). Text extraction must resolve both glyph names
+    // through the AGL subset instead of falling back to U+FFFD.
+    let document = PdfDocument::open(&fixture("encoding-differences.pdf"))
+        .expect("encoding-differences fixture should open");
+    let extracted = document
+        .extract_text(0)
+        .expect("text extraction should succeed");
+    assert!(
+        extracted.text.contains('Æ'),
+        "/AE glyph name should resolve to Æ, got: {}",
+        extracted.text
+    );
+    assert!(
+        extracted.text.contains('\u{FB01}'),
+        "/fi glyph name should resolve to U+FB01 (ﬁ), got: {}",
+        extracted.text
+    );
+    assert!(
+        !extracted.text.contains('\u{FFFD}'),
+        "no replacement character should appear, got: {}",
+        extracted.text
+    );
+    // Characters that are NOT in Differences still decode via the base WinAnsi
+    // table — the space byte 0x20 remains a space, and the ASCII word stays
+    // intact.
+    assert!(extracted.text.contains("nice"));
+}
+
+#[test]
 fn vector_v_and_y_curve_segments_are_included_in_path_bounds() {
     // The fixture draws a filled curved shape built from v and y Bezier
     // shorthands directly under "Curve Secret". A search-driven redaction
