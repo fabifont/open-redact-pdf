@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::crypto::StandardSecurityHandler;
 use crate::document::build_document;
 use crate::error::{PdfError, PdfResult};
 use crate::stream::decode_stream;
@@ -10,7 +11,7 @@ use crate::types::{
 pub fn parse_pdf(bytes: &[u8]) -> PdfResult<crate::document::ParsedDocument> {
     let version = parse_header(bytes)?;
     let startxref = find_startxref(bytes)?;
-    let (xref, trailer) = parse_xref_table(bytes, startxref)?;
+    let (xref, mut trailer) = parse_xref_table(bytes, startxref)?;
 
     let mut objects = BTreeMap::new();
     let mut max_object_number = 0;
@@ -36,6 +37,13 @@ pub fn parse_pdf(bytes: &[u8]) -> PdfResult<crate::document::ParsedDocument> {
         }
     }
 
+    // Decrypt in place before materializing object streams: the ObjStm stream
+    // itself is encrypted, but once its bytes are decrypted the contained
+    // members are plaintext and materialize_object_streams can proceed as
+    // usual. Order matters — if we materialized first, each ObjStm's decoded
+    // body would still be ciphertext and we'd parse garbage.
+    decrypt_document_if_encrypted(&mut objects, &mut trailer)?;
+
     materialize_object_streams(&mut objects, &mut max_object_number, &compressed)?;
 
     let file = PdfFile {
@@ -45,6 +53,120 @@ pub fn parse_pdf(bytes: &[u8]) -> PdfResult<crate::document::ParsedDocument> {
         max_object_number,
     };
     build_document(file)
+}
+
+fn decrypt_document_if_encrypted(
+    objects: &mut BTreeMap<ObjectRef, PdfObject>,
+    trailer: &mut PdfDictionary,
+) -> PdfResult<()> {
+    let encrypt_ref = match trailer.get("Encrypt") {
+        Some(PdfValue::Reference(object_ref)) => *object_ref,
+        Some(PdfValue::Dictionary(_)) => {
+            return Err(PdfError::Unsupported(
+                "direct (non-indirect) /Encrypt dictionaries are not supported".to_string(),
+            ));
+        }
+        Some(_) => {
+            return Err(PdfError::Corrupt(
+                "trailer /Encrypt is not a reference".to_string(),
+            ));
+        }
+        None => return Ok(()),
+    };
+
+    let encrypt_dict = match objects.get(&encrypt_ref) {
+        Some(PdfObject::Value(PdfValue::Dictionary(dict))) => dict.clone(),
+        _ => {
+            return Err(PdfError::Corrupt(
+                "trailer /Encrypt does not point at a dictionary".to_string(),
+            ));
+        }
+    };
+
+    let id_first = extract_id_first(trailer)?;
+
+    // MVP: only the empty user password is attempted. Real passwords need a
+    // plumbing change in the public API to let callers supply one.
+    let handler =
+        StandardSecurityHandler::open(&encrypt_dict, &id_first, b"")?.ok_or_else(|| {
+            PdfError::Unsupported(
+                "encrypted PDF requires a user password — non-empty passwords are not supported yet"
+                    .to_string(),
+            )
+        })?;
+
+    let refs: Vec<ObjectRef> = objects.keys().copied().collect();
+    for object_ref in refs {
+        if object_ref == encrypt_ref {
+            // Strings and streams in the Encrypt dictionary itself are
+            // exempt from encryption (PDF 1.7 §7.6.1).
+            continue;
+        }
+        let object = objects
+            .get_mut(&object_ref)
+            .expect("ref obtained from map keys must still be present");
+        match object {
+            PdfObject::Stream(stream) => {
+                // Cross-reference streams are not encrypted.
+                let is_xref_stream =
+                    stream.dict.get("Type").and_then(PdfValue::as_name) == Some("XRef");
+                decrypt_strings_in_dict(&mut stream.dict, &handler, object_ref);
+                if !is_xref_stream {
+                    stream.data = handler.decrypt_bytes(&stream.data, object_ref);
+                }
+            }
+            PdfObject::Value(value) => decrypt_strings_in_value(value, &handler, object_ref),
+        }
+    }
+
+    trailer.remove("Encrypt");
+    Ok(())
+}
+
+fn extract_id_first(trailer: &PdfDictionary) -> PdfResult<Vec<u8>> {
+    match trailer.get("ID") {
+        Some(PdfValue::Array(entries)) => match entries.first() {
+            Some(PdfValue::String(value)) => Ok(value.0.clone()),
+            _ => Err(PdfError::Corrupt(
+                "trailer /ID[0] is not a string — cannot derive encryption key".to_string(),
+            )),
+        },
+        _ => Err(PdfError::Corrupt(
+            "encrypted PDF is missing the trailer /ID array required for key derivation"
+                .to_string(),
+        )),
+    }
+}
+
+fn decrypt_strings_in_value(
+    value: &mut PdfValue,
+    handler: &StandardSecurityHandler,
+    object_ref: ObjectRef,
+) {
+    match value {
+        PdfValue::String(string) => {
+            string.0 = handler.decrypt_bytes(&string.0, object_ref);
+        }
+        PdfValue::Array(items) => {
+            for item in items {
+                decrypt_strings_in_value(item, handler, object_ref);
+            }
+        }
+        PdfValue::Dictionary(dict) => {
+            decrypt_strings_in_dict(dict, handler, object_ref);
+        }
+        _ => {}
+    }
+}
+
+fn decrypt_strings_in_dict(
+    dict: &mut PdfDictionary,
+    handler: &StandardSecurityHandler,
+    object_ref: ObjectRef,
+) {
+    for value in dict.values_mut() {
+        decrypt_strings_in_value(value, handler, object_ref);
+    }
 }
 
 fn parse_header(bytes: &[u8]) -> PdfResult<String> {
@@ -1117,5 +1239,119 @@ mod tests {
             }
             other => panic!("expected Unsupported, got: {other:?}"),
         }
+    }
+
+    #[test]
+    fn parses_rc4_encrypted_pdf_with_empty_password() {
+        // Build a minimal PDF, encrypt each object's stream / string bytes
+        // with per-object RC4 using the Standard Security Handler (V=2,
+        // R=3, 128-bit key) derived from the empty user password, then
+        // round-trip it through parse_pdf. This is how real documents
+        // like bank statements that are "encrypted to prevent editing but
+        // openable by anyone" are shaped, and the regression target is
+        // that we can read them back without a password.
+        use crate::crypto::test_helpers::{compute_file_key, compute_u_r3, object_key, rc4};
+        use crate::document::ParsedDocument;
+
+        let id_first: [u8; 16] = [
+            0x6e, 0x05, 0xb1, 0x20, 0x63, 0x94, 0x69, 0x1f, 0x22, 0x2c, 0x32, 0xac, 0x61, 0x8b,
+            0xe6, 0x8d,
+        ];
+        let owner_entry = vec![0xAAu8; 32];
+        let permissions: i32 = -4;
+        let key_length_bytes = 16;
+
+        let file_key =
+            compute_file_key(b"", &owner_entry, permissions, &id_first, key_length_bytes);
+        let u_entry = compute_u_r3(&file_key, &id_first);
+
+        let escape_literal = |bytes: &[u8]| -> Vec<u8> {
+            let mut out = Vec::with_capacity(bytes.len() + 2);
+            out.push(b'(');
+            for &byte in bytes {
+                match byte {
+                    b'(' | b')' | b'\\' => {
+                        out.push(b'\\');
+                        out.push(byte);
+                    }
+                    _ => out.push(byte),
+                }
+            }
+            out.push(b')');
+            out
+        };
+
+        let content_plain = b"BT\n/F1 24 Tf\n72 700 Td\n(CIPHERED SECRET) Tj\nET\n";
+        let content_cipher = rc4(&object_key(&file_key, 4, 0), content_plain);
+
+        let mut pdf: Vec<u8> = Vec::new();
+        pdf.extend_from_slice(b"%PDF-1.4\n");
+
+        let catalog_offset = pdf.len();
+        pdf.extend_from_slice(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+
+        let pages_offset = pdf.len();
+        pdf.extend_from_slice(b"2 0 obj\n<< /Type /Pages /Count 1 /Kids [3 0 R] >>\nendobj\n");
+
+        let page_offset = pdf.len();
+        pdf.extend_from_slice(
+            b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
+              /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>\nendobj\n",
+        );
+
+        let content_offset = pdf.len();
+        pdf.extend_from_slice(
+            format!("4 0 obj\n<< /Length {} >>\nstream\n", content_cipher.len()).as_bytes(),
+        );
+        pdf.extend_from_slice(&content_cipher);
+        pdf.extend_from_slice(b"\nendstream\nendobj\n");
+
+        let font_offset = pdf.len();
+        pdf.extend_from_slice(
+            b"5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica \
+              /Encoding /WinAnsiEncoding >>\nendobj\n",
+        );
+
+        let encrypt_offset = pdf.len();
+        pdf.extend_from_slice(b"6 0 obj\n<< /Filter /Standard /V 2 /R 3 /Length 128 ");
+        pdf.extend_from_slice(format!("/P {permissions} ").as_bytes());
+        pdf.extend_from_slice(b"/O ");
+        pdf.extend_from_slice(&escape_literal(&owner_entry));
+        pdf.extend_from_slice(b" /U ");
+        pdf.extend_from_slice(&escape_literal(&u_entry));
+        pdf.extend_from_slice(b" >>\nendobj\n");
+
+        let xref_offset = pdf.len();
+        pdf.extend_from_slice(b"xref\n0 7\n");
+        pdf.extend_from_slice(b"0000000000 65535 f \n");
+        for offset in [
+            catalog_offset,
+            pages_offset,
+            page_offset,
+            content_offset,
+            font_offset,
+            encrypt_offset,
+        ] {
+            pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        pdf.extend_from_slice(b"trailer\n<< /Size 7 /Root 1 0 R /Encrypt 6 0 R /ID [");
+        pdf.extend_from_slice(&escape_literal(&id_first));
+        pdf.extend_from_slice(&escape_literal(&id_first));
+        pdf.extend_from_slice(b"] >>\n");
+        pdf.extend_from_slice(format!("startxref\n{xref_offset}\n%%EOF\n").as_bytes());
+
+        let document: ParsedDocument = parse_pdf(&pdf).expect("encrypted PDF should decrypt");
+        assert_eq!(document.pages.len(), 1);
+        assert!(
+            !document.file.trailer.contains_key("Encrypt"),
+            "trailer /Encrypt must be stripped once the document is decrypted in place"
+        );
+
+        let content_ref = document.pages[0].content_refs[0];
+        let stream = match document.file.get_object(content_ref).unwrap() {
+            PdfObject::Stream(stream) => stream,
+            _ => panic!("page content must be a stream"),
+        };
+        assert_eq!(stream.data, content_plain);
     }
 }

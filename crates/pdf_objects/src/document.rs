@@ -26,6 +26,11 @@ pub struct ParsedDocument {
 }
 
 pub fn build_document(file: PdfFile) -> PdfResult<ParsedDocument> {
+    // Encrypted PDFs are decrypted in-place earlier in the pipeline
+    // (parser::decrypt_document_if_encrypted removes the /Encrypt entry from
+    // the trailer on success). A trailer that still contains /Encrypt by the
+    // time we get here means the Standard Security Handler code path was
+    // skipped entirely — an unsupported scheme, for example.
     if file.trailer.contains_key("Encrypt") {
         return Err(PdfError::Unsupported(
             "encrypted PDFs are not supported".to_string(),
