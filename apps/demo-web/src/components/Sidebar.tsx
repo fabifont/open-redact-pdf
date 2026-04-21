@@ -138,6 +138,10 @@ export function Sidebar({
             <span className="report-value">{applyReport.imageDrawsRemoved}</span>
           </div>
           <div className="report-row">
+            <span className="report-label">Forms rewritten</span>
+            <span className="report-value">{applyReport.formXObjectsRewritten}</span>
+          </div>
+          <div className="report-row">
             <span className="report-label">Annotations</span>
             <span className="report-value">{applyReport.annotationsRemoved}</span>
           </div>
