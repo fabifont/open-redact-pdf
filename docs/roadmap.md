@@ -11,7 +11,7 @@ title: Roadmap
 - `FlateDecode` with PNG predictors (10–15) via `DecodeParms`
 - Page tree traversal
 - Content parsing for common text, path, image, clipping, color, graphics-state, and marked-content operators (including inline images and dictionary operands)
-- Simple-font text extraction and search geometry (including fonts set via ExtGState `gs` operator)
+- Simple-font text extraction and search geometry (including fonts set via ExtGState `gs` operator), with `ToUnicode` CMap decoding and `WinAnsiEncoding` for non-ASCII bytes
 - `Type0` / `Identity-H` composite font extraction, search, and redaction when `ToUnicode` is available
 - Geometry target normalization for rects, quads, and quad groups
 - Three redaction modes: `strip` (remove bytes), `redact` (blank space + overlay), `erase` (blank space, no overlay)

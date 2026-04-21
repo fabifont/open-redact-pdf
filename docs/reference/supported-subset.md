@@ -25,7 +25,7 @@ This project intentionally targets a narrow, explicit MVP.
 - Marked-content operators as safe pass-through (`BMC`, `BDC`, `EMC`, `MP`, `DP`)
 - ExtGState font entries (fonts set via `gs` operator)
 - Image XObject invocation detection
-- `Type1` and `TrueType` fonts in the current text path
+- `Type1` and `TrueType` fonts in the current text path, including `ToUnicode` CMap decoding and `/Encoding /WinAnsiEncoding` for non-ASCII bytes
 - `Type0` with `Identity-H`, two-byte CIDs, and `ToUnicode` maps
 - Rectangle, quad, and quad-group redaction targets
 - Three redaction modes: `strip` (remove bytes), `redact` (blank space + overlay), `erase` (blank space, no overlay)
