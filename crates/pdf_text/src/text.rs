@@ -770,8 +770,18 @@ struct SimpleFont {
     encoding: SimpleEncoding,
 }
 
+#[derive(Debug, Clone, Default, PartialEq)]
+struct SimpleEncoding {
+    /// Base named encoding. When unset the fallback is the identity path
+    /// (ASCII only).
+    base: SimpleEncodingBase,
+    /// Byte-level overrides from an `/Encoding` dictionary's `/Differences`
+    /// array. Keys are byte codes; values are PDF glyph names (e.g. `"Adieresis"`).
+    differences: BTreeMap<u8, String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-enum SimpleEncoding {
+enum SimpleEncodingBase {
     /// Fallback: treat bytes as identity if they map to ASCII, otherwise
     /// emit the Unicode replacement character.
     #[default]
@@ -1062,9 +1072,15 @@ fn decode_simple_byte(font: &SimpleFont, byte: u8) -> String {
             return mapped.clone();
         }
     }
-    let character = match font.encoding {
-        SimpleEncoding::WinAnsi => winansi_byte_to_char(byte),
-        SimpleEncoding::Identity => identity_byte_to_char(byte),
+    if let Some(glyph_name) = font.encoding.differences.get(&byte) {
+        if let Some(character) = glyph_name_to_char(glyph_name) {
+            return character.to_string();
+        }
+        return '\u{FFFD}'.to_string();
+    }
+    let character = match font.encoding.base {
+        SimpleEncodingBase::WinAnsi => winansi_byte_to_char(byte),
+        SimpleEncodingBase::Identity => identity_byte_to_char(byte),
     };
     character
         .map(|character| character.to_string())
@@ -1077,6 +1093,204 @@ fn identity_byte_to_char(byte: u8) -> Option<char> {
     } else {
         None
     }
+}
+
+/// Minimal Adobe Glyph List subset: maps PDF glyph names commonly appearing
+/// in `/Encoding` `Differences` arrays to their Unicode equivalents. Covers
+/// the WinAnsi repertoire plus common additions (Latin supplement, Latin
+/// Extended-A, a few math and punctuation glyphs). Names not present here
+/// fall through to `U+FFFD` — the caller handles that.
+fn glyph_name_to_char(name: &str) -> Option<char> {
+    let mapped = match name {
+        "space" => ' ',
+        "exclam" => '!',
+        "quotedbl" => '"',
+        "numbersign" => '#',
+        "dollar" => '$',
+        "percent" => '%',
+        "ampersand" => '&',
+        "quotesingle" => '\'',
+        "parenleft" => '(',
+        "parenright" => ')',
+        "asterisk" => '*',
+        "plus" => '+',
+        "comma" => ',',
+        "hyphen" => '-',
+        "period" => '.',
+        "slash" => '/',
+        "zero" => '0',
+        "one" => '1',
+        "two" => '2',
+        "three" => '3',
+        "four" => '4',
+        "five" => '5',
+        "six" => '6',
+        "seven" => '7',
+        "eight" => '8',
+        "nine" => '9',
+        "colon" => ':',
+        "semicolon" => ';',
+        "less" => '<',
+        "equal" => '=',
+        "greater" => '>',
+        "question" => '?',
+        "at" => '@',
+        "bracketleft" => '[',
+        "backslash" => '\\',
+        "bracketright" => ']',
+        "asciicircum" => '^',
+        "underscore" => '_',
+        "grave" => '`',
+        "braceleft" => '{',
+        "bar" => '|',
+        "braceright" => '}',
+        "asciitilde" => '~',
+        // Common uppercase Latin
+        name if name.len() == 1 && name.chars().next().unwrap().is_ascii_alphabetic() => {
+            name.chars().next().unwrap()
+        }
+        // Windows-1252 / WinAnsi punctuation
+        "bullet" => '\u{2022}',
+        "Euro" => '\u{20AC}',
+        "endash" => '\u{2013}',
+        "emdash" => '\u{2014}',
+        "quoteleft" => '\u{2018}',
+        "quoteright" => '\u{2019}',
+        "quotesinglbase" => '\u{201A}',
+        "quotedblleft" => '\u{201C}',
+        "quotedblright" => '\u{201D}',
+        "quotedblbase" => '\u{201E}',
+        "ellipsis" => '\u{2026}',
+        "dagger" => '\u{2020}',
+        "daggerdbl" => '\u{2021}',
+        "perthousand" => '\u{2030}',
+        "guilsinglleft" => '\u{2039}',
+        "guilsinglright" => '\u{203A}',
+        "florin" => '\u{0192}',
+        "trademark" => '\u{2122}',
+        "circumflex" => '\u{02C6}',
+        "tilde" => '\u{02DC}',
+        "macron" => '\u{00AF}',
+        "breve" => '\u{02D8}',
+        "dotaccent" => '\u{02D9}',
+        "ring" => '\u{02DA}',
+        "ogonek" => '\u{02DB}',
+        "caron" => '\u{02C7}',
+        "cedilla" => '\u{00B8}',
+        "dieresis" => '\u{00A8}',
+        "acute" => '\u{00B4}',
+        // Latin-1 supplement
+        "exclamdown" => '\u{00A1}',
+        "cent" => '\u{00A2}',
+        "sterling" => '\u{00A3}',
+        "currency" => '\u{00A4}',
+        "yen" => '\u{00A5}',
+        "brokenbar" => '\u{00A6}',
+        "section" => '\u{00A7}',
+        "copyright" => '\u{00A9}',
+        "ordfeminine" => '\u{00AA}',
+        "guillemotleft" => '\u{00AB}',
+        "logicalnot" => '\u{00AC}',
+        "registered" => '\u{00AE}',
+        "degree" => '\u{00B0}',
+        "plusminus" => '\u{00B1}',
+        "twosuperior" => '\u{00B2}',
+        "threesuperior" => '\u{00B3}',
+        "mu" => '\u{00B5}',
+        "paragraph" => '\u{00B6}',
+        "periodcentered" => '\u{00B7}',
+        "onesuperior" => '\u{00B9}',
+        "ordmasculine" => '\u{00BA}',
+        "guillemotright" => '\u{00BB}',
+        "onequarter" => '\u{00BC}',
+        "onehalf" => '\u{00BD}',
+        "threequarters" => '\u{00BE}',
+        "questiondown" => '\u{00BF}',
+        // Latin-1 letters
+        "Agrave" => '\u{00C0}',
+        "Aacute" => '\u{00C1}',
+        "Acircumflex" => '\u{00C2}',
+        "Atilde" => '\u{00C3}',
+        "Adieresis" => '\u{00C4}',
+        "Aring" => '\u{00C5}',
+        "AE" => '\u{00C6}',
+        "Ccedilla" => '\u{00C7}',
+        "Egrave" => '\u{00C8}',
+        "Eacute" => '\u{00C9}',
+        "Ecircumflex" => '\u{00CA}',
+        "Edieresis" => '\u{00CB}',
+        "Igrave" => '\u{00CC}',
+        "Iacute" => '\u{00CD}',
+        "Icircumflex" => '\u{00CE}',
+        "Idieresis" => '\u{00CF}',
+        "Eth" => '\u{00D0}',
+        "Ntilde" => '\u{00D1}',
+        "Ograve" => '\u{00D2}',
+        "Oacute" => '\u{00D3}',
+        "Ocircumflex" => '\u{00D4}',
+        "Otilde" => '\u{00D5}',
+        "Odieresis" => '\u{00D6}',
+        "multiply" => '\u{00D7}',
+        "Oslash" => '\u{00D8}',
+        "Ugrave" => '\u{00D9}',
+        "Uacute" => '\u{00DA}',
+        "Ucircumflex" => '\u{00DB}',
+        "Udieresis" => '\u{00DC}',
+        "Yacute" => '\u{00DD}',
+        "Thorn" => '\u{00DE}',
+        "germandbls" => '\u{00DF}',
+        "agrave" => '\u{00E0}',
+        "aacute" => '\u{00E1}',
+        "acircumflex" => '\u{00E2}',
+        "atilde" => '\u{00E3}',
+        "adieresis" => '\u{00E4}',
+        "aring" => '\u{00E5}',
+        "ae" => '\u{00E6}',
+        "ccedilla" => '\u{00E7}',
+        "egrave" => '\u{00E8}',
+        "eacute" => '\u{00E9}',
+        "ecircumflex" => '\u{00EA}',
+        "edieresis" => '\u{00EB}',
+        "igrave" => '\u{00EC}',
+        "iacute" => '\u{00ED}',
+        "icircumflex" => '\u{00EE}',
+        "idieresis" => '\u{00EF}',
+        "eth" => '\u{00F0}',
+        "ntilde" => '\u{00F1}',
+        "ograve" => '\u{00F2}',
+        "oacute" => '\u{00F3}',
+        "ocircumflex" => '\u{00F4}',
+        "otilde" => '\u{00F5}',
+        "odieresis" => '\u{00F6}',
+        "divide" => '\u{00F7}',
+        "oslash" => '\u{00F8}',
+        "ugrave" => '\u{00F9}',
+        "uacute" => '\u{00FA}',
+        "ucircumflex" => '\u{00FB}',
+        "udieresis" => '\u{00FC}',
+        "yacute" => '\u{00FD}',
+        "thorn" => '\u{00FE}',
+        "ydieresis" => '\u{00FF}',
+        // Latin Extended-A common entries
+        "OE" => '\u{0152}',
+        "oe" => '\u{0153}',
+        "Scaron" => '\u{0160}',
+        "scaron" => '\u{0161}',
+        "Ydieresis" => '\u{0178}',
+        "Zcaron" => '\u{017D}',
+        "zcaron" => '\u{017E}',
+        "Lslash" => '\u{0141}',
+        "lslash" => '\u{0142}',
+        "Idot" | "Idotaccent" => '\u{0130}',
+        "dotlessi" => '\u{0131}',
+        "fi" => '\u{FB01}',
+        "fl" => '\u{FB02}',
+        "ff" => '\u{FB00}',
+        "ffi" => '\u{FB03}',
+        "ffl" => '\u{FB04}',
+        _ => return None,
+    };
+    Some(mapped)
 }
 
 /// Decode a single byte under the PDF `WinAnsiEncoding` table.
@@ -1122,25 +1336,75 @@ fn winansi_byte_to_char(byte: u8) -> Option<char> {
 
 fn parse_simple_encoding(file: &PdfFile, font_dict: &pdf_objects::PdfDictionary) -> SimpleEncoding {
     match font_dict.get("Encoding") {
-        Some(PdfValue::Name(name)) => simple_encoding_from_name(name),
+        Some(PdfValue::Name(name)) => SimpleEncoding {
+            base: simple_encoding_base_from_name(name),
+            differences: BTreeMap::new(),
+        },
         Some(value @ PdfValue::Reference(_)) | Some(value @ PdfValue::Dictionary(_)) => {
             match file.resolve_dict(value) {
-                Ok(dict) => match dict.get("BaseEncoding").and_then(PdfValue::as_name) {
-                    Some(name) => simple_encoding_from_name(name),
-                    None => SimpleEncoding::Identity,
-                },
-                Err(_) => SimpleEncoding::Identity,
+                Ok(dict) => {
+                    let base = dict
+                        .get("BaseEncoding")
+                        .and_then(PdfValue::as_name)
+                        .map(simple_encoding_base_from_name)
+                        .unwrap_or_default();
+                    let differences = dict
+                        .get("Differences")
+                        .and_then(PdfValue::as_array)
+                        .map(parse_differences_array)
+                        .unwrap_or_default();
+                    SimpleEncoding { base, differences }
+                }
+                Err(_) => SimpleEncoding::default(),
             }
         }
-        _ => SimpleEncoding::Identity,
+        _ => SimpleEncoding::default(),
     }
 }
 
-fn simple_encoding_from_name(name: &str) -> SimpleEncoding {
+fn simple_encoding_base_from_name(name: &str) -> SimpleEncodingBase {
     match name {
-        "WinAnsiEncoding" => SimpleEncoding::WinAnsi,
-        _ => SimpleEncoding::Identity,
+        "WinAnsiEncoding" => SimpleEncodingBase::WinAnsi,
+        _ => SimpleEncodingBase::Identity,
     }
+}
+
+fn parse_differences_array(entries: &[PdfValue]) -> BTreeMap<u8, String> {
+    let mut output = BTreeMap::new();
+    let mut code: u16 = 0;
+    let mut have_code = false;
+    for entry in entries {
+        match entry {
+            PdfValue::Integer(value) => {
+                if *value >= 0 && *value <= 255 {
+                    code = *value as u16;
+                    have_code = true;
+                } else {
+                    have_code = false;
+                }
+            }
+            PdfValue::Number(value) => {
+                let rounded = value.round() as i64;
+                if (0..=255).contains(&rounded) {
+                    code = rounded as u16;
+                    have_code = true;
+                } else {
+                    have_code = false;
+                }
+            }
+            PdfValue::Name(name) => {
+                if have_code && code <= 255 {
+                    output.insert(code as u8, name.clone());
+                    code += 1;
+                    if code > 255 {
+                        have_code = false;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    output
 }
 
 fn decode_font_glyphs(font: &LoadedFont, bytes: &[u8]) -> PdfResult<Vec<DecodedGlyph>> {
