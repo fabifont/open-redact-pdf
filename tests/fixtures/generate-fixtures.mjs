@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import zlib from "node:zlib";
 
 const fixturesDir = path.resolve("tests/fixtures");
 
@@ -455,6 +456,118 @@ function buildIncrementalPdf() {
 }
 
 fs.writeFileSync(path.join(fixturesDir, "incremental-update.pdf"), buildIncrementalPdf(), "binary");
+
+// --- PDF 1.5 xref stream + object stream fixture ---
+// Builds a PDF where Catalog, Pages, Page, and Font dictionaries live inside
+// an object stream (ObjStm). The content stream cannot be stored inside an
+// ObjStm (streams inside ObjStm are disallowed by the spec), so it stays as a
+// regular uncompressed indirect object. The cross-reference is emitted as an
+// xref stream with `W [1 3 1]`.
+function buildXrefObjectStreamPdf() {
+  // Indirect object ids:
+  //   1: content stream (uncompressed)
+  //   2: ObjStm (uncompressed; Flate-compressed body)
+  //   3: Catalog (compressed, ObjStm index 0)
+  //   4: Pages   (compressed, ObjStm index 1)
+  //   5: Page    (compressed, ObjStm index 2)
+  //   6: Font    (compressed, ObjStm index 3)
+  //   7: XRef stream (uncompressed)
+
+  const catalogBody = "<< /Type /Catalog /Pages 4 0 R >>";
+  const pagesBody = "<< /Type /Pages /Count 1 /Kids [5 0 R] >>";
+  const pageBody =
+    "<< /Type /Page /Parent 4 0 R /MediaBox [0 0 612 792] " +
+    "/Resources << /Font << /F1 6 0 R >> >> /Contents 1 0 R >>";
+  const fontBody = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>";
+
+  const members = [
+    { id: 3, body: catalogBody },
+    { id: 4, body: pagesBody },
+    { id: 5, body: pageBody },
+    { id: 6, body: fontBody },
+  ];
+
+  // Build ObjStm header: pairs of "obj_num rel_offset" separated by spaces.
+  let header = "";
+  let runningOffset = 0;
+  const relOffsets = [];
+  for (const member of members) {
+    relOffsets.push(runningOffset);
+    header += `${member.id} ${runningOffset} `;
+    runningOffset += Buffer.byteLength(member.body, "binary");
+  }
+  const firstOffset = Buffer.byteLength(header, "binary");
+  const decompressed = Buffer.concat([
+    Buffer.from(header, "binary"),
+    Buffer.from(members.map((m) => m.body).join(""), "binary"),
+  ]);
+  const compressedObjStm = zlib.deflateSync(decompressed);
+
+  // Content stream (uncompressed for simplicity).
+  const contentData =
+    "BT\n/F1 24 Tf\n72 700 Td\n(OBJSTM Secret) Tj\n0 -32 Td\n(Beta Gamma) Tj\nET\n";
+
+  let body = "%PDF-1.5\n%\xFF\xFF\xFF\xFF\n";
+
+  const obj1Offset = Buffer.byteLength(body, "binary");
+  body +=
+    `1 0 obj\n<< /Length ${Buffer.byteLength(contentData, "binary")} >>\nstream\n${contentData}endstream\nendobj\n`;
+
+  const obj2Offset = Buffer.byteLength(body, "binary");
+  const objstmDict =
+    `<< /Type /ObjStm /N ${members.length} /First ${firstOffset} ` +
+    `/Filter /FlateDecode /Length ${compressedObjStm.length} >>`;
+  body += `2 0 obj\n${objstmDict}\nstream\n`;
+  const preStreamBuf = Buffer.from(body, "binary");
+  const afterStreamBuf = Buffer.from("\nendstream\nendobj\n", "binary");
+
+  // Build xref stream body with W = [1 3 1]:
+  //   type(1) | field2(3) | field3(1)
+  // Entries for objects 0..7:
+  //   0: free (type 0, next free = 0, gen 0xFFFF truncated to 0xFF)
+  //   1: uncompressed → (1, obj1Offset, 0)
+  //   2: uncompressed → (1, obj2Offset, 0)
+  //   3..6: compressed in stream 2 at indices 0..3 → (2, 2, index)
+  //   7: uncompressed → (1, obj7Offset, 0)
+  const row = (t, a, b) => Buffer.from([t, (a >> 16) & 0xff, (a >> 8) & 0xff, a & 0xff, b & 0xff]);
+
+  // We don't know obj7Offset until we've assembled everything up to it.
+  // Compose in order: preamble + ObjStm body bytes + afterStream bytes, then obj7.
+  const uptoAfterObjStm = Buffer.concat([
+    preStreamBuf,
+    compressedObjStm,
+    afterStreamBuf,
+  ]);
+  const obj7Offset = uptoAfterObjStm.length;
+
+  const xrefEntries = Buffer.concat([
+    row(0, 0, 0),
+    row(1, obj1Offset, 0),
+    row(1, obj2Offset, 0),
+    row(2, 2, 0),
+    row(2, 2, 1),
+    row(2, 2, 2),
+    row(2, 2, 3),
+    row(1, obj7Offset, 0),
+  ]);
+
+  const xrefStreamDict =
+    `<< /Type /XRef /Size 8 /W [1 3 1] /Root 3 0 R /Length ${xrefEntries.length} >>`;
+  const obj7 = Buffer.concat([
+    Buffer.from(`7 0 obj\n${xrefStreamDict}\nstream\n`, "binary"),
+    xrefEntries,
+    Buffer.from("\nendstream\nendobj\n", "binary"),
+  ]);
+
+  const trailer = Buffer.from(`startxref\n${obj7Offset}\n%%EOF\n`, "binary");
+
+  return Buffer.concat([uptoAfterObjStm, obj7, trailer]);
+}
+
+fs.writeFileSync(
+  path.join(fixturesDir, "xref-object-stream.pdf"),
+  buildXrefObjectStreamPdf(),
+);
 
 // Nested cm operators: outer cm scales content space (like many real-world PDFs),
 // inner cm inside q/Q scales back up. Tests correct CTM pre-multiplication order.

@@ -330,6 +330,65 @@ fn inline_image_and_dictionary_operand_pages_are_parseable() {
 }
 
 #[test]
+fn xref_stream_and_object_stream_fixture_is_parseable_and_redactable() {
+    let mut document = PdfDocument::open(&fixture("xref-object-stream.pdf"))
+        .expect("xref+ObjStm fixture should open");
+    assert_eq!(document.page_count(), 1);
+
+    let extracted = document
+        .extract_text(0)
+        .expect("text extraction should succeed on an ObjStm-backed page tree");
+    assert!(
+        extracted.text.contains("OBJSTM Secret"),
+        "should extract text whose Page dictionary lives inside an ObjStm, got: {}",
+        extracted.text
+    );
+    assert!(extracted.text.contains("Beta Gamma"));
+
+    let matches = document
+        .search_text(0, "OBJSTM Secret")
+        .expect("search should succeed");
+    assert_eq!(matches.len(), 1);
+    let quads = matches[0]
+        .quads
+        .iter()
+        .map(|quad| quad.points)
+        .collect::<Vec<_>>();
+
+    let report = document
+        .apply_redactions(RedactionPlan {
+            targets: vec![RedactionTarget::QuadGroup {
+                page_index: 0,
+                quads,
+            }],
+            mode: None,
+            fill_color: None,
+            overlay_text: None,
+            remove_intersecting_annotations: Some(false),
+            strip_metadata: Some(false),
+            strip_attachments: Some(false),
+        })
+        .expect("redaction should succeed on an ObjStm-backed page tree");
+    assert!(report.text_glyphs_removed > 0);
+
+    let saved = document.save().expect("save should succeed");
+    let reopened = PdfDocument::open(&saved).expect("saved pdf should reopen");
+    let extracted_after = reopened
+        .extract_text(0)
+        .expect("reopened extraction should succeed");
+    assert!(!extracted_after.text.contains("OBJSTM Secret"));
+    assert!(extracted_after.text.contains("Beta Gamma"));
+
+    // The saved output is a flat classic-xref rewrite; the raw bytes must not
+    // contain the original targeted text.
+    let raw = String::from_utf8_lossy(&saved);
+    assert!(
+        !raw.contains("OBJSTM Secret"),
+        "original content stream survived in saved PDF"
+    );
+}
+
+#[test]
 fn nested_cm_operators_produce_page_space_quads() {
     let mut document =
         PdfDocument::open(&fixture("nested-cm.pdf")).expect("nested-cm fixture should open");
