@@ -43,8 +43,10 @@ The Standard Security Handler is parsed and consumed at parse time so every stag
 | 2 | 3 | RC4-128 | Algorithm 2 + 5 (50-round rehash) |
 | 4 | 4 | RC4-128 via `/StdCF /CFM /V2` | Algorithm 1 per-object key, no `sAlT` suffix |
 | 4 | 4 | AES-128-CBC via `/StdCF /CFM /AESV2` | Algorithm 1a per-object key with `sAlT` suffix, PKCS#7-padded, 16-byte IV prepended |
+| 5 | 5 | AES-256-CBC via `/StdCF /CFM /AESV3` | Plain SHA-256 verifier (Extension Level 3 form); file key is AES-256-CBC unwrapped from `/UE` / `/OE` with intermediate = `SHA-256(password || key_salt [|| user_vector])` |
+| 5 | 6 | AES-256-CBC via `/StdCF /CFM /AESV3` | ISO 32000-2 iterative Algorithm 2.B hash (64-round AES-128-CBC + SHA-256/384/512 cascade); otherwise identical to R=5 |
 
-Either the user password or the owner password authenticates. The owner password is recovered to the user password via Algorithm 7; the file key is always derived from the user password.
+Either the user password or the owner password authenticates. For V=1/2/4, the owner password is recovered to the user password via Algorithm 7 and the file key is always derived from the user password. For V=5, owner and user authenticate independently: the owner path's hash inputs additionally include the first 48 bytes of `/U`, so the same file key is recovered through either `/UE` (user) or `/OE` (owner).
 
 `/Identity` crypt filters are pass-through — bytes are returned unchanged without touching the cipher.
 
@@ -53,7 +55,9 @@ When a V=4 document sets `/EncryptMetadata false`:
 - file-key derivation appends `0xFFFFFFFF` after the `/ID[0]` bytes (Algorithm 2 step 5)
 - streams with `/Type /Metadata` skip decryption so they stay readable as plaintext XMP
 
-Unsupported encryption configurations (V=5/R=6 AES-256, public-key handlers, `/CFM` methods other than `/V2` and `/AESV2`) fail explicitly with `PdfError::Unsupported`. Wrong passwords fail with `PdfError::InvalidPassword`.
+V=5 content decryption uses the 32-byte file key directly: there is no per-object key mixing, no `sAlT` suffix, and no `/ID[0]` input — the per-stream IV in the first 16 ciphertext bytes is the only randomness. Passwords are truncated to 127 bytes before hashing, matching the spec.
+
+Unsupported encryption configurations (public-key handlers, `/CFM` methods other than `/V2`, `/AESV2`, and `/AESV3`) fail explicitly with `PdfError::Unsupported`. Wrong passwords fail with `PdfError::InvalidPassword`.
 
 Writing encrypted PDFs is out of scope: the save path always emits a plaintext, deterministic full-save rewrite.
 
