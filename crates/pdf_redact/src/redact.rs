@@ -54,6 +54,11 @@ pub fn apply_redactions(
     let mut deferred_xobject_removals: Vec<(PdfDictionary, Vec<String>)> = Vec::new();
     let mut deferred_content_removals: Vec<ObjectRef> = Vec::new();
 
+    // Allocated lazily on the first page that actually needs to stamp an
+    // overlay label. Shared across pages so the saved PDF contains a single
+    // Helvetica font dictionary for the label rather than one copy per page.
+    let mut overlay_font_ref: Option<ObjectRef> = None;
+
     for (page_index, targets) in page_targets {
         let page = pages
             .get(page_index)
@@ -145,11 +150,25 @@ pub fn apply_redactions(
 
         let mut content_bytes = serialize_operations(&operations);
         if plan.mode == RedactionMode::Redact {
+            let overlay_spec = plan
+                .overlay_text
+                .as_deref()
+                .map(|text| (OVERLAY_FONT_NAME, text));
+            if overlay_spec.is_some() {
+                overlay_font_ref = Some(ensure_overlay_font(file, overlay_font_ref)?);
+                register_overlay_font_on_page(
+                    file,
+                    page.page_ref,
+                    &page.resources,
+                    overlay_font_ref.expect("overlay font must be allocated when overlay_spec is some"),
+                )?;
+            }
             let overlay = overlay_stream_bytes(
                 &targets,
                 plan.fill_color,
                 page.page_box.normalized_transform(),
                 final_page_ctm(&operations)?,
+                overlay_spec,
             )?;
             content_bytes.extend_from_slice(&overlay);
         }
@@ -993,6 +1012,7 @@ fn overlay_stream_bytes(
     color: Color,
     page_transform: Matrix,
     final_ctm: Matrix,
+    overlay: Option<(&str, &str)>,
 ) -> PdfResult<Vec<u8>> {
     let inverse_page_transform = page_transform.inverse().ok_or_else(|| {
         PdfError::Unsupported(
@@ -1036,8 +1056,121 @@ fn overlay_stream_bytes(
             ));
         }
     }
+
+    if let Some((font_name, text)) = overlay {
+        // Pick a text color that contrasts with the fill: white on dark fills,
+        // black on light fills, by comparing perceived brightness.
+        let brightness = 0.299 * red + 0.587 * green + 0.114 * blue;
+        let (tr, tg, tb) = if brightness < 0.5 {
+            (1.0, 1.0, 1.0)
+        } else {
+            (0.0, 0.0, 0.0)
+        };
+        output.push_str(&format!("{tr:.3} {tg:.3} {tb:.3} rg\n"));
+        for target in targets {
+            // Fit the label vertically inside the target with a 20%
+            // top+bottom margin, capped at 14pt so redactions on very tall
+            // targets do not print comically large text.
+            let bounds = inverse_page_transform.transform_rect(target.bounds);
+            let height = bounds.height.abs();
+            let size = (height * 0.6).clamp(4.0, 14.0);
+            let x = bounds.x + size * 0.25;
+            let y = bounds.y + size * 0.2;
+            output.push_str("BT\n");
+            output.push_str(&format!(
+                "/{} {} Tf\n",
+                font_name,
+                format_number(size)
+            ));
+            output.push_str(&format!("{} {} Td\n", format_number(x), format_number(y)));
+            output.push('(');
+            output.push_str(&escape_pdf_string(text));
+            output.push_str(") Tj\n");
+            output.push_str("ET\n");
+        }
+    }
+
     output.push_str("Q\n");
     Ok(output.into_bytes())
+}
+
+/// Synthetic resource name used for the shared Helvetica font that stamps
+/// overlay labels. The leading underscore keeps the name out of the range
+/// any real PDF producer is likely to pick for its own fonts.
+const OVERLAY_FONT_NAME: &str = "_ORP_Overlay";
+
+fn ensure_overlay_font(
+    file: &mut PdfFile,
+    current: Option<ObjectRef>,
+) -> PdfResult<ObjectRef> {
+    if let Some(existing) = current {
+        return Ok(existing);
+    }
+    let mut font_dict = PdfDictionary::new();
+    font_dict.insert("Type".to_string(), PdfValue::Name("Font".into()));
+    font_dict.insert("Subtype".to_string(), PdfValue::Name("Type1".into()));
+    font_dict.insert("BaseFont".to_string(), PdfValue::Name("Helvetica".into()));
+    font_dict.insert(
+        "Encoding".to_string(),
+        PdfValue::Name("WinAnsiEncoding".into()),
+    );
+    let font_ref = file.allocate_object_ref();
+    file.insert_object(
+        font_ref,
+        PdfObject::Value(PdfValue::Dictionary(font_dict)),
+    );
+    Ok(font_ref)
+}
+
+fn register_overlay_font_on_page(
+    file: &mut PdfFile,
+    page_ref: ObjectRef,
+    effective_resources: &PdfDictionary,
+    font_ref: ObjectRef,
+) -> PdfResult<()> {
+    // Start from whatever /Font dict the page already has (direct or
+    // inherited), extend it with our synthetic overlay font, and write the
+    // result back to the page's Resources as a direct dict.
+    let existing_fonts: PdfDictionary = match effective_resources.get("Font") {
+        Some(value) => file.resolve_dict(value).cloned().unwrap_or_default(),
+        None => PdfDictionary::new(),
+    };
+    let mut new_fonts = existing_fonts;
+    new_fonts.insert(
+        OVERLAY_FONT_NAME.to_string(),
+        PdfValue::Reference(font_ref),
+    );
+    let mut new_resources = effective_resources.clone();
+    new_resources.insert("Font".to_string(), PdfValue::Dictionary(new_fonts));
+    match file.get_object_mut(page_ref)? {
+        PdfObject::Value(PdfValue::Dictionary(page_dict)) => {
+            page_dict.insert(
+                "Resources".to_string(),
+                PdfValue::Dictionary(new_resources),
+            );
+            Ok(())
+        }
+        _ => Err(PdfError::Corrupt(format!(
+            "page {} {} is not a dictionary",
+            page_ref.object_number, page_ref.generation
+        ))),
+    }
+}
+
+fn escape_pdf_string(text: &str) -> String {
+    let mut output = String::with_capacity(text.len());
+    for character in text.chars() {
+        match character {
+            '(' | ')' | '\\' => {
+                output.push('\\');
+                output.push(character);
+            }
+            '\n' => output.push_str("\\n"),
+            '\r' => output.push_str("\\r"),
+            _ => output.push(character),
+        }
+    }
+    output
 }
 
 fn serialize_operations(operations: &[Operation]) -> Vec<u8> {

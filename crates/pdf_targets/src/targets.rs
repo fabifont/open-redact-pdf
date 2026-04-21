@@ -129,6 +129,7 @@ pub struct NormalizedRedactionPlan {
     pub targets: Vec<NormalizedPageTarget>,
     pub mode: RedactionMode,
     pub fill_color: Color,
+    pub overlay_text: Option<String>,
     pub remove_intersecting_annotations: bool,
     pub strip_metadata: bool,
     pub strip_attachments: bool,
@@ -138,10 +139,17 @@ pub fn normalize_plan(
     plan: RedactionPlan,
     page_sizes: &[pdf_graphics::Size],
 ) -> PdfResult<NormalizedRedactionPlan> {
-    if plan.overlay_text.is_some() {
-        return Err(PdfError::UnsupportedOption(
-            "overlayText is not implemented in the MVP".to_string(),
-        ));
+    if let Some(text) = plan.overlay_text.as_deref() {
+        if text.is_empty() {
+            return Err(PdfError::UnsupportedOption(
+                "overlayText must not be empty".to_string(),
+            ));
+        }
+        if plan.mode == Some(RedactionMode::Strip) {
+            return Err(PdfError::UnsupportedOption(
+                "overlayText requires mode \"redact\" (strip mode paints nothing)".to_string(),
+            ));
+        }
     }
 
     let mut targets = Vec::new();
@@ -209,6 +217,7 @@ pub fn normalize_plan(
         targets,
         mode: plan.mode.unwrap_or_default(),
         fill_color: plan.fill_color.unwrap_or_default().into(),
+        overlay_text: plan.overlay_text,
         remove_intersecting_annotations: plan.remove_intersecting_annotations.unwrap_or(true),
         strip_metadata: plan.strip_metadata.unwrap_or(false),
         strip_attachments: plan.strip_attachments.unwrap_or(false),

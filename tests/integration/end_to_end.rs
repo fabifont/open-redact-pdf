@@ -372,6 +372,80 @@ fn ocg_hidden_layer_refuses_redaction() {
 }
 
 #[test]
+fn overlay_text_is_stamped_over_redacted_regions() {
+    use open_redact_pdf::{FillColor, RedactionMode};
+
+    let mut document =
+        PdfDocument::open(&fixture("simple-text.pdf")).expect("fixture should open");
+    let report = document
+        .apply_redactions(RedactionPlan {
+            targets: vec![RedactionTarget::Rect {
+                page_index: 0,
+                x: 70.0,
+                y: 695.0,
+                width: 95.0,
+                height: 30.0,
+            }],
+            mode: Some(RedactionMode::Redact),
+            fill_color: Some(FillColor {
+                r: 0,
+                g: 0,
+                b: 0,
+            }),
+            overlay_text: Some("REDACTED".to_string()),
+            remove_intersecting_annotations: Some(false),
+            strip_metadata: Some(false),
+            strip_attachments: Some(false),
+        })
+        .expect("redaction with overlay text should succeed");
+    assert!(report.text_glyphs_removed > 0);
+
+    let saved = document.save().expect("save should succeed");
+    let reopened = PdfDocument::open(&saved).expect("saved pdf should reopen");
+    let extracted = reopened
+        .extract_text(0)
+        .expect("reopened extraction should succeed");
+    assert!(!extracted.text.contains("Secret Alpha"));
+    // The overlay label is now part of the page's text layer, so text
+    // extraction should find it above the redacted region.
+    assert!(
+        extracted.text.contains("REDACTED"),
+        "overlay text should survive save + reopen as page text, got: {}",
+        extracted.text
+    );
+}
+
+#[test]
+fn overlay_text_rejected_for_strip_mode() {
+    use open_redact_pdf::RedactionMode;
+
+    let mut document =
+        PdfDocument::open(&fixture("simple-text.pdf")).expect("fixture should open");
+    let err = document
+        .apply_redactions(RedactionPlan {
+            targets: vec![RedactionTarget::Rect {
+                page_index: 0,
+                x: 70.0,
+                y: 695.0,
+                width: 95.0,
+                height: 30.0,
+            }],
+            mode: Some(RedactionMode::Strip),
+            fill_color: None,
+            overlay_text: Some("REDACTED".to_string()),
+            remove_intersecting_annotations: Some(false),
+            strip_metadata: Some(false),
+            strip_attachments: Some(false),
+        })
+        .expect_err("strip mode must refuse overlay_text");
+    let message = err.to_string();
+    assert!(
+        message.contains("overlayText"),
+        "error should mention overlayText, got: {message}"
+    );
+}
+
+#[test]
 fn encoding_differences_array_resolves_glyph_names() {
     // /Encoding is a dict with /BaseEncoding /WinAnsiEncoding and a
     // /Differences array that remaps byte 0x40 to /AE (Æ) and 0x7B to /fi
