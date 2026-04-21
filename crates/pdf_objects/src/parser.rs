@@ -8,7 +8,22 @@ use crate::types::{
     ObjectRef, PdfDictionary, PdfFile, PdfObject, PdfStream, PdfString, PdfValue, XrefEntry,
 };
 
+/// Parses an unencrypted PDF, or an encrypted PDF whose user password is
+/// empty. For encrypted PDFs that require a user- or owner-supplied
+/// password, use [`parse_pdf_with_password`].
 pub fn parse_pdf(bytes: &[u8]) -> PdfResult<crate::document::ParsedDocument> {
+    parse_pdf_with_password(bytes, b"")
+}
+
+/// Parses an encrypted PDF with a caller-supplied password. The password
+/// is tried first as the user password, then as the owner password; if
+/// neither authenticates, the function returns
+/// [`PdfError::InvalidPassword`]. For unencrypted documents the password
+/// is ignored.
+pub fn parse_pdf_with_password(
+    bytes: &[u8],
+    password: &[u8],
+) -> PdfResult<crate::document::ParsedDocument> {
     let version = parse_header(bytes)?;
     let startxref = find_startxref(bytes)?;
     let (xref, mut trailer) = parse_xref_table(bytes, startxref)?;
@@ -42,7 +57,7 @@ pub fn parse_pdf(bytes: &[u8]) -> PdfResult<crate::document::ParsedDocument> {
     // members are plaintext and materialize_object_streams can proceed as
     // usual. Order matters — if we materialized first, each ObjStm's decoded
     // body would still be ciphertext and we'd parse garbage.
-    decrypt_document_if_encrypted(&mut objects, &mut trailer)?;
+    decrypt_document_if_encrypted(&mut objects, &mut trailer, password)?;
 
     materialize_object_streams(&mut objects, &mut max_object_number, &compressed)?;
 
@@ -58,6 +73,7 @@ pub fn parse_pdf(bytes: &[u8]) -> PdfResult<crate::document::ParsedDocument> {
 fn decrypt_document_if_encrypted(
     objects: &mut BTreeMap<ObjectRef, PdfObject>,
     trailer: &mut PdfDictionary,
+    password: &[u8],
 ) -> PdfResult<()> {
     let encrypt_ref = match trailer.get("Encrypt") {
         Some(PdfValue::Reference(object_ref)) => *object_ref,
@@ -85,15 +101,8 @@ fn decrypt_document_if_encrypted(
 
     let id_first = extract_id_first(trailer)?;
 
-    // MVP: only the empty user password is attempted. Real passwords need a
-    // plumbing change in the public API to let callers supply one.
-    let handler =
-        StandardSecurityHandler::open(&encrypt_dict, &id_first, b"")?.ok_or_else(|| {
-            PdfError::Unsupported(
-                "encrypted PDF requires a user password — non-empty passwords are not supported yet"
-                    .to_string(),
-            )
-        })?;
+    let handler = StandardSecurityHandler::open(&encrypt_dict, &id_first, password)?
+        .ok_or(PdfError::InvalidPassword)?;
 
     let refs: Vec<ObjectRef> = objects.keys().copied().collect();
     for object_ref in refs {
@@ -974,7 +983,7 @@ fn is_delimiter(byte: u8) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_pdf;
+    use super::{parse_pdf, parse_pdf_with_password};
     use crate::error::PdfError;
     use crate::types::PdfObject;
 
@@ -1241,28 +1250,40 @@ mod tests {
         }
     }
 
-    #[test]
-    fn parses_rc4_encrypted_pdf_with_empty_password() {
-        // Build a minimal PDF, encrypt each object's stream / string bytes
-        // with per-object RC4 using the Standard Security Handler (V=2,
-        // R=3, 128-bit key) derived from the empty user password, then
-        // round-trip it through parse_pdf. This is how real documents
-        // like bank statements that are "encrypted to prevent editing but
-        // openable by anyone" are shaped, and the regression target is
-        // that we can read them back without a password.
-        use crate::crypto::test_helpers::{compute_file_key, compute_u_r3, object_key, rc4};
-        use crate::document::ParsedDocument;
+    /// Build a minimal V=2/R=3 RC4-encrypted PDF with the supplied user /
+    /// owner passwords; encrypt a single content stream whose plaintext is
+    /// returned alongside the bytes. Reused by all the RC4-encryption
+    /// regression tests so the only per-test variable is which password
+    /// the caller supplies to `parse_pdf_with_password`.
+    fn build_rc4_encrypted_pdf(
+        user_password: &[u8],
+        owner_password: &[u8],
+    ) -> (Vec<u8>, &'static [u8]) {
+        use crate::crypto::SecurityRevision;
+        use crate::crypto::test_helpers::{
+            compute_file_key, compute_o, compute_u_r3, object_key, rc4,
+        };
 
         let id_first: [u8; 16] = [
             0x6e, 0x05, 0xb1, 0x20, 0x63, 0x94, 0x69, 0x1f, 0x22, 0x2c, 0x32, 0xac, 0x61, 0x8b,
             0xe6, 0x8d,
         ];
-        let owner_entry = vec![0xAAu8; 32];
         let permissions: i32 = -4;
         let key_length_bytes = 16;
 
-        let file_key =
-            compute_file_key(b"", &owner_entry, permissions, &id_first, key_length_bytes);
+        let owner_entry = compute_o(
+            owner_password,
+            user_password,
+            SecurityRevision::R3,
+            key_length_bytes,
+        );
+        let file_key = compute_file_key(
+            user_password,
+            &owner_entry,
+            permissions,
+            &id_first,
+            key_length_bytes,
+        );
         let u_entry = compute_u_r3(&file_key, &id_first);
 
         let escape_literal = |bytes: &[u8]| -> Vec<u8> {
@@ -1281,7 +1302,7 @@ mod tests {
             out
         };
 
-        let content_plain = b"BT\n/F1 24 Tf\n72 700 Td\n(CIPHERED SECRET) Tj\nET\n";
+        let content_plain: &'static [u8] = b"BT\n/F1 24 Tf\n72 700 Td\n(CIPHERED SECRET) Tj\nET\n";
         let content_cipher = rc4(&object_key(&file_key, 4, 0), content_plain);
 
         let mut pdf: Vec<u8> = Vec::new();
@@ -1340,18 +1361,64 @@ mod tests {
         pdf.extend_from_slice(b"] >>\n");
         pdf.extend_from_slice(format!("startxref\n{xref_offset}\n%%EOF\n").as_bytes());
 
-        let document: ParsedDocument = parse_pdf(&pdf).expect("encrypted PDF should decrypt");
+        (pdf, content_plain)
+    }
+
+    fn assert_decrypts_content_stream(document: &crate::document::ParsedDocument, expected: &[u8]) {
         assert_eq!(document.pages.len(), 1);
         assert!(
             !document.file.trailer.contains_key("Encrypt"),
             "trailer /Encrypt must be stripped once the document is decrypted in place"
         );
-
         let content_ref = document.pages[0].content_refs[0];
         let stream = match document.file.get_object(content_ref).unwrap() {
             PdfObject::Stream(stream) => stream,
             _ => panic!("page content must be a stream"),
         };
-        assert_eq!(stream.data, content_plain);
+        assert_eq!(stream.data, expected);
+    }
+
+    #[test]
+    fn parses_rc4_encrypted_pdf_with_empty_password() {
+        // Real-world "encrypted to prevent editing but openable by anyone"
+        // PDFs ship with an empty user password. The regression target
+        // here is that parse_pdf (the no-argument entry point) still opens
+        // them without a caller-supplied password.
+        let (pdf, plain) = build_rc4_encrypted_pdf(b"", b"arbitrary-owner-password");
+        let document = parse_pdf(&pdf).expect("empty-password PDF should decrypt");
+        assert_decrypts_content_stream(&document, plain);
+    }
+
+    #[test]
+    fn parses_rc4_encrypted_pdf_with_user_password() {
+        let (pdf, plain) = build_rc4_encrypted_pdf(b"userpw", b"ownerpw");
+        let document =
+            parse_pdf_with_password(&pdf, b"userpw").expect("correct user password should decrypt");
+        assert_decrypts_content_stream(&document, plain);
+    }
+
+    #[test]
+    fn parses_rc4_encrypted_pdf_with_owner_password() {
+        let (pdf, plain) = build_rc4_encrypted_pdf(b"userpw", b"ownerpw");
+        let document = parse_pdf_with_password(&pdf, b"ownerpw")
+            .expect("correct owner password should decrypt");
+        assert_decrypts_content_stream(&document, plain);
+    }
+
+    #[test]
+    fn rejects_wrong_password_with_invalid_password_error() {
+        let (pdf, _) = build_rc4_encrypted_pdf(b"userpw", b"ownerpw");
+        let err =
+            parse_pdf_with_password(&pdf, b"wrongpw").expect_err("wrong password must not decrypt");
+        assert_eq!(err, PdfError::InvalidPassword);
+    }
+
+    #[test]
+    fn parses_rc4_encrypted_pdf_with_utf8_password() {
+        let password = "pässwörd".as_bytes();
+        let (pdf, plain) = build_rc4_encrypted_pdf(password, b"ownerpw");
+        let document =
+            parse_pdf_with_password(&pdf, password).expect("UTF-8 user password should decrypt");
+        assert_decrypts_content_stream(&document, plain);
     }
 }

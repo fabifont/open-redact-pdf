@@ -16,6 +16,15 @@ pub fn open_pdf(input: Vec<u8>) -> Result<PdfHandle, JsValue> {
     })
 }
 
+#[wasm_bindgen(js_name = openPdfWithPassword)]
+pub fn open_pdf_with_password(input: Vec<u8>, password: String) -> Result<PdfHandle, JsValue> {
+    let document =
+        PdfDocument::open_with_password(&input, password.as_bytes()).map_err(to_js_error)?;
+    Ok(PdfHandle {
+        document: RefCell::new(document),
+    })
+}
+
 #[wasm_bindgen(js_name = getPageCount)]
 pub fn get_page_count(handle: &PdfHandle) -> usize {
     handle.document.borrow().page_count()

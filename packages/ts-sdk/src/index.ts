@@ -18,6 +18,7 @@ export type PdfHandle = {
 
 type WasmModule = {
   openPdf(input: Uint8Array): PdfHandle;
+  openPdfWithPassword(input: Uint8Array, password: string): PdfHandle;
   getPageCount(handle: PdfHandle): number;
   getPageSize(handle: PdfHandle, pageIndex: number): PageSize;
   extractText(handle: PdfHandle, pageIndex: number): RawPageText;
@@ -74,9 +75,27 @@ function requireWasm(): WasmModule {
   return wasmModule;
 }
 
-/** Opens a PDF from raw bytes and returns an opaque handle. */
+/**
+ * Opens an unencrypted PDF from raw bytes, or an encrypted PDF whose user
+ * password is empty. For encrypted PDFs that require a non-empty user- or
+ * owner-supplied password, use {@link openPdfWithPassword}.
+ */
 export function openPdf(input: Uint8Array): PdfHandle {
   return requireWasm().openPdf(input);
+}
+
+/**
+ * Opens an encrypted PDF from raw bytes using the supplied password.
+ *
+ * The password is tried first as the user password, then as the owner
+ * password. If neither authenticates, the call throws. For unencrypted
+ * documents the password is ignored.
+ *
+ * @param input - Raw PDF bytes.
+ * @param password - User or owner password, UTF-8 encoded.
+ */
+export function openPdfWithPassword(input: Uint8Array, password: string): PdfHandle {
+  return requireWasm().openPdfWithPassword(input, password);
 }
 
 /** Returns the number of pages in the opened PDF. */

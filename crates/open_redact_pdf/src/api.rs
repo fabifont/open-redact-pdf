@@ -1,5 +1,5 @@
 use pdf_graphics::Size;
-use pdf_objects::{PageInfo, ParsedDocument, PdfResult, parse_pdf};
+use pdf_objects::{PageInfo, ParsedDocument, PdfResult, parse_pdf, parse_pdf_with_password};
 use pdf_redact::{ApplyReport, apply_redactions};
 use pdf_targets::{NormalizedRedactionPlan, normalize_plan};
 use pdf_text::{TextItem, analyze_page_text, search_page_text};
@@ -41,9 +41,22 @@ pub struct PdfDocument {
 }
 
 impl PdfDocument {
-    /// Opens an unencrypted PDF from raw bytes.
+    /// Opens an unencrypted PDF from raw bytes, or an encrypted PDF
+    /// whose user password is empty. For encrypted PDFs that require a
+    /// user- or owner-supplied password, use
+    /// [`PdfDocument::open_with_password`].
     pub fn open(bytes: &[u8]) -> PdfResult<Self> {
         let parsed = parse_pdf(bytes)?;
+        Ok(Self { parsed })
+    }
+
+    /// Opens an encrypted PDF from raw bytes using the supplied password.
+    /// The password is tried first as the user password, then as the
+    /// owner password; if neither authenticates, the function returns
+    /// [`pdf_objects::PdfError::InvalidPassword`]. For unencrypted
+    /// documents the password is ignored.
+    pub fn open_with_password(bytes: &[u8], password: &[u8]) -> PdfResult<Self> {
+        let parsed = parse_pdf_with_password(bytes, password)?;
         Ok(Self { parsed })
     }
 
