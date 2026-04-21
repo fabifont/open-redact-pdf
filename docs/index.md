@@ -60,7 +60,7 @@ Deep technical documentation covering PDF spec concepts, implementation decision
 
 ## Current MVP scope
 
-- Unencrypted PDFs with classic xref tables, PDF 1.5+ cross-reference streams, object streams, and the hybrid `XRefStm` form
+- Unencrypted PDFs, plus Standard Security Handler decryption at V = 1/2, R = 2/3 (RC4 up to 128-bit) with the empty user password — classic xref tables, PDF 1.5+ cross-reference streams, object streams, and the hybrid `XRefStm` form are all handled
 - Unfiltered or `FlateDecode` streams, including PNG and TIFF `DecodeParms` predictors
 - Deterministic full-document rewrites with FlateDecode-compressed content streams
 - Form XObjects traversed for text extraction, search, and copy-on-write redaction (text, vector paint, and Image `Do` invocations inside the Form), with nested Forms handled recursively

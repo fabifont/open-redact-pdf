@@ -7,6 +7,7 @@ title: Roadmap
 ## Implemented MVP
 
 - Classic xref parsing with incremental update chain support (follows `Prev` pointers)
+- Standard Security Handler decryption (V = 1/2, R = 2/3, RC4 up to 128-bit) with the empty user password — the trailer's `/Encrypt` is consumed at parse time and downstream stages see a plaintext document
 - PDF 1.5+ cross-reference streams, object streams, and the hybrid `XRefStm` form
 - `FlateDecode` with the TIFF predictor (`/Predictor 2`) and PNG predictors (10–15) via `DecodeParms`
 - Page tree traversal with inherited resources, media boxes, crop boxes, and rotation
@@ -31,7 +32,7 @@ title: Roadmap
 - Partial image rewriting so redaction targets that overlap only part of an Image XObject mask the affected pixels instead of neutralizing the whole `Do`
 - Optional-content sanitization: today documents with hidden-by-default OCGs are refused up front; a future change would let callers opt in to stripping hidden layers so they can still redact the visible content
 - Incremental-save preservation (reading is supported; output is always a flat rewrite that flattens xref streams and object streams into a classic xref table)
-- Parse encrypted PDFs (at minimum password-based decryption under the standard security handler)
+- Broaden encrypted-PDF support — user-supplied passwords, Standard Security Handler V = 4 (AES-128), V = 5 / R = 6 (AES-256), and the public-key handler. The empty-password RC4 path is in; these extensions would complete the story.
 - Smarter visual line grouping for dense layouts where several short text runs sit only a unit or two apart in `y` and the current heuristic merges them into one line
 - Adopt `cargo-release` for the Rust publish step so the workspace version bump, inter-crate pin rewrite, tag creation, and ordered publish happen through a single tool; extend `scripts/check-release-version.mjs` to verify every `crates/*/Cargo.toml` inter-crate pin matches the workspace version, so "bumped workspace but forgot the pins" stops being a silent foot-gun
 

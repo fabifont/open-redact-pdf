@@ -8,7 +8,7 @@ This page documents the current known limitations of the engine, organized by su
 
 ### Parser
 
-- **No encrypted PDFs:** Any PDF containing an `Encrypt` key in the trailer dictionary is rejected outright. There is no support for password-based or certificate-based decryption.
+- **Encrypted PDFs — empty-password RC4 only:** PDFs secured by the Standard Security Handler at V = 1 or V = 2 and R = 2 or R = 3 (RC4 up to 128-bit) with an empty user password are decrypted in place during parsing. Everything else (non-empty user passwords, V ≥ 4 / AES, public-key handlers) still errors out at `StandardSecurityHandler::open` or earlier.
 - **Only FlateDecode stream filter:** The engine decodes streams compressed with FlateDecode (zlib/deflate). The following filters are all rejected with an explicit error: LZWDecode, ASCII85Decode, ASCIIHexDecode, DCTDecode (JPEG), JBIG2Decode, and JPXDecode.
 - _(resolved)_ TIFF predictor (`/Predictor 2`) is now supported for 8-bit components; other bit depths still error explicitly.
 - **Stream Length indirect references:** The parser only handles a literal integer `Length` value in stream dictionaries. If `Length` is an indirect reference (e.g., `5 0 R`), the parser falls back to scanning for the `endstream` keyword rather than resolving the reference. This fallback works for most well-formed PDFs but may mis-frame malformed or unusual streams.
@@ -59,7 +59,7 @@ The following improvements are listed in priority order, weighted by coverage im
 3. **Page-level extraction caching** — avoid re-parsing content streams on every `analyze_page_text` call; cache results keyed by page reference and content stream digest.
 4. **Additional stream filters** — ASCII85Decode and LZWDecode are the most commonly encountered unsupported filters after FlateDecode.
 5. **Object stream re-emission on save** — the writer currently flattens the input xref stream and any object streams into a classic xref table with inline indirect objects, which can double the saved size of modern PDFs. Re-emitting as an xref stream + object streams would match the input shape.
-6. **Encrypted PDF support** — at least password-based decryption (RC4 and AES standard security handler) so that password-protected documents can be opened, redacted, and re-saved without encryption.
+6. **Broaden encrypted PDF support** — the empty-password RC4 path (V = 1/2, R = 2/3) is in. Next: let callers supply a user password, add AES support (V = 4 R = 4, V = 5 R = 6), and handle public-key encryption so PDFs produced with modern Acrobat / Preview settings can be opened, redacted, and re-saved without encryption.
 7. **Smarter line grouping** — the current visual line-detection heuristic merges text runs whose centres are within `line_height × 0.55` of one another, which fails on dense layouts (e.g., bank statements) where several short lines sit only a unit or two apart.
 
 ---
