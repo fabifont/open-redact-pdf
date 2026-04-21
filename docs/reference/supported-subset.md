@@ -25,7 +25,7 @@ This project intentionally targets a narrow, explicit MVP.
 - Marked-content operators as safe pass-through (`BMC`, `BDC`, `EMC`, `MP`, `DP`)
 - ExtGState font entries (fonts set via `gs` operator)
 - Image XObject invocation detection
-- `Type1` and `TrueType` fonts in the current text path, including `ToUnicode` CMap decoding and `/Encoding /WinAnsiEncoding` for non-ASCII bytes
+- `Type1` and `TrueType` fonts in the current text path, including `ToUnicode` CMap decoding, `/Encoding /WinAnsiEncoding` for non-ASCII bytes, and `/Encoding` dictionaries with a `/Differences` array resolved through an Adobe Glyph List subset
 - Form XObjects (`/Subtype /Form`) traversed during text extraction and search, including the Form's `Matrix`, its own `Resources.Font` and `Resources.ExtGState`, and cycle-protected recursion
 - `Type0` with `Identity-H`, two-byte CIDs, and `ToUnicode` maps
 - Rectangle, quad, and quad-group redaction targets
