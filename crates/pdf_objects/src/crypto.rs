@@ -1,15 +1,15 @@
 //! PDF Standard Security Handler (encryption) — decryption side only.
 //!
-//! This module implements just enough of the PDF 1.7 Standard Security
-//! Handler to decrypt documents produced by revisions 2 and 3 (RC4 with a
-//! 40-bit or 128-bit key) when the user password is empty. That covers the
-//! large majority of "encrypted to prevent editing but openable by anyone"
-//! PDFs that real-world documents ship with.
+//! This module implements enough of the PDF 1.7 Standard Security Handler
+//! to decrypt documents produced by revisions 2 and 3 (RC4 with a 40-bit
+//! or 128-bit key) under either the user password or the owner password.
+//! The empty user password is accepted as a special case of the general
+//! user-password path.
 //!
-//! AES (V=4 / V=5, R=4..6), non-empty user passwords, and public-key
-//! security handlers are not implemented here and still fail up front with
-//! `PdfError::Unsupported`. They can be layered on top without changing
-//! this module's public surface.
+//! AES (V=4 / V=5, R=4..6) and public-key security handlers are not
+//! implemented here and still fail up front with `PdfError::Unsupported`.
+//! They can be layered on top without changing this module's public
+//! surface.
 
 use md5::{Digest, Md5};
 
@@ -97,11 +97,35 @@ impl StandardSecurityHandler {
             ));
         }
 
-        let file_key = compute_file_key(password, &o, p as i32, id_first, key_length_bytes);
-        if !authenticate_user_password(&file_key, revision, &u, id_first) {
-            return Ok(None);
+        // First try the supplied password as the user password.
+        let user_file_key = compute_file_key(password, &o, p as i32, id_first, key_length_bytes);
+        if authenticate_user_password(&user_file_key, revision, &u, id_first) {
+            return Ok(Some(Self {
+                file_key: user_file_key,
+            }));
         }
-        Ok(Some(Self { file_key }))
+
+        // Then try it as the owner password: Algorithm 7 recovers the
+        // padded user password from /O, after which we redo the user-
+        // password authentication with that recovered value. The file key
+        // used for object decryption is always derived from the user
+        // password — the owner password is only a way of recovering it.
+        let recovered_user_password =
+            recover_user_password_from_owner(password, &o, revision, key_length_bytes);
+        let owner_file_key = compute_file_key(
+            &recovered_user_password,
+            &o,
+            p as i32,
+            id_first,
+            key_length_bytes,
+        );
+        if authenticate_user_password(&owner_file_key, revision, &u, id_first) {
+            return Ok(Some(Self {
+                file_key: owner_file_key,
+            }));
+        }
+
+        Ok(None)
     }
 
     /// Decrypts `bytes` produced for the indirect object `(num, gen)` under
@@ -175,6 +199,45 @@ fn pad_password(password: &[u8]) -> [u8; 32] {
         out[take..].copy_from_slice(&PASSWORD_PADDING[..32 - take]);
     }
     out
+}
+
+fn recover_user_password_from_owner(
+    owner_password: &[u8],
+    o_entry: &[u8],
+    revision: SecurityRevision,
+    key_length_bytes: usize,
+) -> Vec<u8> {
+    // Algorithm 7 (PDF 1.7 §7.6.3.4). Symmetric inverse of Algorithm 3:
+    //   1. Pad the owner password and MD5 it.
+    //   2. For R=3 re-hash 50 times.
+    //   3. Truncate to `key_length_bytes` — this is the RC4 key used on /O.
+    //   4. For R=2, RC4-decrypt /O once with that key.
+    //      For R=3, RC4-decrypt /O 20 times with keys (base XOR i) for i
+    //      decreasing from 19 down to 0.
+    //   5. The result is the padded user password.
+    let padded = pad_password(owner_password);
+    let mut hasher = Md5::new();
+    hasher.update(padded);
+    let mut digest = hasher.finalize_reset();
+    if matches!(revision, SecurityRevision::R3) {
+        for _ in 0..50 {
+            hasher.update(&digest[..key_length_bytes]);
+            digest = hasher.finalize_reset();
+        }
+    }
+    let base_key = digest[..key_length_bytes].to_vec();
+
+    match revision {
+        SecurityRevision::R2 => rc4(&base_key, o_entry),
+        SecurityRevision::R3 => {
+            let mut buffer = o_entry.to_vec();
+            for i in (0u8..=19).rev() {
+                let key: Vec<u8> = base_key.iter().map(|byte| byte ^ i).collect();
+                buffer = rc4(&key, &buffer);
+            }
+            buffer
+        }
+    }
 }
 
 fn authenticate_user_password(
@@ -278,6 +341,43 @@ pub(crate) mod test_helpers {
         buffer
     }
 
+    /// Build the `/O` value for the Encrypt dictionary, given the owner
+    /// and user passwords and the security revision. Algorithm 3 — the
+    /// write-side inverse of Algorithm 7, used by tests to construct
+    /// synthetic encrypted PDFs with both owner and user passwords
+    /// populated.
+    pub fn compute_o(
+        owner_password: &[u8],
+        user_password: &[u8],
+        revision: SecurityRevision,
+        key_length_bytes: usize,
+    ) -> Vec<u8> {
+        let padded_owner = pad_password(owner_password);
+        let mut hasher = Md5::new();
+        hasher.update(padded_owner);
+        let mut digest = hasher.finalize_reset();
+        if matches!(revision, SecurityRevision::R3) {
+            for _ in 0..50 {
+                hasher.update(&digest[..key_length_bytes]);
+                digest = hasher.finalize_reset();
+            }
+        }
+        let base_key = digest[..key_length_bytes].to_vec();
+
+        let padded_user = pad_password(user_password);
+        match revision {
+            SecurityRevision::R2 => super::rc4(&base_key, &padded_user),
+            SecurityRevision::R3 => {
+                let mut buffer = super::rc4(&base_key, &padded_user);
+                for i in 1u8..=19 {
+                    let key: Vec<u8> = base_key.iter().map(|byte| byte ^ i).collect();
+                    buffer = super::rc4(&key, &buffer);
+                }
+                buffer
+            }
+        }
+    }
+
     /// Build the per-object RC4 key in exactly the same way the handler
     /// does, so tests can encrypt a known plaintext and then check that
     /// the parser's decryption path inverts the transform.
@@ -329,5 +429,146 @@ mod tests {
         assert_eq!(padded[1], b'b');
         assert_eq!(padded[2], PASSWORD_PADDING[0]);
         assert_eq!(padded[31], PASSWORD_PADDING[29]);
+    }
+
+    #[test]
+    fn pad_password_truncates_to_32_bytes() {
+        let long = vec![b'x'; 64];
+        let padded = pad_password(&long);
+        assert_eq!(padded, [b'x'; 32]);
+    }
+
+    fn build_encrypt_dict_r3(
+        o_entry: Vec<u8>,
+        u_entry: Vec<u8>,
+        permissions: i32,
+    ) -> PdfDictionary {
+        let mut dict = PdfDictionary::default();
+        dict.insert("Filter".to_string(), PdfValue::Name("Standard".to_string()));
+        dict.insert("V".to_string(), PdfValue::Integer(2));
+        dict.insert("R".to_string(), PdfValue::Integer(3));
+        dict.insert("Length".to_string(), PdfValue::Integer(128));
+        dict.insert(
+            "O".to_string(),
+            PdfValue::String(crate::types::PdfString(o_entry)),
+        );
+        dict.insert(
+            "U".to_string(),
+            PdfValue::String(crate::types::PdfString(u_entry)),
+        );
+        dict.insert("P".to_string(), PdfValue::Integer(permissions as i64));
+        dict
+    }
+
+    fn build_r3_handler_inputs(
+        user_password: &[u8],
+        owner_password: &[u8],
+        id_first: &[u8],
+    ) -> (PdfDictionary, Vec<u8>) {
+        let key_length_bytes = 16;
+        let permissions: i32 = -4;
+        let o = test_helpers::compute_o(
+            owner_password,
+            user_password,
+            SecurityRevision::R3,
+            key_length_bytes,
+        );
+        let file_key = test_helpers::compute_file_key(
+            user_password,
+            &o,
+            permissions,
+            id_first,
+            key_length_bytes,
+        );
+        let u = test_helpers::compute_u_r3(&file_key, id_first);
+        (build_encrypt_dict_r3(o, u, permissions), file_key)
+    }
+
+    #[test]
+    fn open_authenticates_user_password() {
+        let id_first = b"synthetic-id-0123456789abcdef";
+        let (dict, expected_file_key) = build_r3_handler_inputs(b"userpw", b"ownerpw", id_first);
+        let handler = StandardSecurityHandler::open(&dict, id_first, b"userpw")
+            .expect("open succeeds")
+            .expect("user password authenticates");
+        assert_eq!(handler.file_key, expected_file_key);
+    }
+
+    #[test]
+    fn open_authenticates_owner_password() {
+        let id_first = b"synthetic-id-0123456789abcdef";
+        let (dict, expected_file_key) = build_r3_handler_inputs(b"userpw", b"ownerpw", id_first);
+        let handler = StandardSecurityHandler::open(&dict, id_first, b"ownerpw")
+            .expect("open succeeds")
+            .expect("owner password authenticates");
+        // File key must match the one derived from the user password — the
+        // owner password is only a way of recovering it.
+        assert_eq!(handler.file_key, expected_file_key);
+    }
+
+    #[test]
+    fn open_rejects_wrong_password() {
+        let id_first = b"synthetic-id-0123456789abcdef";
+        let (dict, _) = build_r3_handler_inputs(b"userpw", b"ownerpw", id_first);
+        let result = StandardSecurityHandler::open(&dict, id_first, b"wrongpw")
+            .expect("open does not fail, only reports authentication");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn open_accepts_utf8_password() {
+        let id_first = b"synthetic-id-0123456789abcdef";
+        let password = "pässwörd".as_bytes();
+        let (dict, _) = build_r3_handler_inputs(password, b"ownerpw", id_first);
+        let handler = StandardSecurityHandler::open(&dict, id_first, password)
+            .expect("open succeeds")
+            .expect("UTF-8 password authenticates");
+        assert_eq!(handler.file_key.len(), 16);
+    }
+
+    #[test]
+    fn open_r2_authenticates_owner_password() {
+        // Algorithm 4 / 7 divergence from R=3: single RC4 round for /O,
+        // full 32-byte /U match.
+        let id_first = b"r2-synthetic-id";
+        let user_password = b"u2";
+        let owner_password = b"o2";
+        let key_length_bytes = 5; // 40-bit key, matching R=2 default.
+        let permissions: i32 = -4;
+        let o = test_helpers::compute_o(
+            owner_password,
+            user_password,
+            SecurityRevision::R2,
+            key_length_bytes,
+        );
+        let file_key = test_helpers::compute_file_key(
+            user_password,
+            &o,
+            permissions,
+            id_first,
+            key_length_bytes,
+        );
+        // Algorithm 4: /U is RC4(file_key, PASSWORD_PADDING).
+        let u = test_helpers::rc4(&file_key, &PASSWORD_PADDING);
+
+        let mut dict = PdfDictionary::default();
+        dict.insert("Filter".to_string(), PdfValue::Name("Standard".to_string()));
+        dict.insert("V".to_string(), PdfValue::Integer(1));
+        dict.insert("R".to_string(), PdfValue::Integer(2));
+        dict.insert("Length".to_string(), PdfValue::Integer(40));
+        dict.insert(
+            "O".to_string(),
+            PdfValue::String(crate::types::PdfString(o)),
+        );
+        dict.insert(
+            "U".to_string(),
+            PdfValue::String(crate::types::PdfString(u)),
+        );
+        dict.insert("P".to_string(), PdfValue::Integer(permissions as i64));
+
+        let handler = StandardSecurityHandler::open(&dict, id_first, owner_password)
+            .expect("open succeeds")
+            .expect("owner password authenticates on R=2");
+        assert_eq!(handler.file_key, file_key);
     }
 }

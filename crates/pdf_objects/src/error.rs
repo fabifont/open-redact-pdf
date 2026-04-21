@@ -9,6 +9,7 @@ pub enum PdfError {
     InvalidPageIndex(usize),
     MissingObject(String),
     UnsupportedOption(String),
+    InvalidPassword,
 }
 
 pub type PdfResult<T> = Result<T, PdfError>;
@@ -22,6 +23,10 @@ impl Display for PdfError {
             PdfError::InvalidPageIndex(index) => write!(f, "invalid page index: {index}"),
             PdfError::MissingObject(message) => write!(f, "missing object: {message}"),
             PdfError::UnsupportedOption(message) => write!(f, "unsupported option: {message}"),
+            PdfError::InvalidPassword => write!(
+                f,
+                "invalid password: the supplied password does not authenticate as the user or owner password for this document"
+            ),
         }
     }
 }
