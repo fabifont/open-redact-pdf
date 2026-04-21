@@ -38,7 +38,7 @@ This page documents the current known limitations of the engine, organized by su
 - **Form XObjects are redacted via copy-on-write:** each Form whose `BBox × Matrix × CTM` intersects a target is cloned per page (new `ObjectRef`), and the copy's content stream is rewritten to strip the targeted glyphs; the page's `Resources.XObject` entry is then rewritten to point at the copy, so other pages that share the original Form are unaffected. Vector paint operators and nested `Do` of other XObjects inside a redacted Form are passed through unchanged — the rewrite only neutralizes text glyph bytes. A warning is emitted when a redacted Form contains a nested `Do`.
 - _(resolved)_ `v` and `y` Bezier curve operators are now converted into full three-point curves in the path-bounds tracker by inferring the missing control point (current path point for `v`, endpoint for `y`), so curved paths that use only those shorthands are fully covered.
 - **`'` and `"` text operators use strip mode:** The `'` (move-to-next-line-and-show) and `"` (set-spacing-move-show) operators fall back to stripping the text glyph run without kern compensation. Redacted text adjacent to `'`/`"` runs may have slightly incorrect spacing in the output.
-- **`overlay_text` not implemented:** The redaction target model includes an `overlay_text` field for placing replacement label text over a redacted region. This field is accepted by the API but has no effect.
+- _(resolved)_ `overlay_text` is now stamped inside each redacted region in `redact` mode using Helvetica sized to fit the target, with contrast-aware black-or-white text color against the fill. The label is written into the page's own content stream, so it is searchable and extractable like any other page text; glyph names outside the Adobe Glyph List subset still fall back to `U+FFFD` on extraction.
 - **No per-glyph redaction control:** The minimum redaction unit is a quad group (a set of bounding quads for a matched text run). Individual glyphs within a matched run cannot be selectively preserved.
 - **AABB quad intersection:** Target-to-glyph intersection testing uses axis-aligned bounding box (AABB) intersection. For rotated redaction targets, this may over-select or under-select glyphs near the rotation boundary.
 
@@ -60,8 +60,7 @@ The following improvements are listed in priority order, weighted by coverage im
 4. **Additional stream filters** — ASCII85Decode and LZWDecode are the most commonly encountered unsupported filters after FlateDecode.
 5. **Object stream re-emission on save** — the writer currently flattens the input xref stream and any object streams into a classic xref table with inline indirect objects, which can double the saved size of modern PDFs. Re-emitting as an xref stream + object streams would match the input shape.
 6. **Encrypted PDF support** — at least password-based decryption (RC4 and AES standard security handler) so that password-protected documents can be opened, redacted, and re-saved without encryption.
-7. **`overlay_text` rendering** — wire the `overlay_text` plan field through to the content-stream rewrite so that redacted regions can carry a user-specified replacement label.
-8. **Smarter line grouping** — the current visual line-detection heuristic merges text runs whose centres are within `line_height × 0.55` of one another, which fails on dense layouts (e.g., bank statements) where several short lines sit only a unit or two apart.
+7. **Smarter line grouping** — the current visual line-detection heuristic merges text runs whose centres are within `line_height × 0.55` of one another, which fails on dense layouts (e.g., bank statements) where several short lines sit only a unit or two apart.
 
 ---
 

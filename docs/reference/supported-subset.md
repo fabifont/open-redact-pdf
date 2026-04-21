@@ -30,6 +30,7 @@ This project intentionally targets a narrow, explicit MVP.
 - `Type0` with `Identity-H`, two-byte CIDs, and `ToUnicode` maps
 - Rectangle, quad, and quad-group redaction targets
 - Three redaction modes: `strip` (remove bytes), `redact` (blank space + overlay), `erase` (blank space, no overlay)
+- `overlayText` support for `redact` mode — labels are stamped inside each overlay rectangle using Helvetica sized to fit, with contrast-aware black or white text color against the fill
 - Metadata stripping for supported document layouts
 - Attachment stripping for supported embedded-file layouts
 
