@@ -35,7 +35,7 @@ This page documents the current known limitations of the engine, organized by su
 
 ### Redaction
 
-- **Form XObjects that intersect a target cause a hard error:** Each Form XObject's `BBox`, transformed through its `Matrix` and the current CTM, is checked against the redaction targets. When the rectangle does not intersect any target, the Form is left alone and the page is redacted normally; when it does intersect, the redact pipeline returns an explicit `Unsupported` error because rewriting the Form's own content stream is not yet implemented (Forms are typically shared across pages, so correct redaction needs copy-on-write, which is a future change).
+- **Form XObjects are redacted via copy-on-write:** each Form whose `BBox × Matrix × CTM` intersects a target is cloned per page (new `ObjectRef`), and the copy's content stream is rewritten to strip the targeted glyphs; the page's `Resources.XObject` entry is then rewritten to point at the copy, so other pages that share the original Form are unaffected. Vector paint operators and nested `Do` of other XObjects inside a redacted Form are passed through unchanged — the rewrite only neutralizes text glyph bytes. A warning is emitted when a redacted Form contains a nested `Do`.
 - _(resolved)_ `v` and `y` Bezier curve operators are now converted into full three-point curves in the path-bounds tracker by inferring the missing control point (current path point for `v`, endpoint for `y`), so curved paths that use only those shorthands are fully covered.
 - **`'` and `"` text operators use strip mode:** The `'` (move-to-next-line-and-show) and `"` (set-spacing-move-show) operators fall back to stripping the text glyph run without kern compensation. Redacted text adjacent to `'`/`"` runs may have slightly incorrect spacing in the output.
 - **`overlay_text` not implemented:** The redaction target model includes an `overlay_text` field for placing replacement label text over a redacted region. This field is accepted by the API but has no effect.
@@ -54,7 +54,7 @@ This page documents the current known limitations of the engine, organized by su
 
 The following improvements are listed in priority order, weighted by coverage impact and security relevance:
 
-1. **Form XObject redaction** — text extraction and search already recurse into Form XObjects, and redaction already refuses cleanly when a target intersects a Form. What remains is copy-on-write rewriting of the Form's own content stream (plus recursive rewrites for nested Forms), so redaction targets that fall inside a Form can be satisfied instead of erroring.
+1. **Nested / paint-aware Form XObject redaction** — text redaction inside a Form is handled via copy-on-write. What remains: recursing through nested `Do` inside a redacted Form so that text inside inner Forms is also neutralized, and running the vector-path and image neutralization passes on the Form's own content so paint and inner Image XObjects that sit under a target are neutralized alongside the text.
 2. **Non-Identity-H composite font encodings** — required for CJK documents using standard CMaps (`UniJIS-UTF16-H`, `UniGB-UCS2-H`, `UniCNS-UTF16-H`, `UniKS-UCS2-H`, and friends).
 3. **Page-level extraction caching** — avoid re-parsing content streams on every `analyze_page_text` call; cache results keyed by page reference and content stream digest.
 4. **Additional stream filters** — ASCII85Decode and LZWDecode are the most commonly encountered unsupported filters after FlateDecode.
