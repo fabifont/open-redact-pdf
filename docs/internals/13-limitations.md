@@ -44,7 +44,7 @@ This page documents the current known limitations of the engine, organized by su
 
 ### Output
 
-- **Uncompressed content streams:** Rewritten content streams are emitted without compression. Output files may be significantly larger than the input for documents with large content streams.
+- _(resolved)_ Rewritten content streams are now FlateDecode-compressed on save; output no longer ships plaintext content bytes from the rewrite.
 - **No object renumbering or garbage collection:** After redaction, unreferenced indirect objects (e.g., font descriptors for fonts no longer used) remain in the output. No dead object elimination is performed.
 - **No linearization:** Output PDFs are not linearized ("fast web view"). Sequential reading and progressive loading are not supported.
 
@@ -58,7 +58,7 @@ The following improvements are listed in priority order, weighted by coverage im
 2. **Non-Identity-H composite font encodings** — required for CJK documents using standard CMaps (`UniJIS-UTF16-H`, `UniGB-UCS2-H`, `UniCNS-UTF16-H`, `UniKS-UCS2-H`, and friends).
 3. **Page-level extraction caching** — avoid re-parsing content streams on every `analyze_page_text` call; cache results keyed by page reference and content stream digest.
 4. **Additional stream filters** — ASCII85Decode and LZWDecode are the most commonly encountered unsupported filters after FlateDecode.
-5. **Output stream re-compression** — compress rewritten content streams with FlateDecode to reduce output size.
+5. **Object stream re-emission on save** — the writer currently flattens the input xref stream and any object streams into a classic xref table with inline indirect objects, which can double the saved size of modern PDFs. Re-emitting as an xref stream + object streams would match the input shape.
 6. **Encrypted PDF support** — at least password-based decryption (RC4 and AES standard security handler) so that password-protected documents can be opened, redacted, and re-saved without encryption.
 7. **`overlay_text` rendering** — wire the `overlay_text` plan field through to the content-stream rewrite so that redacted regions can carry a user-specified replacement label.
 8. **Smarter line grouping** — the current visual line-detection heuristic merges text runs whose centres are within `line_height × 0.55` of one another, which fails on dense layouts (e.g., bank statements) where several short lines sit only a unit or two apart.
