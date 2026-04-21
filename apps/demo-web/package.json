@@ -1,7 +1,7 @@
 {
   "name": "open-redact-pdf-demo-web",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "scripts": {
     "predev": "node ../../scripts/ensure-demo-artifacts.mjs",

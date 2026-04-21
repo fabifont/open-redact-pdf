@@ -15,17 +15,17 @@ version.workspace = true
 name = "open_redact_pdf"
 
 [dependencies]
-pdf_content = { package = "open-redact-pdf-content", path = "../pdf_content", version = "0.2.0" }
-pdf_graphics = { package = "open-redact-pdf-graphics", path = "../pdf_graphics", version = "0.2.0" }
-pdf_objects = { package = "open-redact-pdf-objects", path = "../pdf_objects", version = "0.2.0" }
-pdf_redact = { package = "open-redact-pdf-redact", path = "../pdf_redact", version = "0.2.0" }
-pdf_targets = { package = "open-redact-pdf-targets", path = "../pdf_targets", version = "0.2.0" }
-pdf_text = { package = "open-redact-pdf-text", path = "../pdf_text", version = "0.2.0" }
-pdf_writer = { package = "open-redact-pdf-writer", path = "../pdf_writer", version = "0.2.0" }
+pdf_content = { package = "open-redact-pdf-content", path = "../pdf_content", version = "0.3.0" }
+pdf_graphics = { package = "open-redact-pdf-graphics", path = "../pdf_graphics", version = "0.3.0" }
+pdf_objects = { package = "open-redact-pdf-objects", path = "../pdf_objects", version = "0.3.0" }
+pdf_redact = { package = "open-redact-pdf-redact", path = "../pdf_redact", version = "0.3.0" }
+pdf_targets = { package = "open-redact-pdf-targets", path = "../pdf_targets", version = "0.3.0" }
+pdf_text = { package = "open-redact-pdf-text", path = "../pdf_text", version = "0.3.0" }
+pdf_writer = { package = "open-redact-pdf-writer", path = "../pdf_writer", version = "0.3.0" }
 serde.workspace = true
 
 [dev-dependencies]
-pdf_objects = { package = "open-redact-pdf-objects", path = "../pdf_objects", version = "0.2.0" }
+pdf_objects = { package = "open-redact-pdf-objects", path = "../pdf_objects", version = "0.3.0" }
 
 [[test]]
 name = "integration_end_to_end"
