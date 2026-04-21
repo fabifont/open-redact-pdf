@@ -16,7 +16,11 @@ Loads the generated wasm module. Call this once before opening PDFs.
 
 ### `openPdf(input: Uint8Array): PdfHandle`
 
-Parses an input PDF and returns an opaque handle used by the rest of the API.
+Parses an unencrypted PDF, or an encrypted PDF whose user password is empty, and returns an opaque handle used by the rest of the API.
+
+### `openPdfWithPassword(input: Uint8Array, password: string): PdfHandle`
+
+Opens an encrypted PDF using the supplied password. The password is tried first as the user password, then as the owner password; if neither authenticates, the call throws. The password is interpreted as UTF-8 bytes. For unencrypted documents the password is ignored.
 
 ### `freePdf(handle: PdfHandle): void`
 

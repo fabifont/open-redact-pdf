@@ -18,7 +18,8 @@ pub struct PdfDocument;
 
 Methods:
 
-- `PdfDocument::open(bytes: &[u8]) -> PdfResult<PdfDocument>`
+- `PdfDocument::open(bytes: &[u8]) -> PdfResult<PdfDocument>` — opens an unencrypted PDF, or an encrypted PDF whose user password is empty
+- `PdfDocument::open_with_password(bytes: &[u8], password: &[u8]) -> PdfResult<PdfDocument>` — opens an encrypted PDF using the supplied password. The password is tried first as the user password, then as the owner password. Returns `PdfError::InvalidPassword` if neither authenticates.
 - `PdfDocument::page_count(&self) -> usize`
 - `PdfDocument::page_size(&self, page_index: usize) -> PdfResult<PageSize>`
 - `PdfDocument::extract_text(&self, page_index: usize) -> PdfResult<PageText>`
@@ -133,6 +134,7 @@ Typical categories in the MVP:
 - parse or corruption errors
 - unsupported PDF features
 - unsupported options
+- invalid password — the supplied password does not authenticate as the user or owner password on an encrypted document
 
 ## Example
 

@@ -8,7 +8,7 @@ This project intentionally targets a narrow, explicit MVP.
 
 ## Supported now
 
-- Unencrypted PDFs, and PDFs secured by the Standard Security Handler with `V` = 1 or 2 and `R` = 2 or 3 (RC4 up to 128-bit) when the user password is empty — the Encrypt dictionary is parsed, the file key is derived with the padded-password algorithm, each object's strings and stream data are decrypted with per-object RC4 keys, and the in-memory document no longer carries the `/Encrypt` entry
+- Unencrypted PDFs, and PDFs secured by the Standard Security Handler with `V` = 1 or 2 and `R` = 2 or 3 (RC4 up to 128-bit) under either the user password or the owner password (including the empty user password used by "encrypted to prevent editing but openable by anyone" documents) — the Encrypt dictionary is parsed, the file key is derived with the padded-password algorithm (Algorithm 2, or Algorithm 7 when authenticating the owner password), each object's strings and stream data are decrypted with per-object RC4 keys, and the in-memory document no longer carries the `/Encrypt` entry
 - Classic xref tables, including incremental update chains (multiple xref sections linked via `Prev`)
 - PDF 1.5+ cross-reference streams (`/Type /XRef`) and the hybrid form where a legacy trailer carries an `XRefStm` pointer
 - Object streams (`/Type /ObjStm`) — compressed objects are materialized into the regular object store during parsing
@@ -36,7 +36,7 @@ This project intentionally targets a narrow, explicit MVP.
 
 ## Explicitly unsupported or incomplete
 
-- Encrypted PDFs that require a non-empty user password, or that use Standard Security Handler V ≥ 3 (AES) — empty-password RC4 (V = 1/2, R = 2/3) is the only supported configuration today
+- Encrypted PDFs that use Standard Security Handler V ≥ 4 (AES) — RC4 (V = 1/2, R = 2/3) is the only supported algorithm today; non-empty user or owner passwords are supplied through the `open_with_password` / `openPdfWithPassword` entry points
 - Public-key encryption handlers
 - Incremental update preservation (output is always a flat rewrite; xref streams are rewritten as a classic xref table)
 - Full redaction of text, vector paint, and Image XObject invocations inside Form XObjects via copy-on-write. Each Form whose `BBox × Matrix × CTM` intersects a target is cloned per page; the copy's content stream is rewritten to strip the targeted glyphs, neutralize any vector paint operator that falls under a target, and replace intersecting Image `Do` invocations with `n`. Nested Forms are handled recursively up to depth 8, with each outer Form's `Resources.XObject` repointed at the redacted inner copy; other pages that share the original Forms are left untouched.
