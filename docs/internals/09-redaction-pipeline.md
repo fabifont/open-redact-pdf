@@ -10,6 +10,19 @@ Accepts the parsed PDF file, the extracted page representations, and a `Normaliz
 
 Global operations run once before any per-page work.
 
+### `reject_hidden_optional_content` / `sanitize_hidden_optional_content`
+
+Before anything else, the catalog's `/OCProperties` is inspected. If it declares Optional Content Groups that are off in the default configuration — either via a non-empty `/OFF` array or via `/BaseState /OFF` / `/Unchanged` — the engine's default behaviour is to refuse the document with `PdfError::Unsupported`. Hidden-layer content that the user never saw cannot be targeted through the visible glyph list, so silently redacting only the visible portion would be a correctness hole.
+
+Setting `sanitize_hidden_ocgs: true` on the plan replaces the rejection with an in-place sanitization pass:
+
+1. Collect the set of hidden OCG object refs from the catalog (`/OFF`, or `/BaseState /OFF` minus `/ON`).
+2. For each page, resolve `/Resources /Properties` to the set of names that map to hidden OCGs.
+3. Walk each page content stream, tracking marked-content nesting, and strip `BDC /OC /<name> ... EMC` blocks whose name is in the hidden set.
+4. Rewrite the catalog's `/OCProperties /D` to clear `/OFF` and set `/BaseState /ON`, so the saved output no longer advertises the hidden state.
+
+Form XObject content is not rewritten yet — a warning is emitted on any sanitized page that also has XObjects so callers can audit.
+
 ### `strip_metadata`
 
 Removes the `Info` dictionary from the trailer and the `Metadata` stream from the document catalog. Both can contain author names, creation timestamps, software identifiers, and other identifying information.
