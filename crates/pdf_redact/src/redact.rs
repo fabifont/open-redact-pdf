@@ -732,6 +732,21 @@ fn neutralize_vector_operations(
                 let third = transform_point_pair(&operation.operands, 4, ctm, page_transform)?;
                 path_segments.push(PathSegment::CurveTo(first, second, third));
             }
+            "v" => {
+                // v x2 y2 x3 y3: the first control point is the current point;
+                // the second control point and endpoint come from the operands.
+                let current =
+                    current_path_point(&path_segments).unwrap_or(Point { x: 0.0, y: 0.0 });
+                let second = transform_point_pair(&operation.operands, 0, ctm, page_transform)?;
+                let third = transform_point_pair(&operation.operands, 2, ctm, page_transform)?;
+                path_segments.push(PathSegment::CurveTo(current, second, third));
+            }
+            "y" => {
+                // y x1 y1 x3 y3: the second control point is the endpoint.
+                let first = transform_point_pair(&operation.operands, 0, ctm, page_transform)?;
+                let third = transform_point_pair(&operation.operands, 2, ctm, page_transform)?;
+                path_segments.push(PathSegment::CurveTo(first, third, third));
+            }
             "h" => path_segments.push(PathSegment::ClosePath),
             "re" => {
                 let rect = Rect {
@@ -975,6 +990,23 @@ fn serialize_operations(operations: &[Operation]) -> Vec<u8> {
         output.push('\n');
     }
     output.into_bytes()
+}
+
+fn current_path_point(path_segments: &[PathSegment]) -> Option<Point> {
+    for segment in path_segments.iter().rev() {
+        match segment {
+            PathSegment::MoveTo(point) | PathSegment::LineTo(point) => return Some(*point),
+            PathSegment::CurveTo(_, _, endpoint) => return Some(*endpoint),
+            PathSegment::Rect(rect) => {
+                return Some(Point {
+                    x: rect.x,
+                    y: rect.y,
+                });
+            }
+            PathSegment::ClosePath => continue,
+        }
+    }
+    None
 }
 
 fn path_bounds(path_segments: &[PathSegment], stroke_width: f64) -> Option<Rect> {
