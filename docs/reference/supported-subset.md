@@ -38,7 +38,7 @@ This project intentionally targets a narrow, explicit MVP.
 - Encrypted PDFs
 - TIFF predictor (`/Predictor 2`) in `FlateDecode` streams
 - Incremental update preservation (output is always a flat rewrite; xref streams are rewritten as a classic xref table)
-- Redaction of pages that invoke Form XObjects — text inside a Form is extractable and searchable, but an explicit `Unsupported` error is still returned when a redaction target falls on a page whose content stream contains `Do` of a Form
+- Redaction of pages where a redaction target actually falls inside a Form XObject — the engine checks each Form's `BBox` (transformed through its `Matrix` and the current CTM) against the targets and only errors when they intersect; Forms that sit away from the targets are left untouched and the page is redacted normally
 - Type3 fonts
 - broad CID font support beyond the current `Identity-H` path
 - partial image rewriting

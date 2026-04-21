@@ -106,7 +106,9 @@ For a `Do` operator referencing an Image XObject, the engine:
 4. Tests against all targets.
 5. If any intersection is found: replaces the `Do` with `n`, adds the XObject reference to the deferred-removal set.
 
-Form XObjects are not redacted in this pipeline. Text extraction and search both recurse into Form XObjects (see `06-text-system.md §1`), but redaction is a different problem: a Form is typically shared across several pages, so rewriting it in place would affect all of them. A `Do` referencing a Form XObject on a page with redaction targets therefore still returns a hard error. A future change would need to copy-on-write the Form (or each overlapping glyph run), then apply the full pipeline to the copy.
+Form XObjects are handled intersection-aware. Each Form carries a `BBox` and an optional `Matrix`. At neutralization time the Form's rectangle is transformed through `Matrix × current CTM × page transform` and compared against the redaction targets. When the resulting quad does not touch any target, the Form is left untouched and the page redacts normally; when it does, the engine returns an explicit `Unsupported` error because rewriting the Form's content stream in place is not yet implemented (Forms are typically shared across pages, so correct redaction needs copy-on-write of the Form object plus a recursive pass of the full pipeline on the copy).
+
+Text extraction and search still recurse into Form XObjects — see `06-text-system.md §1`. The pipeline above is the redaction side of the story.
 
 ## 7. Deferred cleanup
 
