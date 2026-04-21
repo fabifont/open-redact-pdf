@@ -545,6 +545,20 @@ body {
   clip: rect(0, 0, 0, 0);
 }
 
+.field-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.field-checkbox input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+
 .password-prompt {
   display: flex;
   align-items: center;

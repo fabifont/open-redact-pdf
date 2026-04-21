@@ -15,6 +15,8 @@ type SidebarProps = {
   searchTargets: QuadGroupTarget[];
   redactionMode: RedactionMode;
   onRedactionModeChange: (mode: RedactionMode) => void;
+  sanitizeHiddenOcgs: boolean;
+  onSanitizeHiddenOcgsChange: (value: boolean) => void;
   onApply: () => void;
   onClear: () => void;
   onDownload: () => void;
@@ -34,6 +36,8 @@ export function Sidebar({
   searchTargets,
   redactionMode,
   onRedactionModeChange,
+  sanitizeHiddenOcgs,
+  onSanitizeHiddenOcgsChange,
   onApply,
   onClear,
   onDownload,
@@ -96,6 +100,14 @@ export function Sidebar({
             <option value="strip">Strip (remove bytes)</option>
           </select>
         </div>
+        <label className="field field-checkbox">
+          <input
+            type="checkbox"
+            checked={sanitizeHiddenOcgs}
+            onChange={(event) => onSanitizeHiddenOcgsChange(event.target.checked)}
+          />
+          <span>Strip hidden Optional Content Groups</span>
+        </label>
         <div className="button-row">
           <button
             type="button"

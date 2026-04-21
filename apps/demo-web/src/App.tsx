@@ -61,6 +61,7 @@ export function App() {
   const [previewDocument, setPreviewDocument] = useState<PDFDocumentProxy | null>(null);
   const [zoom, setZoom] = useState(1);
   const [collapsedPages, setCollapsedPages] = useState<Set<number>>(new Set());
+  const [sanitizeHiddenOcgs, setSanitizeHiddenOcgs] = useState(false);
   // When opening an encrypted PDF fails with PdfError::InvalidPassword we
   // stash the bytes here so the user can enter a password and retry.
   const [pendingEncryptedBytes, setPendingEncryptedBytes] = useState<Uint8Array | null>(null);
@@ -263,6 +264,7 @@ export function App() {
       removeIntersectingAnnotations: true,
       stripMetadata: true,
       stripAttachments: true,
+      sanitizeHiddenOcgs,
     };
     try {
       const report = applyRedactions(handle, plan);
@@ -352,6 +354,8 @@ export function App() {
           searchTargets={searchTargets}
           redactionMode={redactionMode}
           onRedactionModeChange={setRedactionMode}
+          sanitizeHiddenOcgs={sanitizeHiddenOcgs}
+          onSanitizeHiddenOcgsChange={setSanitizeHiddenOcgs}
           onApply={applyPlan}
           onClear={clearTargets}
           onDownload={downloadSanitizedPdf}
