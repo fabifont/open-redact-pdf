@@ -106,7 +106,7 @@ For a `Do` operator referencing an Image XObject, the engine:
 4. Tests against all targets.
 5. If any intersection is found: replaces the `Do` with `n`, adds the XObject reference to the deferred-removal set.
 
-Form XObjects are not supported. A `Do` referencing a Form XObject returns a hard error. Form XObjects contain their own content streams with their own resource dictionaries and coordinate spaces; correct redaction would require recursively applying the full pipeline, which is not implemented.
+Form XObjects are not redacted in this pipeline. Text extraction and search both recurse into Form XObjects (see `06-text-system.md §1`), but redaction is a different problem: a Form is typically shared across several pages, so rewriting it in place would affect all of them. A `Do` referencing a Form XObject on a page with redaction targets therefore still returns a hard error. A future change would need to copy-on-write the Form (or each overlapping glyph run), then apply the full pipeline to the copy.
 
 ## 7. Deferred cleanup
 

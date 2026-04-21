@@ -26,6 +26,7 @@ This project intentionally targets a narrow, explicit MVP.
 - ExtGState font entries (fonts set via `gs` operator)
 - Image XObject invocation detection
 - `Type1` and `TrueType` fonts in the current text path, including `ToUnicode` CMap decoding and `/Encoding /WinAnsiEncoding` for non-ASCII bytes
+- Form XObjects (`/Subtype /Form`) traversed during text extraction and search, including the Form's `Matrix`, its own `Resources.Font` and `Resources.ExtGState`, and cycle-protected recursion
 - `Type0` with `Identity-H`, two-byte CIDs, and `ToUnicode` maps
 - Rectangle, quad, and quad-group redaction targets
 - Three redaction modes: `strip` (remove bytes), `redact` (blank space + overlay), `erase` (blank space, no overlay)
@@ -37,7 +38,7 @@ This project intentionally targets a narrow, explicit MVP.
 - Encrypted PDFs
 - TIFF predictor (`/Predictor 2`) in `FlateDecode` streams
 - Incremental update preservation (output is always a flat rewrite; xref streams are rewritten as a classic xref table)
-- Form XObjects on targeted pages
+- Redaction of pages that invoke Form XObjects — text inside a Form is extractable and searchable, but an explicit `Unsupported` error is still returned when a redaction target falls on a page whose content stream contains `Do` of a Form
 - Type3 fonts
 - broad CID font support beyond the current `Identity-H` path
 - partial image rewriting

@@ -50,6 +50,16 @@ At load time, the engine scans all ExtGState entries in the page resources. For 
 
 At interpretation time, when a `gs` operator is encountered, the engine looks up the ExtGState font map by the ExtGState name and, if a font entry is found, sets `text_state.font` to the synthetic key.
 
+### Form XObjects
+
+When the interpreter hits a `Do` operator naming an XObject with `/Subtype /Form`, it recurses into the Form's own content stream. The Form is treated as an implicit `q/Q` pair: the current CTM and text state are saved, the Form's `Matrix` is pre-multiplied into the CTM, the Form's own `Resources.Font` and `Resources.ExtGState` are loaded (falling back to the caller's `Resources` for any names the Form does not declare), and the Form's operations are fed through the same per-operator match used for the page. When the Form returns, the saved CTM and text state are restored.
+
+Cycles — a Form `Do`-ing itself, or two Forms referencing each other — are broken by a `BTreeSet<ObjectRef>` of Forms currently being rendered. Recursion is additionally capped at `MAX_FORM_XOBJECT_DEPTH = 16` to keep pathological or adversarial documents from driving the interpreter into unbounded recursion.
+
+Image XObjects and XObjects with an unknown subtype are skipped silently at this layer — they carry no text.
+
+Redaction of pages that invoke a Form XObject still fails explicitly. Extracting text from a Form is safe because it is a read-only operation on the Form's bytes; rewriting a Form's content stream in place would change it for every other page that shares it, which is not acceptable for redaction, and copy-on-write rewriting has not been implemented yet.
+
 ---
 
 ## 2. Text state tracking (`RuntimeTextState`)

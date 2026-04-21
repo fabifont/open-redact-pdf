@@ -23,7 +23,6 @@ This page documents the current known limitations of the engine, organized by su
 ### Text Extraction
 
 - **No caching:** `analyze_page_text` re-executes the full content stream interpretation on every call. For pages with large or complex content streams, repeated calls are expensive.
-- **No Form XObject text extraction:** Text appearing inside Form XObjects (reusable content streams referenced via the `Do` operator) is not extracted. Such text is invisible to the search engine and cannot be targeted by geometry.
 - **No annotation text:** Text in annotation appearances (widget annotations, free text annotations, etc.) is not extracted.
 
 ### Search
@@ -35,7 +34,7 @@ This page documents the current known limitations of the engine, organized by su
 
 ### Redaction
 
-- **Form XObjects on targeted pages cause a hard error:** If a page that contains a targeted region also uses Form XObjects, the redact pipeline returns an explicit `Unsupported` error. There is no partial or best-effort handling.
+- **Form XObjects on targeted pages cause a hard error:** If a page that contains a targeted region also uses Form XObjects, the redact pipeline returns an explicit `Unsupported` error. Text extraction and search both recurse into Form XObjects today, but redaction would require copy-on-write rewriting of the Form's own content stream and is not implemented yet.
 - **`v` and `y` Bezier curves not tracked in path bounds:** When computing bounding boxes for vector paths (to neutralize graphic content under a redaction target), the `v` and `y` curve operators (which omit one control point) are not included in the accumulated bounds. A curved path using only `v`/`y` segments may not be fully covered.
 - **`'` and `"` text operators use strip mode:** The `'` (move-to-next-line-and-show) and `"` (set-spacing-move-show) operators fall back to stripping the text glyph run without kern compensation. Redacted text adjacent to `'`/`"` runs may have slightly incorrect spacing in the output.
 - **`overlay_text` not implemented:** The redaction target model includes an `overlay_text` field for placing replacement label text over a redacted region. This field is accepted by the API but has no effect.

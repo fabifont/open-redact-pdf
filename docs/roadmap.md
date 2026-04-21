@@ -24,7 +24,7 @@ title: Roadmap
 ## Next priorities
 
 - Broader CID and composite font support beyond `Identity-H` + `ToUnicode`
-- Form XObject traversal and redaction
+- Form XObject redaction (text extraction already traverses Form XObjects; redaction on pages that invoke a Form still errors explicitly)
 - Better vector-path bounds
 - Partial image rewriting
 - Optional-content and hidden-layer sanitization

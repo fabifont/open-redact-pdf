@@ -52,7 +52,7 @@ A compression or encoding algorithm applied to a **stream**'s raw bytes. Common 
 A dictionary associated with a font object that describes global font metrics and properties: `FontBBox`, `Ascent`, `Descent`, `CapHeight`, `Flags`, and a reference to the embedded font program. This engine does not parse font descriptor metrics; glyph height is estimated by heuristic. See `06-text-system.md §3`.
 
 ### Form XObject
-A self-contained reusable content unit stored as a **stream** with its own operators, resources, and coordinate space. Invoked with the `Do` operator. This engine does not support redaction inside form XObjects; a `Do` referencing one on a targeted page returns a hard error. See `09-redaction-pipeline.md §6`.
+A self-contained reusable content unit stored as a **stream** with its own operators, resources, and coordinate space. Invoked with the `Do` operator. Text extraction and search recurse into Form XObjects (applying the Form's `Matrix` to the CTM and preferring the Form's `Resources` over the page's), but redaction is not yet supported — a `Do` referencing a Form on a page that also has redaction targets still returns a hard error. See `06-text-system.md §1` and `09-redaction-pipeline.md §6`.
 
 ### Generation number
 A 16-bit integer paired with an **object number** to form an **object reference**. Increments when an object is deleted and reused; almost always 0 in modern PDFs.
