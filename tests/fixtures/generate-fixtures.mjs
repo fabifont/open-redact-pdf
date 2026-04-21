@@ -579,6 +579,61 @@ writeFixture("ocg-hidden-layer.pdf", {
   trailer: { Root: { ref: [1, 0] } },
 });
 
+// Document with an Optional Content Group that is off by default AND the
+// content stream actually carries a `BDC /OC /Hidden ... EMC` block
+// referencing it. The /OFF array entry marks the layer as hidden, so the
+// default rejection path refuses this file. With `sanitize_hidden_ocgs: true`
+// set on the plan, the sanitization pass strips the hidden block before the
+// rest of redaction runs, leaving the visible line intact.
+writeFixture("ocg-hidden-content.pdf", {
+  objects: [
+    {
+      id: 1,
+      value: {
+        Type: "/Catalog",
+        Pages: { ref: [2, 0] },
+        OCProperties: {
+          OCGs: [{ ref: [7, 0] }],
+          D: {
+            Order: [{ ref: [7, 0] }],
+            OFF: [{ ref: [7, 0] }],
+          },
+        },
+      },
+    },
+    { id: 2, value: { Type: "/Pages", Count: 1, Kids: [{ ref: [3, 0] }] } },
+    basePageObjects({
+      pageId: 3,
+      pagesId: 2,
+      contentId: 4,
+      resources: {
+        Font: { F1: { ref: [5, 0] } },
+        Properties: { Hidden: { ref: [7, 0] } },
+      },
+    }),
+    {
+      id: 4,
+      stream: {
+        dict: {},
+        data:
+          "BT\n/F1 20 Tf\n72 700 Td\n(Visible Line) Tj\nET\n" +
+          "/OC /Hidden BDC\n" +
+          "BT\n/F1 20 Tf\n72 670 Td\n(Hidden Secret) Tj\nET\n" +
+          "EMC\n",
+      },
+    },
+    fontObject,
+    {
+      id: 7,
+      value: {
+        Type: "/OCG",
+        Name: "Hidden Layer",
+      },
+    },
+  ],
+  trailer: { Root: { ref: [1, 0] } },
+});
+
 // Form XObject fixture. Page text is split between the page content stream
 // ("Page Outer") and a referenced Form XObject ("Form Inner Secret"). The
 // Form has its own Matrix (translating the inner text by +100 in y) and its
