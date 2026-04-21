@@ -766,8 +766,17 @@ fn neutralize_vector_operations(
     targets: &[&NormalizedPageTarget],
     page_transform: Matrix,
 ) -> PdfResult<usize> {
+    neutralize_vector_operations_with_ctm(operations, targets, page_transform, Matrix::identity())
+}
+
+fn neutralize_vector_operations_with_ctm(
+    operations: &mut [Operation],
+    targets: &[&NormalizedPageTarget],
+    page_transform: Matrix,
+    base_ctm: Matrix,
+) -> PdfResult<usize> {
     let mut removed = 0usize;
-    let mut ctm = Matrix::identity();
+    let mut ctm = base_ctm;
     let mut ctm_stack = Vec::new();
     let mut stroke_width = 1.0f64;
     let mut path_segments = Vec::<PathSegment>::new();
@@ -857,9 +866,28 @@ fn neutralize_image_operations(
     xobjects: &BTreeMap<String, XObjectKind>,
     redacted_form_names: &BTreeSet<String>,
 ) -> PdfResult<(usize, Vec<String>)> {
+    neutralize_image_operations_with_ctm(
+        operations,
+        targets,
+        page_transform,
+        xobjects,
+        redacted_form_names,
+        Matrix::identity(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn neutralize_image_operations_with_ctm(
+    operations: &mut [Operation],
+    targets: &[&NormalizedPageTarget],
+    page_transform: Matrix,
+    xobjects: &BTreeMap<String, XObjectKind>,
+    redacted_form_names: &BTreeSet<String>,
+    base_ctm: Matrix,
+) -> PdfResult<(usize, Vec<String>)> {
     let mut removed = 0usize;
     let mut neutralized_names = Vec::new();
-    let mut ctm = Matrix::identity();
+    let mut ctm = base_ctm;
     let mut ctm_stack = Vec::new();
     for operation in operations.iter_mut() {
         match operation.operator.as_str() {
@@ -1403,6 +1431,25 @@ fn redact_form_xobject(
     glyphs_removed_total += count_removed_glyphs(&removals);
     let mut new_ops = parsed.operations.clone();
     rewrite_text_operations(&mut new_ops, &removals, mode, warnings);
+
+    // Neutralize vector paint and Image XObject invocations inside the Form
+    // the same way we do on the page, but starting the CTM at this Form's
+    // invocation CTM so the resulting quads are in page space.
+    neutralize_vector_operations_with_ctm(
+        &mut new_ops,
+        targets,
+        page_transform,
+        form_invocation_ctm,
+    )?;
+    let redacted_inner_form_names: BTreeSet<String> = inner_overrides.keys().cloned().collect();
+    neutralize_image_operations_with_ctm(
+        &mut new_ops,
+        targets,
+        page_transform,
+        &inner_xobjects,
+        &redacted_inner_form_names,
+        form_invocation_ctm,
+    )?;
 
     let serialized = serialize_operations(&new_ops);
     let (data, use_flate) = match pdf_objects::flate_encode(&serialized) {
