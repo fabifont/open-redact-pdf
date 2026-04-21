@@ -38,7 +38,7 @@ This project intentionally targets a narrow, explicit MVP.
 
 - Encrypted PDFs
 - Incremental update preservation (output is always a flat rewrite; xref streams are rewritten as a classic xref table)
-- Redaction of text inside Form XObjects via copy-on-write, including nested Form XObjects up to a recursion depth of 8: when a `Do` invocation's `BBox × Matrix × CTM` intersects a target, the engine allocates a per-page copy of the Form, rewrites that copy's content stream to strip the targeted glyphs, recurses into any `Do` inside the Form whose inner Form also intersects a target, and repoints each Form's `Resources.XObject` entry at the redacted inner copy. Other pages that share the original Forms are left untouched.
+- Full redaction of text, vector paint, and Image XObject invocations inside Form XObjects via copy-on-write. Each Form whose `BBox × Matrix × CTM` intersects a target is cloned per page; the copy's content stream is rewritten to strip the targeted glyphs, neutralize any vector paint operator that falls under a target, and replace intersecting Image `Do` invocations with `n`. Nested Forms are handled recursively up to depth 8, with each outer Form's `Resources.XObject` repointed at the redacted inner copy; other pages that share the original Forms are left untouched.
 - Redaction of documents whose catalog has `/OCProperties` with any layer off in the default configuration, or with `/BaseState /OFF`/`/Unchanged` — the engine rejects these up front because hidden-layer content would otherwise survive the redaction
 - Type3 fonts
 - broad CID font support beyond the current `Identity-H` path

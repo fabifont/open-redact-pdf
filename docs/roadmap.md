@@ -24,7 +24,6 @@ title: Roadmap
 ## Next priorities
 
 - Broader CID and composite font support beyond `Identity-H` + `ToUnicode`
-- Paint- and image-aware Form redaction (nested Form text is handled via copy-on-write recursion; vector paint and Image XObjects inside a redacted Form are passed through unchanged)
 - Better vector-path bounds
 - Partial image rewriting
 - Optional-content and hidden-layer sanitization (redaction currently refuses documents with hidden-by-default layers; sanitizing or surfacing the hidden text is a future change)
