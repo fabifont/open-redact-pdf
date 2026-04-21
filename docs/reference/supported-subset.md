@@ -13,7 +13,7 @@ This project intentionally targets a narrow, explicit MVP.
 - PDF 1.5+ cross-reference streams (`/Type /XRef`) and the hybrid form where a legacy trailer carries an `XRefStm` pointer
 - Object streams (`/Type /ObjStm`) — compressed objects are materialized into the regular object store during parsing
 - Full-document rewrites on save (incremental updates and xref streams are flattened into a single classic-xref revision on output)
-- Unfiltered or `FlateDecode` streams, including `FlateDecode` with PNG predictors 10–15 (via `DecodeParms /Predictor`)
+- Unfiltered or `FlateDecode` streams, including `FlateDecode` with the TIFF predictor (`/Predictor 2`) and PNG predictors 10–15 (via `DecodeParms /Predictor`)
 - Page tree traversal with inherited resources, media boxes, crop boxes, and page rotation
 - Inline images (`BI`/`ID`/`EI`) are safely skipped during content stream parsing
 - Dictionary operands in content streams (e.g., `BDC` with `<</MCID 0>>`)
@@ -36,7 +36,6 @@ This project intentionally targets a narrow, explicit MVP.
 ## Explicitly unsupported or incomplete
 
 - Encrypted PDFs
-- TIFF predictor (`/Predictor 2`) in `FlateDecode` streams
 - Incremental update preservation (output is always a flat rewrite; xref streams are rewritten as a classic xref table)
 - Redaction of pages where a redaction target actually falls inside a Form XObject — the engine checks each Form's `BBox` (transformed through its `Matrix` and the current CTM) against the targets and only errors when they intersect; Forms that sit away from the targets are left untouched and the page is redacted normally
 - Type3 fonts

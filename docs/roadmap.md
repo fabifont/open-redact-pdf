@@ -8,7 +8,7 @@ title: Roadmap
 
 - Classic xref parsing with incremental update chain support (follows `Prev` pointers)
 - PDF 1.5+ cross-reference streams, object streams, and the hybrid `XRefStm` form
-- `FlateDecode` with PNG predictors (10–15) via `DecodeParms`
+- `FlateDecode` with the TIFF predictor (`/Predictor 2`) and PNG predictors (10–15) via `DecodeParms`
 - Page tree traversal
 - Content parsing for common text, path, image, clipping, color, graphics-state, and marked-content operators (including inline images and dictionary operands)
 - Simple-font text extraction and search geometry (including fonts set via ExtGState `gs` operator), with `ToUnicode` CMap decoding and `WinAnsiEncoding` for non-ASCII bytes
@@ -31,7 +31,6 @@ title: Roadmap
 - Overlay text stamping
 - Incremental-save preservation (reading is supported; output is always a flat rewrite)
 - Parse encrypted pdfs
-- TIFF predictor (`/Predictor 2`) in `FlateDecode` streams
 
 ## Documentation policy
 

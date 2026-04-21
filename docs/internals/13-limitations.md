@@ -10,7 +10,7 @@ This page documents the current known limitations of the engine, organized by su
 
 - **No encrypted PDFs:** Any PDF containing an `Encrypt` key in the trailer dictionary is rejected outright. There is no support for password-based or certificate-based decryption.
 - **Only FlateDecode stream filter:** The engine decodes streams compressed with FlateDecode (zlib/deflate). The following filters are all rejected with an explicit error: LZWDecode, ASCII85Decode, ASCIIHexDecode, DCTDecode (JPEG), JBIG2Decode, and JPXDecode.
-- **No TIFF predictor:** FlateDecode with PNG predictors (10–15) is supported. The TIFF predictor (`/Predictor 2`) is rejected with an explicit error because it requires separate bit-depth-aware reconstruction and has not shown up in real-world PDFs that motivated the rest of the parser.
+- _(resolved)_ TIFF predictor (`/Predictor 2`) is now supported for 8-bit components; other bit depths still error explicitly.
 - **Stream Length indirect references:** The parser only handles a literal integer `Length` value in stream dictionaries. If `Length` is an indirect reference (e.g., `5 0 R`), the parser falls back to scanning for the `endstream` keyword rather than resolving the reference. This fallback works for most well-formed PDFs but may mis-frame malformed or unusual streams.
 
 ### Font System
