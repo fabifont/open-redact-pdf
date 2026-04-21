@@ -1,11 +1,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use pdf_content::{Operation, ParsedPageContent, parse_page_contents};
+use pdf_content::{Operation, ParsedPageContent, parse_content_stream, parse_page_contents};
 use pdf_graphics::{Matrix, Quad, Rect};
 use pdf_objects::{
-    PageInfo, PdfError, PdfFile, PdfResult, PdfValue, decode_stream, document::get_stream,
+    ObjectRef, PageInfo, PdfDictionary, PdfError, PdfFile, PdfResult, PdfValue, decode_stream,
+    document::get_stream,
 };
 use serde::{Deserialize, Serialize};
+
+/// Maximum Form XObject recursion depth. Prevents pathological or adversarial
+/// PDFs from driving the interpreter into unbounded recursion.
+const MAX_FORM_XOBJECT_DEPTH: usize = 16;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TextItem {
@@ -78,7 +83,7 @@ pub fn analyze_page_text(
 ) -> PdfResult<ExtractedPageText> {
     let parsed = parse_page_contents(file, page)?;
     let (fonts, extgstate_fonts) = load_fonts(file, &page.resources)?;
-    interpret_page_text(page_index, page, &parsed, &fonts, &extgstate_fonts)
+    interpret_page_text(file, page_index, page, &parsed, &fonts, &extgstate_fonts)
 }
 
 pub fn search_page_text(page: &ExtractedPageText, query: &str) -> Vec<TextMatch> {
@@ -385,6 +390,7 @@ fn normalize_search_text(input: &str) -> String {
 }
 
 fn interpret_page_text(
+    file: &PdfFile,
     page_index: usize,
     page: &PageInfo,
     parsed: &ParsedPageContent,
@@ -396,16 +402,55 @@ fn interpret_page_text(
     let mut ctm = Matrix::identity();
     let mut ctm_stack: Vec<(Matrix, RuntimeTextState)> = Vec::new();
     let mut text_state = RuntimeTextState::default();
+    let mut xobject_stack: BTreeSet<ObjectRef> = BTreeSet::new();
 
-    for (operation_index, operation) in parsed.operations.iter().enumerate() {
+    run_operations(
+        file,
+        &parsed.operations,
+        fonts,
+        extgstate_fonts,
+        &page.resources,
+        page_transform,
+        &mut ctm,
+        &mut ctm_stack,
+        &mut text_state,
+        &mut context,
+        &mut xobject_stack,
+        0,
+    )?;
+
+    Ok(ExtractedPageText {
+        page_index,
+        text: context.text,
+        items: context.items,
+        glyphs: context.glyphs,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_operations(
+    file: &PdfFile,
+    operations: &[Operation],
+    fonts: &BTreeMap<String, LoadedFont>,
+    extgstate_fonts: &ExtGStateFontMap,
+    resources: &PdfDictionary,
+    page_transform: Matrix,
+    ctm: &mut Matrix,
+    ctm_stack: &mut Vec<(Matrix, RuntimeTextState)>,
+    text_state: &mut RuntimeTextState,
+    context: &mut TextContext,
+    xobject_stack: &mut BTreeSet<ObjectRef>,
+    depth: usize,
+) -> PdfResult<()> {
+    for (operation_index, operation) in operations.iter().enumerate() {
         match operation.operator.as_str() {
-            "q" => ctm_stack.push((ctm, text_state.clone())),
+            "q" => ctm_stack.push((*ctm, text_state.clone())),
             "Q" => {
                 let (saved_ctm, saved_text_state) = ctm_stack
                     .pop()
                     .unwrap_or((Matrix::identity(), RuntimeTextState::default()));
-                ctm = saved_ctm;
-                text_state = saved_text_state;
+                *ctm = saved_ctm;
+                *text_state = saved_text_state;
             }
             "gs" => {
                 let gs_name = operand_name(operation, 0)?;
@@ -416,7 +461,7 @@ fn interpret_page_text(
             }
             "cm" => {
                 let matrix = matrix_from_operands(&operation.operands)?;
-                ctm = matrix.multiply(ctm);
+                *ctm = matrix.multiply(*ctm);
             }
             "BT" => {
                 text_state.text_matrix = Matrix::identity();
@@ -471,13 +516,13 @@ fn interpret_page_text(
             "Tj" => {
                 let string = operand_string(operation, 0)?;
                 show_text(
-                    &mut context,
+                    context,
                     operation_index,
                     ShowOperand::Direct { operand_index: 0 },
                     string,
-                    &mut text_state,
+                    text_state,
                     fonts,
-                    ctm,
+                    *ctm,
                     page_transform,
                 )?;
             }
@@ -489,13 +534,13 @@ fn interpret_page_text(
                 context.pending_line_break = true;
                 let string = operand_string(operation, 0)?;
                 show_text(
-                    &mut context,
+                    context,
                     operation_index,
                     ShowOperand::Direct { operand_index: 0 },
                     string,
-                    &mut text_state,
+                    text_state,
                     fonts,
-                    ctm,
+                    *ctm,
                     page_transform,
                 )?;
             }
@@ -509,13 +554,13 @@ fn interpret_page_text(
                 context.pending_line_break = true;
                 let string = operand_string(operation, 2)?;
                 show_text(
-                    &mut context,
+                    context,
                     operation_index,
                     ShowOperand::Direct { operand_index: 2 },
                     string,
-                    &mut text_state,
+                    text_state,
                     fonts,
-                    ctm,
+                    *ctm,
                     page_transform,
                 )?;
             }
@@ -528,16 +573,16 @@ fn interpret_page_text(
                 for (element_index, segment) in segments.iter().enumerate() {
                     match segment {
                         PdfValue::String(string) => show_text(
-                            &mut context,
+                            context,
                             operation_index,
                             ShowOperand::Array {
                                 operand_index: 0,
                                 element_index,
                             },
                             string,
-                            &mut text_state,
+                            text_state,
                             fonts,
-                            ctm,
+                            *ctm,
                             page_transform,
                         )?,
                         value => {
@@ -555,17 +600,154 @@ fn interpret_page_text(
                 }
             }
             "Do" => {
-                let _ = operand_name(operation, 0)?;
+                let name = operand_name(operation, 0)?;
+                enter_form_xobject(
+                    file,
+                    name,
+                    fonts,
+                    extgstate_fonts,
+                    resources,
+                    page_transform,
+                    ctm,
+                    ctm_stack,
+                    text_state,
+                    context,
+                    xobject_stack,
+                    depth,
+                )?;
             }
             _ => {}
         }
     }
+    Ok(())
+}
 
-    Ok(ExtractedPageText {
-        page_index,
-        text: context.text,
-        items: context.items,
-        glyphs: context.glyphs,
+#[allow(clippy::too_many_arguments)]
+fn enter_form_xobject(
+    file: &PdfFile,
+    name: &str,
+    outer_fonts: &BTreeMap<String, LoadedFont>,
+    outer_extgstate: &ExtGStateFontMap,
+    outer_resources: &PdfDictionary,
+    page_transform: Matrix,
+    ctm: &mut Matrix,
+    ctm_stack: &mut Vec<(Matrix, RuntimeTextState)>,
+    text_state: &mut RuntimeTextState,
+    context: &mut TextContext,
+    xobject_stack: &mut BTreeSet<ObjectRef>,
+    depth: usize,
+) -> PdfResult<()> {
+    if depth + 1 > MAX_FORM_XOBJECT_DEPTH {
+        return Ok(());
+    }
+    let Some(xobject_ref) = lookup_xobject_ref(outer_resources, name) else {
+        return Ok(());
+    };
+    if !xobject_stack.insert(xobject_ref) {
+        // Cycle detected — bail out of this branch without an error.
+        return Ok(());
+    }
+
+    let result = (|| -> PdfResult<()> {
+        let stream = get_stream(file, xobject_ref)?;
+        if stream.dict.get("Subtype").and_then(PdfValue::as_name) != Some("Form") {
+            // Image XObjects (or unknown subtypes) carry no text — skip silently.
+            return Ok(());
+        }
+
+        let form_matrix = stream
+            .dict
+            .get("Matrix")
+            .and_then(PdfValue::as_array)
+            .map(matrix_from_pdf_values)
+            .transpose()?
+            .unwrap_or_else(Matrix::identity);
+
+        let form_resources_owned: PdfDictionary = stream
+            .dict
+            .get("Resources")
+            .map(|value| file.resolve_dict(value).cloned())
+            .transpose()?
+            .unwrap_or_else(|| outer_resources.clone());
+
+        let (form_fonts, form_extgstate) = load_fonts(file, &form_resources_owned)?;
+        // Inherit from the caller's maps when the Form's own Resources did not
+        // declare a given resource name. This matches PDF 32000-1 § 7.8.3: the
+        // Form's Resources are preferred, but the parent scope is a fall-back
+        // when the Form omits an entry.
+        let mut effective_fonts: BTreeMap<String, LoadedFont> = outer_fonts.clone();
+        for (key, value) in form_fonts {
+            effective_fonts.insert(key, value);
+        }
+        let mut effective_extgstate: ExtGStateFontMap = outer_extgstate.clone();
+        for (key, value) in form_extgstate {
+            effective_extgstate.insert(key, value);
+        }
+
+        let decoded = decode_stream(stream)?;
+        let form_operations = parse_content_stream(&decoded)?.operations;
+
+        // Form invocation is bracketed by an implicit q/Q. Save CTM and
+        // text_state, pre-multiply the Form's /Matrix into the CTM, and
+        // restore both on exit.
+        let saved_ctm = *ctm;
+        let saved_text_state = text_state.clone();
+        *ctm = form_matrix.multiply(saved_ctm);
+
+        run_operations(
+            file,
+            &form_operations,
+            &effective_fonts,
+            &effective_extgstate,
+            &form_resources_owned,
+            page_transform,
+            ctm,
+            ctm_stack,
+            text_state,
+            context,
+            xobject_stack,
+            depth + 1,
+        )?;
+
+        *ctm = saved_ctm;
+        *text_state = saved_text_state;
+        Ok(())
+    })();
+
+    xobject_stack.remove(&xobject_ref);
+    result
+}
+
+fn lookup_xobject_ref(resources: &PdfDictionary, name: &str) -> Option<ObjectRef> {
+    let xobjects = match resources.get("XObject")? {
+        PdfValue::Dictionary(dict) => dict,
+        _ => return None,
+    };
+    match xobjects.get(name)? {
+        PdfValue::Reference(object_ref) => Some(*object_ref),
+        _ => None,
+    }
+}
+
+fn matrix_from_pdf_values(values: &[PdfValue]) -> PdfResult<Matrix> {
+    if values.len() != 6 {
+        return Err(PdfError::Corrupt(
+            "Matrix array must have six numeric entries".to_string(),
+        ));
+    }
+    let mut numbers = [0.0; 6];
+    for (slot, value) in numbers.iter_mut().zip(values.iter()) {
+        *slot = value
+            .as_number()
+            .ok_or_else(|| PdfError::Corrupt("Matrix entry is not a number".to_string()))?;
+    }
+    Ok(Matrix {
+        a: numbers[0],
+        b: numbers[1],
+        c: numbers[2],
+        d: numbers[3],
+        e: numbers[4],
+        f: numbers[5],
     })
 }
 
