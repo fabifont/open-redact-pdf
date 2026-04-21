@@ -330,6 +330,48 @@ fn inline_image_and_dictionary_operand_pages_are_parseable() {
 }
 
 #[test]
+fn ocg_hidden_layer_refuses_redaction() {
+    // The fixture's catalog declares one Optional Content Group marked as
+    // OFF in the default configuration. Redaction must refuse to run on such
+    // a document because the hidden layer may carry text that the user never
+    // saw and therefore cannot target. Text extraction must still work so
+    // callers can inspect what is there.
+    let document = PdfDocument::open(&fixture("ocg-hidden-layer.pdf"))
+        .expect("ocg fixture should open");
+    let extracted = document
+        .extract_text(0)
+        .expect("text extraction should still succeed");
+    assert!(extracted.text.contains("Visible Line"));
+
+    let mut document = PdfDocument::open(&fixture("ocg-hidden-layer.pdf"))
+        .expect("ocg fixture should open");
+    let err = document
+        .apply_redactions(RedactionPlan {
+            targets: vec![RedactionTarget::Rect {
+                page_index: 0,
+                x: 70.0,
+                y: 695.0,
+                width: 95.0,
+                height: 30.0,
+            }],
+            mode: None,
+            fill_color: None,
+            overlay_text: None,
+            remove_intersecting_annotations: Some(false),
+            strip_metadata: Some(false),
+            strip_attachments: Some(false),
+        })
+        .expect_err("redaction must refuse documents with hidden OCGs");
+    let message = err.to_string();
+    assert!(
+        message.contains("Optional Content Groups")
+            || message.contains("OCProperties")
+            || message.contains("hidden"),
+        "error should mention hidden layers, got: {message}"
+    );
+}
+
+#[test]
 fn encoding_differences_array_resolves_glyph_names() {
     // /Encoding is a dict with /BaseEncoding /WinAnsiEncoding and a
     // /Differences array that remaps byte 0x40 to /AE (Æ) and 0x7B to /fi

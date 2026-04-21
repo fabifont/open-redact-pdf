@@ -34,6 +34,8 @@ pub fn apply_redactions(
     let mut report = ApplyReport::default();
     let page_targets = group_targets(plan);
 
+    reject_hidden_optional_content(file)?;
+
     if plan.strip_metadata {
         strip_metadata(file)?;
     }
@@ -990,6 +992,64 @@ fn serialize_operations(operations: &[Operation]) -> Vec<u8> {
         output.push('\n');
     }
     output.into_bytes()
+}
+
+/// Rejects documents whose default Optional Content configuration marks any
+/// OCG as off. Content inside an off-by-default OCG is not shown to the
+/// reader but still lives in the content stream; a user who sees only the
+/// visible page cannot select that text as a redaction target, so the engine
+/// would silently leave the hidden content in the saved PDF. Erroring up
+/// front is the same posture the engine takes for other silent-leak vectors
+/// (encrypted PDFs, Form XObjects that intersect targets, etc.).
+fn reject_hidden_optional_content(file: &PdfFile) -> PdfResult<()> {
+    let Some(PdfValue::Reference(root_ref)) = file.trailer.get("Root") else {
+        return Ok(());
+    };
+    let catalog = match file.get_dictionary(*root_ref) {
+        Ok(dict) => dict,
+        Err(_) => return Ok(()),
+    };
+    let Some(oc_properties_value) = catalog.get("OCProperties") else {
+        return Ok(());
+    };
+    let oc_properties = match file.resolve_dict(oc_properties_value) {
+        Ok(dict) => dict,
+        Err(_) => return Ok(()),
+    };
+    let Some(default_value) = oc_properties.get("D") else {
+        return Ok(());
+    };
+    let default_config = match file.resolve_dict(default_value) {
+        Ok(dict) => dict,
+        Err(_) => return Ok(()),
+    };
+    if let Some(off_value) = default_config.get("OFF") {
+        let resolved = file.resolve(off_value).unwrap_or(off_value);
+        if let Some(entries) = resolved.as_array() {
+            if !entries.is_empty() {
+                return Err(PdfError::Unsupported(
+                    "documents with Optional Content Groups that are off by default are not \
+                     supported for redaction: hidden layers may carry sensitive content that is \
+                     not visible to the user and therefore cannot be safely targeted"
+                        .to_string(),
+                ));
+            }
+        }
+    }
+    // Also refuse documents that declare a non-default BaseState of "OFF",
+    // which hides every OCG unless explicitly turned on.
+    if let Some(base_state) = default_config
+        .get("BaseState")
+        .and_then(PdfValue::as_name)
+    {
+        if base_state == "OFF" || base_state == "Unchanged" {
+            return Err(PdfError::Unsupported(format!(
+                "documents with /OCProperties /D /BaseState /{base_state} are not supported for \
+                 redaction because hidden layers cannot be safely targeted"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn current_path_point(path_segments: &[PathSegment]) -> Option<Point> {

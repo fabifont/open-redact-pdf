@@ -534,6 +534,51 @@ writeFixture("encoding-differences.pdf", {
   trailer: { Root: { ref: [1, 0] } },
 });
 
+// Document with Optional Content Groups where one layer is off by default.
+// Redaction must refuse this file because hidden-layer content cannot be
+// safely targeted through the visible glyph list.
+writeFixture("ocg-hidden-layer.pdf", {
+  objects: [
+    {
+      id: 1,
+      value: {
+        Type: "/Catalog",
+        Pages: { ref: [2, 0] },
+        OCProperties: {
+          OCGs: [{ ref: [7, 0] }],
+          D: {
+            Order: [{ ref: [7, 0] }],
+            OFF: [{ ref: [7, 0] }],
+          },
+        },
+      },
+    },
+    { id: 2, value: { Type: "/Pages", Count: 1, Kids: [{ ref: [3, 0] }] } },
+    basePageObjects({
+      pageId: 3,
+      pagesId: 2,
+      contentId: 4,
+      resources: { Font: { F1: { ref: [5, 0] } } },
+    }),
+    {
+      id: 4,
+      stream: {
+        dict: {},
+        data: "BT\n/F1 20 Tf\n72 700 Td\n(Visible Line) Tj\nET\n",
+      },
+    },
+    fontObject,
+    {
+      id: 7,
+      value: {
+        Type: "/OCG",
+        Name: "Hidden Layer",
+      },
+    },
+  ],
+  trailer: { Root: { ref: [1, 0] } },
+});
+
 // Form XObject fixture. Page text is split between the page content stream
 // ("Page Outer") and a referenced Form XObject ("Form Inner Secret"). The
 // Form has its own Matrix (translating the inner text by +100 in y) and its
