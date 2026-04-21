@@ -634,6 +634,85 @@ writeFixture("form-xobject-text.pdf", {
   trailer: { Root: { ref: [1, 0] } },
 });
 
+// Nested Form XObject: the page does Do /FmOuter which itself does Do
+// /FmInner. The inner Form carries the targeted text "Nested Secret".
+// Tests that the copy-on-write redactor recurses through the outer Form
+// into the inner one, rewrites the inner content, and repoints the
+// outer Form's own Resources.XObject at the redacted inner copy.
+writeFixture("form-xobject-nested.pdf", {
+  objects: [
+    { id: 1, value: { Type: "/Catalog", Pages: { ref: [2, 0] } } },
+    { id: 2, value: { Type: "/Pages", Count: 1, Kids: [{ ref: [3, 0] }] } },
+    basePageObjects({
+      pageId: 3,
+      pagesId: 2,
+      contentId: 4,
+      resources: {
+        Font: { F1: { ref: [5, 0] } },
+        XObject: { FmOuter: { ref: [6, 0] } },
+      },
+    }),
+    {
+      id: 4,
+      stream: {
+        dict: {},
+        data: "BT\n/F1 18 Tf\n72 750 Td\n(Page Outer) Tj\nET\n" + "q\n1 0 0 1 0 0 cm\n/FmOuter Do\nQ\n",
+      },
+    },
+    fontObject,
+    {
+      id: 6,
+      stream: {
+        dict: {
+          Type: "/XObject",
+          Subtype: "/Form",
+          FormType: 1,
+          BBox: [0, 0, 612, 792],
+          Matrix: [1, 0, 0, 1, 0, 0],
+          Resources: {
+            Font: { F2: { ref: [7, 0] } },
+            XObject: { FmInner: { ref: [8, 0] } },
+          },
+        },
+        data: "BT\n/F2 12 Tf\n72 600 Td\n(Middle Layer) Tj\nET\n" + "q\n1 0 0 1 0 0 cm\n/FmInner Do\nQ\n",
+      },
+    },
+    {
+      id: 7,
+      value: {
+        Type: "/Font",
+        Subtype: "/Type1",
+        BaseFont: "/Helvetica",
+        Encoding: "/WinAnsiEncoding",
+      },
+    },
+    {
+      id: 8,
+      stream: {
+        dict: {
+          Type: "/XObject",
+          Subtype: "/Form",
+          FormType: 1,
+          BBox: [0, 0, 612, 792],
+          Matrix: [1, 0, 0, 1, 0, 0],
+          Resources: { Font: { F3: { ref: [9, 0] } } },
+        },
+        data: "BT\n/F3 14 Tf\n72 500 Td\n(Nested Secret) Tj\nET\n",
+      },
+    },
+    {
+      id: 9,
+      value: {
+        Type: "/Font",
+        Subtype: "/Type1",
+        BaseFont: "/Helvetica",
+        Encoding: "/WinAnsiEncoding",
+      },
+    },
+  ],
+  trailer: { Root: { ref: [1, 0] } },
+});
+
 // Single-byte Type1 font declaring /Encoding /WinAnsiEncoding so that
 // bytes like 0xC9, 0xE0, 0xB0, 0x92, 0x80 decode to É, à, °, ’, € instead
 // of replacement characters. The content stream shows a string built

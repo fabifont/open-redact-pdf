@@ -601,6 +601,68 @@ fn form_xobject_does_not_block_redaction_when_target_is_on_page_content() {
 }
 
 #[test]
+fn nested_form_xobject_redaction_recurses_into_inner_forms() {
+    // form-xobject-nested.pdf is three layers deep: page → FmOuter → FmInner.
+    // The targeted text "Nested Secret" lives in FmInner. The engine must
+    // walk through both Forms, rewrite the inner Form's content, then
+    // repoint the outer Form's own Resources.XObject at the redacted
+    // inner copy.
+    let mut document = PdfDocument::open(&fixture("form-xobject-nested.pdf"))
+        .expect("nested form fixture should open");
+    let extracted_before = document
+        .extract_text(0)
+        .expect("text extraction should succeed");
+    assert!(extracted_before.text.contains("Nested Secret"));
+    assert!(extracted_before.text.contains("Middle Layer"));
+    assert!(extracted_before.text.contains("Page Outer"));
+
+    let matches = document
+        .search_text(0, "Nested Secret")
+        .expect("search should succeed");
+    assert_eq!(matches.len(), 1);
+    let quads = matches[0]
+        .quads
+        .iter()
+        .map(|quad| quad.points)
+        .collect::<Vec<_>>();
+    let report = document
+        .apply_redactions(RedactionPlan {
+            targets: vec![RedactionTarget::QuadGroup {
+                page_index: 0,
+                quads,
+            }],
+            mode: None,
+            fill_color: None,
+            overlay_text: None,
+            remove_intersecting_annotations: Some(false),
+            strip_metadata: Some(false),
+            strip_attachments: Some(false),
+        })
+        .expect("nested Form redaction should succeed");
+    assert!(report.text_glyphs_removed > 0);
+    assert!(report.form_xobjects_rewritten >= 1);
+
+    let saved = document.save().expect("save should succeed");
+    let reopened = PdfDocument::open(&saved).expect("saved pdf should reopen");
+    let extracted_after = reopened
+        .extract_text(0)
+        .expect("reopened extraction should succeed");
+    assert!(
+        !extracted_after.text.contains("Nested Secret"),
+        "inner-Form text should be gone after save, got: {}",
+        extracted_after.text
+    );
+    assert!(
+        extracted_after.text.contains("Page Outer"),
+        "outermost text should survive"
+    );
+    assert!(
+        extracted_after.text.contains("Middle Layer"),
+        "middle Form text should survive (it was not targeted)"
+    );
+}
+
+#[test]
 fn form_xobject_redaction_rewrites_the_form_content_stream() {
     // The Form XObject in this fixture carries "Form Inner Secret".
     // Redacting that string now succeeds: the engine allocates a per-page
