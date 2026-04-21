@@ -16,7 +16,7 @@ pub fn parse_pdf(bytes: &[u8]) -> Result<ParsedDocument, PdfError>
 
 ## 2. Parsing pipeline
 
-Parsing proceeds in five ordered stages. Each stage depends on the output of the previous one.
+Parsing proceeds in six ordered stages. Each stage depends on the output of the previous one.
 
 ### Stage 1: `parse_header`
 
@@ -24,7 +24,7 @@ Checks that the file begins with `%PDF-` and extracts the version string (e.g., 
 
 ### Stage 2: `find_startxref`
 
-Scans **backwards** from the end of the file for the `startxref` keyword, then reads the decimal integer that follows it on the same or next line. This integer is the byte offset of the cross-reference table (or xref stream, which this engine rejects — see Stage 3).
+Scans **backwards** from the end of the file for the `startxref` keyword, then reads the decimal integer that follows it on the same or next line. This integer is the byte offset of the cross-reference table, which may be either a classic `xref` section or an indirect xref stream object (PDF 1.5+) — Stage 3 dispatches on which form is present.
 
 Scanning backwards rather than forwards is mandated by the PDF specification: the `startxref` entry is always near the end of the file, and scanning from the beginning would be fragile in the presence of binary content that happens to contain the ASCII bytes of `startxref`.
 
@@ -32,31 +32,41 @@ Scanning backwards rather than forwards is mandated by the PDF specification: th
 
 This is the most structurally complex stage. It resolves the entire cross-reference chain and merges all revisions into a single flat object table.
 
-**Cycle detection.** A `BTreeSet<usize>` of visited byte offsets is maintained across the chain walk. If `parse_xref_table` is asked to follow a `Prev` pointer to an offset it has already visited, it returns an error rather than looping forever. This protects against both accidentally malformed and deliberately adversarial PDFs.
+**Classic vs. stream sections.** At each offset the parser peeks at the next non-whitespace token. If it is the keyword `xref`, the section is a classic cross-reference table. Otherwise the parser treats the offset as an indirect object and decodes it as a PDF 1.5 cross-reference stream (`/Type /XRef`). Both forms return the same `(BTreeMap<ObjectRef, XrefEntry>, trailer)` tuple, so the merge logic downstream does not care which form produced the data.
 
-**Section parsing.** For each xref table offset (starting from `startxref`, then following each `Prev`), `parse_xref_section` reads:
-- One or more xref subsections, each with a starting object number and entry count.
-- Each 20-byte entry: in-use entries (`n`) record the byte offset of the object; free entries (`f`) are noted but not materialized into objects.
-- The trailer dictionary that follows all subsections.
+**Xref stream decoding.** For a stream section the parser reads `Size`, `W` (field widths), and optional `Index` (default `[0 Size]`) from the stream dictionary, decodes the stream body through the shared filter + PNG-predictor pipeline, then walks the decoded bytes row by row. Each row is `sum(W)` bytes wide and encodes `(type, field2, field3)` big-endian:
+- type 0 → `XrefEntry::Free`
+- type 1 → `XrefEntry::Uncompressed { offset, generation }`
+- type 2 → `XrefEntry::Compressed { stream_object_number, index }`
 
-**Merge policy.** The table is built as a `BTreeMap<ObjectRef, XRefEntry>` using `BTreeMap::entry().or_insert()`. Because the chain is walked newest-revision-first (from the most recent `startxref` backward through `Prev`), the first time any given `ObjectRef` is inserted it comes from the newest revision. `or_insert` preserves that first-seen entry and ignores subsequent (older) entries for the same ref. This correctly implements incremental update semantics: newer revisions win.
+An entry with `W[0] == 0` defaults to type 1.
 
-**Xref streams rejected.** If the trailer contains an `XRefStm` key, the engine returns `Err(PdfError::Unsupported)`. Xref streams (PDF 1.5+) use a compressed binary format that would require a separate decoding path and would complicate the bootstrap problem described in Stage 4. Failing explicitly here is safer than silently misreading the object table.
+**Cycle detection.** A `BTreeSet<usize>` of visited byte offsets is maintained across the chain walk. When a section's trailer carries a `Prev` pointer, or a legacy trailer carries an `XRefStm` pointer at a hybrid form PDF, both offsets are pushed onto a pending stack. Offsets already visited are skipped, so a malformed file with a self-referential `Prev` simply terminates the walk instead of looping forever.
 
-**Output.** Stage 3 returns the merged `BTreeMap<ObjectRef, XRefEntry>` and the newest trailer dictionary.
+**Merge policy.** The table is built as a `BTreeMap<ObjectRef, XrefEntry>` using `BTreeMap::entry().or_insert()`. The chain is walked newest-revision-first (from the most recent `startxref` backward through each `Prev` / `XRefStm` pointer), so the first time any given `ObjectRef` is inserted it comes from the newest revision. Subsequent (older) entries for the same ref are ignored. This correctly implements incremental update semantics.
 
-### Stage 4: Parse each in-use object
+**Output.** Stage 3 returns the merged `BTreeMap<ObjectRef, XrefEntry>` and the newest trailer dictionary — which, for an xref-stream section, is simply the stream's own dictionary.
 
-For each in-use entry in the merged xref table, `parse_indirect_object` is called at the recorded byte offset. It reads:
+### Stage 4: Parse each uncompressed object
+
+For each `XrefEntry::Uncompressed` in the merged xref table, `parse_indirect_object` is called at the recorded byte offset. It reads:
 1. The object number and generation number from the `N G obj` header.
 2. The object body — either a `PdfValue` or a stream (dictionary followed by `stream ... endstream`).
 3. The `endobj` keyword.
 
-The resulting `PdfObject` is inserted into the object table keyed by its `ObjectRef`.
+The resulting `PdfObject` is inserted into the object table keyed by its `ObjectRef`. `XrefEntry::Compressed` entries are collected into a side list for the next stage. Free entries are skipped.
 
 Stream parsing at this stage only reads and stores the raw (still-encoded) bytes. Decompression happens lazily on demand, never during the initial parse pass.
 
-### Stage 5: `build_document`
+### Stage 5: Materialize object streams
+
+For each `XrefEntry::Compressed { stream_object_number, index }` entry, the parser looks up the enclosing `/Type /ObjStm` stream (already in the object table from Stage 4), decodes its body, and parses its header. The header is `N` pairs of `(member_obj_num, relative_offset)` separated by whitespace; the decoded body after `First` bytes holds the serialized member values.
+
+For each requested index the parser slices to `First + relative_offset`, parses a single `PdfValue` with the same cursor used for direct parsing, and inserts the result as `PdfObject::Value`. Streams are not allowed inside an ObjStm (per ISO 32000-1 § 7.5.7); a compressed member whose parsed value is itself a `/Type /ObjStm` dictionary is rejected with `PdfError::Unsupported`.
+
+Compressed objects always have generation 0. The materialized object is keyed by the `ObjectRef` that the xref stream declared, and `max_object_number` is updated so that later allocations via `PdfFile::allocate_object_ref` do not collide.
+
+### Stage 6: `build_document`
 
 Validates the object table and page tree structure, then builds the final `ParsedDocument`. Details in section 5 below.
 
@@ -207,24 +217,26 @@ startxref
 
 **Step 2 (`find_startxref`):** The parser scans backward from the end. It finds `startxref` followed by `210`. Byte offset 210 is the xref table start.
 
-**Step 3 (`parse_xref_table`):** The parser positions the cursor at byte 210 and reads:
+**Step 3 (`parse_xref_table`):** The parser positions the cursor at byte 210 and peeks the next token. It is `xref`, so the classic section parser is used. It reads:
 - Keyword `xref`
 - Subsection header `0 4` — starting object number 0, four entries
 - Four 20-byte entries:
-  - Object 0, gen 65535: free (type `f`) — ignored
-  - Object 1, gen 0: in-use at byte 9 (`n`)
+  - Object 0, gen 65535: free (type `f`) — `XrefEntry::Free`
+  - Object 1, gen 0: in-use at byte 9 (`n`) — `XrefEntry::Uncompressed`
   - Object 2, gen 0: in-use at byte 58 (`n`)
   - Object 3, gen 0: in-use at byte 115 (`n`)
 - Trailer dictionary `<< /Size 4 /Root 1 0 R >>`
 
-No `Prev` key in the trailer, so the chain walk stops. The merged xref table has three in-use entries. The trailer is stored.
+No `Prev` or `XRefStm` key in the trailer, so the chain walk stops. The merged xref table has three uncompressed entries. The trailer is stored.
 
-**Step 4 (object parsing):** For each in-use entry:
+**Step 4 (uncompressed object parsing):** For each `Uncompressed` entry:
 - Byte 9: cursor reads `1 0 obj`, then dictionary `<< /Type /Catalog /Pages 2 0 R >>`, then `endobj`. Stored as `ObjectRef { 1, 0 } → PdfObject::Value(PdfValue::Dictionary(...))`.
 - Byte 58: object 2 — the Pages node.
 - Byte 115: object 3 — the Page leaf, containing a `MediaBox` array.
 
-**Step 5 (`build_document`):** No `Encrypt` key. Trailer has `/Root 1 0 R`. Object 1 is resolved; its `/Type` is `/Catalog` and `/Pages` points to object 2. `collect_pages` starts at object 2:
+**Step 5 (object stream materialization):** No `Compressed` entries in this example, so the pass is a no-op.
+
+**Step 6 (`build_document`):** No `Encrypt` key. Trailer has `/Root 1 0 R`. Object 1 is resolved; its `/Type` is `/Catalog` and `/Pages` points to object 2. `collect_pages` starts at object 2:
 - Object 2 is a `Pages` node with `/Kids [3 0 R]` and `/Count 1`.
 - Recursion enters object 3. It is a `Page` leaf.
 - `MediaBox [0 0 612 792]` is read directly from object 3.
@@ -258,4 +270,6 @@ No `Prev` key in the trailer, so the chain walk stops. The merged xref table has
 | Remove the `endstream` fallback | Any PDF with an inaccurate `Length` (common) produces corrupt stream data |
 | Remove `MAX_PAGE_TREE_DEPTH` | Stack overflow on deeply nested or cyclically structured page trees |
 | Remove page tree cycle detection (`BTreeSet<ObjectRef>`) | Infinite recursion on cyclic `Kids` arrays |
-| Accept `XRefStm` without implementing xref stream decoding | Object table is silently incomplete; missing objects appear as errors later |
+| Materialize object streams before uncompressed objects | ObjStm lookup fails — the enclosing stream object is not yet in the table |
+| Allow a compressed member to be another `/Type /ObjStm` | Silent corruption — nested object streams are forbidden by the spec and not unpacked here |
+| Assume `W[0]` is always present | Xref streams that omit `W[0]` (default type 1) look like free entries and lose their data |

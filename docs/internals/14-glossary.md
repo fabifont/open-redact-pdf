@@ -82,7 +82,7 @@ A positive integer that uniquely identifies an **indirect object** within a file
 A pair `(object_number, generation)` used to look up an **indirect object** in the **xref table**. Written as `N G R` in PDF syntax. Represented as **`ObjectRef`** in the codebase.
 
 ### Object stream
-A stream that contains multiple compressed **indirect objects** packed together (PDF 1.5+). This engine does not support object streams; files that use them fail with an explicit error.
+A stream that contains multiple compressed **indirect objects** packed together (PDF 1.5+). The dictionary has `/Type /ObjStm`, `/N` (member count), and `/First` (byte offset of the first member body within the decoded stream). The header region lists `(object_number, relative_offset)` pairs for each member. Streams cannot be stored inside an object stream (nested ObjStm is forbidden by ISO 32000-1 § 7.5.7). The engine materializes each member into the regular object table during parsing.
 
 ### Operand
 A PDF value (number, name, string, array, or dictionary) that precedes an **operator** in a **content stream**. PDF uses postfix notation: operands come before the operator they apply to.
@@ -145,7 +145,7 @@ Glyph advance width expressed in 1/1000 em (text units). Looked up from the font
 A self-contained reusable content unit referenced by name and invoked with the `Do` operator. Two subtypes are relevant: **Image XObject** (raster pixels) and **Form XObject** (arbitrary operators). See `02-pdf-primer.md §13`.
 
 ### Xref stream
-A compressed **stream** object that replaces the plain-text **xref table** in PDF 1.5+. This engine does not support xref streams; files that use them fail with an explicit parse error.
+A compressed **stream** object (`/Type /XRef`) that replaces the plain-text **xref table** in PDF 1.5+. Entries are fixed-width binary rows of `(type, field2, field3)` whose widths come from the stream dictionary's `/W` array. Type 0 is a free entry, type 1 is an uncompressed object (field2 = byte offset, field3 = generation), and type 2 is a compressed object (field2 = the object number of the enclosing **object stream**, field3 = zero-based index within that stream). The engine parses xref streams and treats them interchangeably with classic xref sections; `Prev` and `XRefStm` links are followed identically in both directions.
 
 ### Xref table (cross-reference table)
 A fixed-width table near the end of a PDF revision that maps **object numbers** to their byte offsets in the file. Allows O(1) random access to any object. Each entry is 20 bytes: `OOOOOOOOOO GGGGG N\r\n`. See `02-pdf-primer.md §4`.

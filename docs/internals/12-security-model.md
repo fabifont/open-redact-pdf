@@ -23,7 +23,7 @@ A visible black rectangle is not a redaction unless the underlying content is re
 ## 4. Defensive design choices
 
 - **Operator whitelist**: unknown operators on redacted pages cause hard errors rather than silently passing through
-- **Explicit unsupported errors**: encrypted PDFs, xref streams, unknown filters, and non-Identity-H encodings all fail explicitly
+- **Explicit unsupported errors**: encrypted PDFs, unsupported stream filters or predictors, nested object streams, and non-Identity-H encodings all fail explicitly
 - **Decompression bomb protection**: 256 MiB limit on decoded stream size
 - **Page tree depth limit**: `MAX_PAGE_TREE_DEPTH = 64` prevents stack overflow from malformed trees
 - **Cycle detection**: applied in page tree traversal, `Prev` chain following, and reachable-ref collection

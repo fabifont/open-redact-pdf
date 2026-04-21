@@ -10,8 +10,10 @@ This project intentionally targets a narrow, explicit MVP.
 
 - Unencrypted PDFs
 - Classic xref tables, including incremental update chains (multiple xref sections linked via `Prev`)
-- Full-document rewrites on save (incremental updates are flattened into a single revision on output)
-- Unfiltered or `FlateDecode` streams
+- PDF 1.5+ cross-reference streams (`/Type /XRef`) and the hybrid form where a legacy trailer carries an `XRefStm` pointer
+- Object streams (`/Type /ObjStm`) — compressed objects are materialized into the regular object store during parsing
+- Full-document rewrites on save (incremental updates and xref streams are flattened into a single classic-xref revision on output)
+- Unfiltered or `FlateDecode` streams, including `FlateDecode` with PNG predictors 10–15 (via `DecodeParms /Predictor`)
 - Page tree traversal with inherited resources, media boxes, crop boxes, and page rotation
 - Inline images (`BI`/`ID`/`EI`) are safely skipped during content stream parsing
 - Dictionary operands in content streams (e.g., `BDC` with `<</MCID 0>>`)
@@ -33,8 +35,8 @@ This project intentionally targets a narrow, explicit MVP.
 ## Explicitly unsupported or incomplete
 
 - Encrypted PDFs
-- Object streams and xref streams
-- Incremental update preservation (output is always a flat rewrite)
+- TIFF predictor (`/Predictor 2`) in `FlateDecode` streams
+- Incremental update preservation (output is always a flat rewrite; xref streams are rewritten as a classic xref table)
 - Form XObjects on targeted pages
 - Type3 fonts
 - broad CID font support beyond the current `Identity-H` path

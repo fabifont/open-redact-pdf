@@ -15,3 +15,7 @@ packages/ts-sdk/vendor/
 apps/demo-web/src/*.js
 apps/demo-web/vite.config.js
 apps/demo-web/tsconfig.tsbuildinfo
+
+# Local sample PDFs with sensitive data, kept out of VCS.
+/ING.pdf
+/Buddy.pdf

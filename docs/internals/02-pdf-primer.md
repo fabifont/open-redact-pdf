@@ -130,7 +130,7 @@ xref
 0000000345 00000 n
 ```
 
-**PDF 1.5+ xref streams**: The xref can also be stored as a compressed stream object. This engine does not support xref streams; if a file uses them, parsing will fail with an explicit error rather than silently degrading.
+**PDF 1.5+ xref streams**: The xref can also be stored as a compressed stream object (`/Type /XRef`) whose body is a sequence of fixed-width binary rows describing each entry. The same stream object can also point at an **object stream** (`/Type /ObjStm`) where most indirect objects are packed together and Flate-compressed. The engine parses both forms and maps them into the same internal object table; on save, it always re-emits a classic xref table and inline indirect objects.
 
 ---
 
