@@ -304,6 +304,39 @@ writeFixture("type0-search.pdf", {
   trailer: { Root: { ref: [1, 0] } },
 });
 
+// Vector path that uses the v and y Bezier curve operators (single-control
+// shorthand for c). The path traces a filled curved shape directly under the
+// text, so that a redaction target on the text forces the engine to
+// neutralize both the text and the underlying curve fill.
+writeFixture("vector-vy-curves.pdf", {
+  objects: [
+    { id: 1, value: { Type: "/Catalog", Pages: { ref: [2, 0] } } },
+    { id: 2, value: { Type: "/Pages", Count: 1, Kids: [{ ref: [3, 0] }] } },
+    basePageObjects({
+      pageId: 3,
+      pagesId: 2,
+      contentId: 4,
+      resources: { Font: { F1: { ref: [5, 0] } } },
+    }),
+    {
+      id: 4,
+      stream: {
+        dict: {},
+        data:
+          "0 0 1 rg\n" +
+          // Curved shape: m → v (curve through current point) → y (curve to endpoint)
+          "80 690 m\n" +
+          "240 760 80 760 v\n" +
+          "240 700 240 690 y\n" +
+          "h f\n" +
+          "BT\n/F1 20 Tf\n100 710 Td\n(Curve Secret) Tj\nET\n",
+      },
+    },
+    fontObject,
+  ],
+  trailer: { Root: { ref: [1, 0] } },
+});
+
 writeFixture("vector-heavy.pdf", {
   objects: [
     { id: 1, value: { Type: "/Catalog", Pages: { ref: [2, 0] } } },

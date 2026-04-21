@@ -330,6 +330,49 @@ fn inline_image_and_dictionary_operand_pages_are_parseable() {
 }
 
 #[test]
+fn vector_v_and_y_curve_segments_are_included_in_path_bounds() {
+    // The fixture draws a filled curved shape built from v and y Bezier
+    // shorthands directly under "Curve Secret". A search-driven redaction
+    // that hits the text must also neutralize the underlying path.
+    let mut document = PdfDocument::open(&fixture("vector-vy-curves.pdf"))
+        .expect("vector-vy fixture should open");
+    let matches = document
+        .search_text(0, "Curve Secret")
+        .expect("search should succeed");
+    assert_eq!(matches.len(), 1);
+    let quads = matches[0]
+        .quads
+        .iter()
+        .map(|quad| quad.points)
+        .collect::<Vec<_>>();
+    let report = document
+        .apply_redactions(RedactionPlan {
+            targets: vec![RedactionTarget::QuadGroup {
+                page_index: 0,
+                quads,
+            }],
+            mode: None,
+            fill_color: None,
+            overlay_text: None,
+            remove_intersecting_annotations: Some(false),
+            strip_metadata: Some(false),
+            strip_attachments: Some(false),
+        })
+        .expect("redaction should succeed");
+    assert!(report.text_glyphs_removed > 0);
+    assert!(
+        report.path_paints_removed > 0,
+        "v/y curve segments should be included in path bounds so the fill is neutralized"
+    );
+
+    let saved = document.save().expect("save should succeed");
+    let reopened = PdfDocument::open(&saved).expect("saved pdf should reopen");
+    let raw = String::from_utf8_lossy(&saved);
+    assert!(!raw.contains("Curve Secret"));
+    let _ = reopened; // ensure save round-trips cleanly
+}
+
+#[test]
 fn form_xobject_text_is_extracted_and_searchable() {
     let document = PdfDocument::open(&fixture("form-xobject-text.pdf"))
         .expect("form-xobject fixture should open");
