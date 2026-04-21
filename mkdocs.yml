@@ -72,6 +72,7 @@ nav:
   - Guides:
     - Redaction Workflow: guides/redaction-workflow.md
     - Browser Integration: guides/browser-integration.md
+    - Encrypted PDFs: guides/encrypted-pdfs.md
     - Testing and Fixtures: guides/testing-and-fixtures.md
     - Releasing: guides/releasing.md
   - Reference:
