@@ -21,7 +21,7 @@ This project intentionally targets a narrow, explicit MVP.
 - Common path, paint, and graphics-state operators (`q`, `Q`, `cm`, `gs`, `w`, `J`, `j`, `M`, `d`, `ri`, `i`)
 - Clipping path operators (`W`, `W*`)
 - Color operators for device and general color spaces (`rg`/`RG`, `g`/`G`, `k`/`K`, `cs`/`CS`, `sc`/`SC`, `scn`/`SCN`)
-- Curve segment operators (`v`, `y`)
+- Curve segment operators (`c`, `v`, `y`) — all three are included in path bounds used by vector paint neutralization
 - Marked-content operators as safe pass-through (`BMC`, `BDC`, `EMC`, `MP`, `DP`)
 - ExtGState font entries (fonts set via `gs` operator)
 - Image XObject invocation detection
