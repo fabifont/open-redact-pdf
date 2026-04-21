@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::document::build_document;
 use crate::error::{PdfError, PdfResult};
+use crate::stream::decode_stream;
 use crate::types::{
     ObjectRef, PdfDictionary, PdfFile, PdfObject, PdfStream, PdfString, PdfValue, XrefEntry,
 };
@@ -13,17 +14,30 @@ pub fn parse_pdf(bytes: &[u8]) -> PdfResult<crate::document::ParsedDocument> {
 
     let mut objects = BTreeMap::new();
     let mut max_object_number = 0;
-    for (object_ref, entry) in xref {
-        if !entry.in_use {
-            continue;
+    let mut compressed: Vec<(ObjectRef, u32, u32)> = Vec::new();
+
+    for (object_ref, entry) in &xref {
+        match entry {
+            XrefEntry::Free => {}
+            XrefEntry::Uncompressed { offset, .. } => {
+                if object_ref.object_number == 0 {
+                    continue;
+                }
+                let object = parse_indirect_object(bytes, *offset)?;
+                max_object_number = max_object_number.max(object_ref.object_number);
+                objects.insert(*object_ref, object);
+            }
+            XrefEntry::Compressed {
+                stream_object_number,
+                index,
+            } => {
+                compressed.push((*object_ref, *stream_object_number, *index));
+            }
         }
-        if object_ref.object_number == 0 {
-            continue;
-        }
-        let object = parse_indirect_object(bytes, entry.offset)?;
-        max_object_number = max_object_number.max(object_ref.object_number);
-        objects.insert(object_ref, object);
     }
+
+    materialize_object_streams(&mut objects, &mut max_object_number, &compressed)?;
+
     let file = PdfFile {
         version,
         objects,
@@ -61,45 +75,59 @@ fn parse_xref_table(
     bytes: &[u8],
     start_offset: usize,
 ) -> PdfResult<(BTreeMap<ObjectRef, XrefEntry>, PdfDictionary)> {
-    let mut merged_entries = BTreeMap::new();
-    let mut newest_trailer = None;
+    let mut merged_entries: BTreeMap<ObjectRef, XrefEntry> = BTreeMap::new();
+    let mut newest_trailer: Option<PdfDictionary> = None;
     let mut visited = BTreeSet::new();
-    let mut offset = start_offset;
+    let mut pending: Vec<usize> = vec![start_offset];
 
-    loop {
+    while let Some(offset) = pending.pop() {
         if !visited.insert(offset) {
-            return Err(PdfError::Parse("circular Prev chain".to_string()));
+            continue;
         }
-        let (section_entries, trailer) = parse_xref_section(bytes, offset)?;
-
-        if trailer.contains_key("XRefStm") {
-            return Err(PdfError::Unsupported(
-                "xref streams are not supported".to_string(),
-            ));
-        }
+        let section = parse_xref_section_at(bytes, offset)?;
 
         // Newest-first: only insert entries not already present
-        for (object_ref, entry) in section_entries {
+        for (object_ref, entry) in section.entries {
             merged_entries.entry(object_ref).or_insert(entry);
         }
 
         if newest_trailer.is_none() {
-            newest_trailer = Some(trailer.clone());
+            newest_trailer = Some(section.trailer.clone());
         }
 
-        match trailer.get("Prev").and_then(PdfValue::as_integer) {
-            Some(prev_offset) => offset = prev_offset as usize,
-            None => break,
+        if let Some(stm_offset) = section
+            .trailer
+            .get("XRefStm")
+            .and_then(PdfValue::as_integer)
+        {
+            pending.push(stm_offset as usize);
+        }
+        if let Some(prev_offset) = section.trailer.get("Prev").and_then(PdfValue::as_integer) {
+            pending.push(prev_offset as usize);
         }
     }
 
-    Ok((merged_entries, newest_trailer.unwrap()))
+    let trailer = newest_trailer
+        .ok_or_else(|| PdfError::Parse("xref chain produced no trailer".to_string()))?;
+    Ok((merged_entries, trailer))
 }
 
-fn parse_xref_section(
-    bytes: &[u8],
-    offset: usize,
-) -> PdfResult<(BTreeMap<ObjectRef, XrefEntry>, PdfDictionary)> {
+struct XrefSection {
+    entries: BTreeMap<ObjectRef, XrefEntry>,
+    trailer: PdfDictionary,
+}
+
+fn parse_xref_section_at(bytes: &[u8], offset: usize) -> PdfResult<XrefSection> {
+    let mut probe = Cursor::new(bytes, offset);
+    probe.skip_ws_and_comments();
+    if probe.peek_keyword("xref") {
+        parse_classic_xref_section(bytes, offset)
+    } else {
+        parse_xref_stream_section(bytes, offset)
+    }
+}
+
+fn parse_classic_xref_section(bytes: &[u8], offset: usize) -> PdfResult<XrefSection> {
     let mut cursor = Cursor::new(bytes, offset);
     cursor.expect_keyword("xref")?;
     let mut entries = BTreeMap::new();
@@ -135,14 +163,15 @@ fn parse_xref_section(
             let object_number = start
                 .checked_add(index)
                 .ok_or_else(|| PdfError::Parse("xref object number overflow".to_string()))?;
-            entries.insert(
-                ObjectRef::new(object_number, generation),
-                XrefEntry {
+            let entry = if flag == "n" {
+                XrefEntry::Uncompressed {
                     offset: entry_offset,
                     generation,
-                    in_use: flag == "n",
-                },
-            );
+                }
+            } else {
+                XrefEntry::Free
+            };
+            entries.insert(ObjectRef::new(object_number, generation), entry);
         }
     }
     cursor.expect_keyword("trailer")?;
@@ -150,7 +179,255 @@ fn parse_xref_section(
         PdfValue::Dictionary(dictionary) => dictionary,
         _ => return Err(PdfError::Parse("trailer is not a dictionary".to_string())),
     };
-    Ok((entries, trailer))
+    Ok(XrefSection { entries, trailer })
+}
+
+fn parse_xref_stream_section(bytes: &[u8], offset: usize) -> PdfResult<XrefSection> {
+    let object = parse_indirect_object(bytes, offset)?;
+    let stream = match object {
+        PdfObject::Stream(stream) => stream,
+        PdfObject::Value(_) => {
+            return Err(PdfError::Parse(
+                "expected xref stream object at startxref offset".to_string(),
+            ));
+        }
+    };
+    if stream.dict.get("Type").and_then(PdfValue::as_name) != Some("XRef") {
+        return Err(PdfError::Parse(
+            "xref stream object has wrong Type".to_string(),
+        ));
+    }
+
+    let size = stream
+        .dict
+        .get("Size")
+        .and_then(PdfValue::as_integer)
+        .ok_or_else(|| PdfError::Corrupt("xref stream missing Size".to_string()))?
+        as u32;
+
+    let w = stream
+        .dict
+        .get("W")
+        .and_then(PdfValue::as_array)
+        .ok_or_else(|| PdfError::Corrupt("xref stream missing W".to_string()))?;
+    if w.len() != 3 {
+        return Err(PdfError::Corrupt(
+            "xref stream W must have three entries".to_string(),
+        ));
+    }
+    let w0 = w[0]
+        .as_integer()
+        .ok_or_else(|| PdfError::Corrupt("invalid W[0]".to_string()))? as usize;
+    let w1 = w[1]
+        .as_integer()
+        .ok_or_else(|| PdfError::Corrupt("invalid W[1]".to_string()))? as usize;
+    let w2 = w[2]
+        .as_integer()
+        .ok_or_else(|| PdfError::Corrupt("invalid W[2]".to_string()))? as usize;
+    let row_len = w0 + w1 + w2;
+    if row_len == 0 {
+        return Err(PdfError::Corrupt(
+            "xref stream row width is zero".to_string(),
+        ));
+    }
+
+    let index: Vec<(u32, u32)> = match stream.dict.get("Index") {
+        Some(PdfValue::Array(entries)) => {
+            if entries.len() % 2 != 0 {
+                return Err(PdfError::Corrupt(
+                    "xref stream Index must have an even number of entries".to_string(),
+                ));
+            }
+            let mut pairs = Vec::with_capacity(entries.len() / 2);
+            for chunk in entries.chunks(2) {
+                let first = chunk[0]
+                    .as_integer()
+                    .ok_or_else(|| PdfError::Corrupt("invalid Index entry".to_string()))?
+                    as u32;
+                let count = chunk[1]
+                    .as_integer()
+                    .ok_or_else(|| PdfError::Corrupt("invalid Index entry".to_string()))?
+                    as u32;
+                pairs.push((first, count));
+            }
+            pairs
+        }
+        Some(_) => {
+            return Err(PdfError::Corrupt(
+                "xref stream Index is not an array".to_string(),
+            ));
+        }
+        None => vec![(0, size)],
+    };
+
+    let decoded = decode_stream(&stream)?;
+    let expected_rows: u32 = index.iter().map(|(_, count)| *count).sum();
+    if decoded.len() < expected_rows as usize * row_len {
+        return Err(PdfError::Corrupt(
+            "xref stream body is shorter than declared entries".to_string(),
+        ));
+    }
+
+    let mut entries: BTreeMap<ObjectRef, XrefEntry> = BTreeMap::new();
+    let mut cursor = 0usize;
+    for (first, count) in index {
+        for i in 0..count {
+            let row = &decoded[cursor..cursor + row_len];
+            cursor += row_len;
+            let field_type = if w0 == 0 { 1u64 } else { read_be(&row[..w0])? };
+            let f2 = read_be(&row[w0..w0 + w1])?;
+            let f3 = read_be(&row[w0 + w1..])?;
+            let object_number = first + i;
+            let entry = match field_type {
+                0 => XrefEntry::Free,
+                1 => XrefEntry::Uncompressed {
+                    offset: f2 as usize,
+                    generation: f3 as u16,
+                },
+                2 => XrefEntry::Compressed {
+                    stream_object_number: f2 as u32,
+                    index: f3 as u32,
+                },
+                other => {
+                    return Err(PdfError::Unsupported(format!(
+                        "xref stream entry type {other} is not supported"
+                    )));
+                }
+            };
+            let generation = match entry {
+                XrefEntry::Uncompressed { generation, .. } => generation,
+                _ => 0,
+            };
+            entries.insert(ObjectRef::new(object_number, generation), entry);
+        }
+    }
+
+    Ok(XrefSection {
+        entries,
+        trailer: stream.dict,
+    })
+}
+
+fn read_be(bytes: &[u8]) -> PdfResult<u64> {
+    if bytes.len() > 8 {
+        return Err(PdfError::Corrupt(
+            "xref stream field width exceeds 8 bytes".to_string(),
+        ));
+    }
+    let mut value: u64 = 0;
+    for byte in bytes {
+        value = (value << 8) | *byte as u64;
+    }
+    Ok(value)
+}
+
+fn materialize_object_streams(
+    objects: &mut BTreeMap<ObjectRef, PdfObject>,
+    max_object_number: &mut u32,
+    compressed: &[(ObjectRef, u32, u32)],
+) -> PdfResult<()> {
+    if compressed.is_empty() {
+        return Ok(());
+    }
+
+    let mut by_stream: BTreeMap<u32, Vec<(ObjectRef, u32)>> = BTreeMap::new();
+    for (object_ref, stream_obj_num, index) in compressed {
+        by_stream
+            .entry(*stream_obj_num)
+            .or_default()
+            .push((*object_ref, *index));
+    }
+
+    for (stream_obj_num, mut members) in by_stream {
+        let stream_ref = ObjectRef::new(stream_obj_num, 0);
+        let stream = match objects.get(&stream_ref) {
+            Some(PdfObject::Stream(stream)) => stream.clone(),
+            Some(PdfObject::Value(_)) => {
+                return Err(PdfError::Corrupt(format!(
+                    "object stream {stream_obj_num} is not a stream"
+                )));
+            }
+            None => {
+                return Err(PdfError::Corrupt(format!(
+                    "compressed entry references missing object stream {stream_obj_num}"
+                )));
+            }
+        };
+        if stream.dict.get("Type").and_then(PdfValue::as_name) != Some("ObjStm") {
+            return Err(PdfError::Corrupt(format!(
+                "object {stream_obj_num} is not marked as ObjStm"
+            )));
+        }
+        let n = stream
+            .dict
+            .get("N")
+            .and_then(PdfValue::as_integer)
+            .ok_or_else(|| PdfError::Corrupt("ObjStm missing N".to_string()))?
+            as usize;
+        let first = stream
+            .dict
+            .get("First")
+            .and_then(PdfValue::as_integer)
+            .ok_or_else(|| PdfError::Corrupt("ObjStm missing First".to_string()))?
+            as usize;
+
+        let decoded = decode_stream(&stream)?;
+        if first > decoded.len() {
+            return Err(PdfError::Corrupt(
+                "ObjStm First offset is past end of decoded data".to_string(),
+            ));
+        }
+
+        let header = &decoded[..first];
+        let mut header_cursor = Cursor::new(header, 0);
+        let mut entries: Vec<(u32, usize)> = Vec::with_capacity(n);
+        for _ in 0..n {
+            header_cursor.skip_ws_and_comments();
+            let obj_num = header_cursor.parse_u32()?;
+            header_cursor.skip_ws_and_comments();
+            let rel_offset = header_cursor.parse_usize()?;
+            entries.push((obj_num, rel_offset));
+        }
+
+        // Guard: a compressed entry's index must be in range.
+        members.sort_by_key(|(_, index)| *index);
+        for (member_ref, index) in members {
+            let idx = index as usize;
+            if idx >= entries.len() {
+                return Err(PdfError::Corrupt(format!(
+                    "ObjStm {stream_obj_num} has no index {idx}"
+                )));
+            }
+            let (declared_number, rel_offset) = entries[idx];
+            if declared_number != member_ref.object_number {
+                return Err(PdfError::Corrupt(format!(
+                    "ObjStm {stream_obj_num} index {idx} has number {declared_number} but xref expected {}",
+                    member_ref.object_number
+                )));
+            }
+            let absolute_offset = first
+                .checked_add(rel_offset)
+                .ok_or_else(|| PdfError::Corrupt("ObjStm offset overflow".to_string()))?;
+            if absolute_offset > decoded.len() {
+                return Err(PdfError::Corrupt(
+                    "ObjStm member offset is past end of decoded data".to_string(),
+                ));
+            }
+            let mut value_cursor = Cursor::new(&decoded, absolute_offset);
+            let value = value_cursor.parse_value()?;
+            if let PdfValue::Dictionary(dict) = &value {
+                if dict.get("Type").and_then(PdfValue::as_name) == Some("ObjStm") {
+                    return Err(PdfError::Unsupported(
+                        "nested object streams are not supported".to_string(),
+                    ));
+                }
+            }
+            *max_object_number = (*max_object_number).max(member_ref.object_number);
+            objects.insert(member_ref, PdfObject::Value(value));
+        }
+    }
+
+    Ok(())
 }
 
 fn parse_indirect_object(bytes: &[u8], offset: usize) -> PdfResult<PdfObject> {
@@ -612,8 +889,10 @@ mod tests {
     }
 
     #[test]
-    fn rejects_circular_prev_chain() {
-        // Build a minimal PDF where Prev points back to the same xref offset
+    fn circular_prev_chain_does_not_loop() {
+        // Build a minimal PDF where Prev points back to the same xref offset.
+        // The parser should de-duplicate the offset via its visited-set and
+        // parse the tree successfully instead of returning an error.
         let mut pdf = Vec::new();
         pdf.extend_from_slice(b"%PDF-1.4\n");
 
@@ -637,15 +916,204 @@ mod tests {
         );
         pdf.extend_from_slice(format!("startxref\n{}\n%%EOF\n", xref_offset).as_bytes());
 
-        let result = parse_pdf(&pdf);
-        match result {
-            Err(PdfError::Parse(message)) => {
-                assert!(
-                    message.contains("circular Prev chain"),
-                    "expected circular chain error, got: {message}"
-                );
-            }
-            other => panic!("expected Parse error, got: {other:?}"),
+        let document = parse_pdf(&pdf).expect("circular Prev should be tolerated");
+        assert_eq!(document.pages.len(), 0);
+    }
+
+    #[test]
+    fn parses_uncompressed_xref_stream() {
+        // Minimal PDF using an xref stream with no filters and no predictor.
+        // W = [1 2 1] means type(1) + offset(2) + generation(1).
+        let mut pdf: Vec<u8> = Vec::new();
+        pdf.extend_from_slice(b"%PDF-1.5\n");
+
+        let obj1_offset = pdf.len();
+        pdf.extend_from_slice(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+        let obj2_offset = pdf.len();
+        pdf.extend_from_slice(b"2 0 obj\n<< /Type /Pages /Count 0 /Kids [] >>\nendobj\n");
+
+        // Build the xref stream body: four 4-byte rows for objects 0..3.
+        // Row layout: type(1) | offset(2) | generation(1).
+        let row_for = |t: u8, off: u16, generation: u8| {
+            let mut row = [0u8; 4];
+            row[0] = t;
+            row[1] = (off >> 8) as u8;
+            row[2] = off as u8;
+            row[3] = generation;
+            row
+        };
+        let mut body = Vec::new();
+        body.extend_from_slice(&row_for(0, 0, 0xFF)); // object 0 free
+        body.extend_from_slice(&row_for(1, obj1_offset as u16, 0));
+        body.extend_from_slice(&row_for(1, obj2_offset as u16, 0));
+        body.extend_from_slice(&row_for(1, 0, 0)); // self (object 3), placeholder; we will overwrite after knowing offset
+
+        let xref_obj_offset = pdf.len();
+        // Overwrite object 3 self-offset in body now that we know it.
+        let self_offset = xref_obj_offset as u16;
+        body[12] = 1;
+        body[13] = (self_offset >> 8) as u8;
+        body[14] = self_offset as u8;
+        body[15] = 0;
+
+        let stream_dict = format!(
+            "<< /Type /XRef /Size 4 /W [1 2 1] /Root 1 0 R /Length {} >>",
+            body.len()
+        );
+        pdf.extend_from_slice(format!("3 0 obj\n{stream_dict}\nstream\n").as_bytes());
+        pdf.extend_from_slice(&body);
+        pdf.extend_from_slice(b"\nendstream\nendobj\n");
+        pdf.extend_from_slice(format!("startxref\n{}\n%%EOF\n", xref_obj_offset).as_bytes());
+
+        let document = parse_pdf(&pdf).expect("xref stream fixture should parse");
+        assert_eq!(document.pages.len(), 0);
+        // Object 1 and 2 must be materialized.
+        assert!(document.file.objects.len() >= 2);
+    }
+
+    #[test]
+    fn parses_object_stream_via_xref_stream() {
+        use flate2::{Compression, write::ZlibEncoder};
+        use std::io::Write;
+
+        // Pages tree is compressed inside an ObjStm.
+        // Layout:
+        //   1: Catalog (uncompressed)
+        //   2: Pages (compressed in ObjStm 3, index 0)
+        //   3: ObjStm (uncompressed, flate-compressed body)
+        //   4: xref stream (uncompressed)
+        let mut pdf: Vec<u8> = Vec::new();
+        pdf.extend_from_slice(b"%PDF-1.5\n");
+
+        let obj1_offset = pdf.len();
+        pdf.extend_from_slice(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+
+        // Object 3 is an ObjStm holding object 2.
+        let member_payload = b"<< /Type /Pages /Count 0 /Kids [] >>";
+        let header = b"2 0 ";
+        let first = header.len();
+        let mut decompressed = Vec::new();
+        decompressed.extend_from_slice(header);
+        decompressed.extend_from_slice(member_payload);
+
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&decompressed).unwrap();
+        let compressed = encoder.finish().unwrap();
+
+        let obj3_offset = pdf.len();
+        let objstm_dict = format!(
+            "<< /Type /ObjStm /N 1 /First {} /Filter /FlateDecode /Length {} >>",
+            first,
+            compressed.len()
+        );
+        pdf.extend_from_slice(format!("3 0 obj\n{objstm_dict}\nstream\n").as_bytes());
+        pdf.extend_from_slice(&compressed);
+        pdf.extend_from_slice(b"\nendstream\nendobj\n");
+
+        // Build xref stream entries for objects 0..5:
+        // 0 free, 1 uncompressed, 2 compressed (stream=3, index=0),
+        // 3 uncompressed (ObjStm), 4 uncompressed (xref stream itself).
+        let row_for = |t: u8, a: u32, b: u16| {
+            let mut row = [0u8; 5];
+            row[0] = t;
+            row[1] = (a >> 16) as u8;
+            row[2] = (a >> 8) as u8;
+            row[3] = a as u8;
+            row[4] = b as u8;
+            row
+        };
+
+        let obj4_offset = pdf.len();
+        let mut body = Vec::new();
+        body.extend_from_slice(&row_for(0, 0, 0xFF));
+        body.extend_from_slice(&row_for(1, obj1_offset as u32, 0));
+        body.extend_from_slice(&row_for(2, 3, 0));
+        body.extend_from_slice(&row_for(1, obj3_offset as u32, 0));
+        body.extend_from_slice(&row_for(1, obj4_offset as u32, 0));
+
+        let stream_dict = format!(
+            "<< /Type /XRef /Size 5 /W [1 3 1] /Root 1 0 R /Length {} >>",
+            body.len()
+        );
+        pdf.extend_from_slice(format!("4 0 obj\n{stream_dict}\nstream\n").as_bytes());
+        pdf.extend_from_slice(&body);
+        pdf.extend_from_slice(b"\nendstream\nendobj\n");
+        pdf.extend_from_slice(format!("startxref\n{}\n%%EOF\n", obj4_offset).as_bytes());
+
+        let document = parse_pdf(&pdf).expect("ObjStm fixture should parse");
+        assert_eq!(document.pages.len(), 0);
+        // Pages dictionary should be materialized.
+        let pages_ref = document.catalog.pages_ref;
+        let pages_dict = document.file.get_dictionary(pages_ref).unwrap();
+        assert_eq!(pages_dict.get("Type").and_then(|v| v.as_name()), Some("Pages"));
+    }
+
+    #[test]
+    fn rejects_nested_object_stream() {
+        use flate2::{Compression, write::ZlibEncoder};
+        use std::io::Write;
+
+        // A compressed member is itself an ObjStm dictionary → must fail.
+        let mut pdf: Vec<u8> = Vec::new();
+        pdf.extend_from_slice(b"%PDF-1.5\n");
+
+        let obj1_offset = pdf.len();
+        pdf.extend_from_slice(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+
+        let member_payload = b"<< /Type /ObjStm /N 0 /First 0 /Length 0 >>";
+        let header = b"2 0 ";
+        let first = header.len();
+        let mut decompressed = Vec::new();
+        decompressed.extend_from_slice(header);
+        decompressed.extend_from_slice(member_payload);
+
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&decompressed).unwrap();
+        let compressed = encoder.finish().unwrap();
+
+        let obj3_offset = pdf.len();
+        let objstm_dict = format!(
+            "<< /Type /ObjStm /N 1 /First {} /Filter /FlateDecode /Length {} >>",
+            first,
+            compressed.len()
+        );
+        pdf.extend_from_slice(format!("3 0 obj\n{objstm_dict}\nstream\n").as_bytes());
+        pdf.extend_from_slice(&compressed);
+        pdf.extend_from_slice(b"\nendstream\nendobj\n");
+
+        let row_for = |t: u8, a: u32, b: u16| {
+            let mut row = [0u8; 5];
+            row[0] = t;
+            row[1] = (a >> 16) as u8;
+            row[2] = (a >> 8) as u8;
+            row[3] = a as u8;
+            row[4] = b as u8;
+            row
+        };
+
+        let obj4_offset = pdf.len();
+        let mut body = Vec::new();
+        body.extend_from_slice(&row_for(0, 0, 0xFF));
+        body.extend_from_slice(&row_for(1, obj1_offset as u32, 0));
+        body.extend_from_slice(&row_for(2, 3, 0));
+        body.extend_from_slice(&row_for(1, obj3_offset as u32, 0));
+        body.extend_from_slice(&row_for(1, obj4_offset as u32, 0));
+
+        let stream_dict = format!(
+            "<< /Type /XRef /Size 5 /W [1 3 1] /Root 1 0 R /Length {} >>",
+            body.len()
+        );
+        pdf.extend_from_slice(format!("4 0 obj\n{stream_dict}\nstream\n").as_bytes());
+        pdf.extend_from_slice(&body);
+        pdf.extend_from_slice(b"\nendstream\nendobj\n");
+        pdf.extend_from_slice(format!("startxref\n{}\n%%EOF\n", obj4_offset).as_bytes());
+
+        match parse_pdf(&pdf) {
+            Err(PdfError::Unsupported(message)) => assert!(
+                message.contains("nested object streams"),
+                "got: {message}"
+            ),
+            other => panic!("expected Unsupported, got: {other:?}"),
         }
     }
 }

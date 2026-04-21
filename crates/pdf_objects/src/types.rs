@@ -95,10 +95,16 @@ pub enum PdfObject {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct XrefEntry {
-    pub offset: usize,
-    pub generation: u16,
-    pub in_use: bool,
+pub enum XrefEntry {
+    Free,
+    Uncompressed {
+        offset: usize,
+        generation: u16,
+    },
+    Compressed {
+        stream_object_number: u32,
+        index: u32,
+    },
 }
 
 #[derive(Debug, Clone)]

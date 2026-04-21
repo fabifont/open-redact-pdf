@@ -6,19 +6,27 @@ use crate::error::{PdfError, PdfResult};
 use crate::types::{PdfStream, PdfValue};
 
 pub fn decode_stream(stream: &PdfStream) -> PdfResult<Vec<u8>> {
-    match stream.dict.get("Filter") {
-        None => Ok(stream.data.clone()),
-        Some(PdfValue::Name(name)) if name == "FlateDecode" => inflate(stream.data.as_slice()),
+    let inflated = match stream.dict.get("Filter") {
+        None => stream.data.clone(),
+        Some(PdfValue::Name(name)) if name == "FlateDecode" => inflate(stream.data.as_slice())?,
         Some(PdfValue::Array(filters)) if filters.len() == 1 => match filters.first() {
-            Some(PdfValue::Name(name)) if name == "FlateDecode" => inflate(stream.data.as_slice()),
-            _ => Err(PdfError::Unsupported(
-                "only a single FlateDecode filter is supported".to_string(),
-            )),
+            Some(PdfValue::Name(name)) if name == "FlateDecode" => {
+                inflate(stream.data.as_slice())?
+            }
+            _ => {
+                return Err(PdfError::Unsupported(
+                    "only a single FlateDecode filter is supported".to_string(),
+                ));
+            }
         },
-        Some(_) => Err(PdfError::Unsupported(
-            "unsupported stream filter configuration".to_string(),
-        )),
-    }
+        Some(_) => {
+            return Err(PdfError::Unsupported(
+                "unsupported stream filter configuration".to_string(),
+            ));
+        }
+    };
+
+    apply_predictor(&inflated, stream.dict.get("DecodeParms"))
 }
 
 /// Maximum decompressed stream size (256 MiB). Prevents decompression bombs from
@@ -38,4 +46,236 @@ fn inflate(data: &[u8]) -> PdfResult<Vec<u8>> {
         ));
     }
     Ok(output)
+}
+
+fn apply_predictor(data: &[u8], decode_parms: Option<&PdfValue>) -> PdfResult<Vec<u8>> {
+    let parms = match decode_parms {
+        None => return Ok(data.to_vec()),
+        Some(PdfValue::Dictionary(dict)) => dict,
+        Some(PdfValue::Null) => return Ok(data.to_vec()),
+        Some(PdfValue::Array(_)) => {
+            // Per-filter DecodeParms arrays are legal when multiple filters are
+            // chained. We only support a single FlateDecode filter today so any
+            // array-valued DecodeParms is unexpected.
+            return Err(PdfError::Unsupported(
+                "per-filter DecodeParms arrays are not supported".to_string(),
+            ));
+        }
+        Some(_) => {
+            return Err(PdfError::Corrupt(
+                "DecodeParms is not a dictionary".to_string(),
+            ));
+        }
+    };
+
+    let predictor = parms
+        .get("Predictor")
+        .and_then(PdfValue::as_integer)
+        .unwrap_or(1);
+    match predictor {
+        1 => Ok(data.to_vec()),
+        10..=15 => png_predictor_decode(data, parms),
+        other => Err(PdfError::Unsupported(format!(
+            "predictor {other} is not supported"
+        ))),
+    }
+}
+
+fn png_predictor_decode(data: &[u8], parms: &crate::types::PdfDictionary) -> PdfResult<Vec<u8>> {
+    let columns = parms
+        .get("Columns")
+        .and_then(PdfValue::as_integer)
+        .unwrap_or(1) as usize;
+    let colors = parms
+        .get("Colors")
+        .and_then(PdfValue::as_integer)
+        .unwrap_or(1) as usize;
+    let bits_per_component = parms
+        .get("BitsPerComponent")
+        .and_then(PdfValue::as_integer)
+        .unwrap_or(8) as usize;
+
+    if bits_per_component != 8 {
+        return Err(PdfError::Unsupported(format!(
+            "PNG predictor with BitsPerComponent {bits_per_component} is not supported"
+        )));
+    }
+    if columns == 0 || colors == 0 {
+        return Err(PdfError::Corrupt(
+            "PNG predictor Columns/Colors must be positive".to_string(),
+        ));
+    }
+    let bytes_per_pixel = colors; // bits_per_component == 8
+    let row_data_len = columns * bytes_per_pixel;
+    let row_stride = row_data_len + 1; // leading filter byte
+
+    if data.len() % row_stride != 0 {
+        return Err(PdfError::Corrupt(format!(
+            "PNG predictor row length mismatch: data={} stride={row_stride}",
+            data.len()
+        )));
+    }
+    let row_count = data.len() / row_stride;
+    let mut output = Vec::with_capacity(row_count * row_data_len);
+    let mut prev_row = vec![0u8; row_data_len];
+    let mut row = vec![0u8; row_data_len];
+
+    for r in 0..row_count {
+        let base = r * row_stride;
+        let filter = data[base];
+        let src = &data[base + 1..base + row_stride];
+        row.copy_from_slice(src);
+        match filter {
+            0 => {} // None
+            1 => {
+                // Sub
+                for i in 0..row_data_len {
+                    let left = if i >= bytes_per_pixel {
+                        row[i - bytes_per_pixel]
+                    } else {
+                        0
+                    };
+                    row[i] = row[i].wrapping_add(left);
+                }
+            }
+            2 => {
+                // Up
+                for i in 0..row_data_len {
+                    row[i] = row[i].wrapping_add(prev_row[i]);
+                }
+            }
+            3 => {
+                // Average
+                for i in 0..row_data_len {
+                    let left = if i >= bytes_per_pixel {
+                        row[i - bytes_per_pixel]
+                    } else {
+                        0
+                    };
+                    let up = prev_row[i];
+                    let avg = ((left as u16 + up as u16) / 2) as u8;
+                    row[i] = row[i].wrapping_add(avg);
+                }
+            }
+            4 => {
+                // Paeth
+                for i in 0..row_data_len {
+                    let left = if i >= bytes_per_pixel {
+                        row[i - bytes_per_pixel]
+                    } else {
+                        0
+                    };
+                    let up = prev_row[i];
+                    let up_left = if i >= bytes_per_pixel {
+                        prev_row[i - bytes_per_pixel]
+                    } else {
+                        0
+                    };
+                    row[i] = row[i].wrapping_add(paeth(left, up, up_left));
+                }
+            }
+            other => {
+                return Err(PdfError::Corrupt(format!(
+                    "unknown PNG row filter type {other}"
+                )));
+            }
+        }
+        output.extend_from_slice(&row);
+        prev_row.copy_from_slice(&row);
+    }
+
+    Ok(output)
+}
+
+fn paeth(a: u8, b: u8, c: u8) -> u8 {
+    let p = a as i32 + b as i32 - c as i32;
+    let pa = (p - a as i32).abs();
+    let pb = (p - b as i32).abs();
+    let pc = (p - c as i32).abs();
+    if pa <= pb && pa <= pc {
+        a
+    } else if pb <= pc {
+        b
+    } else {
+        c
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{PdfDictionary, PdfStream, PdfValue};
+    use flate2::{Compression, write::ZlibEncoder};
+    use std::io::Write;
+
+    fn make_stream(dict: PdfDictionary, data: Vec<u8>) -> PdfStream {
+        PdfStream { dict, data }
+    }
+
+    #[test]
+    fn passthrough_when_no_filter() {
+        let dict = PdfDictionary::new();
+        let stream = make_stream(dict, vec![1, 2, 3]);
+        assert_eq!(decode_stream(&stream).unwrap(), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn inflates_flate_decode() {
+        let raw = b"hello world";
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(raw).unwrap();
+        let compressed = encoder.finish().unwrap();
+        let mut dict = PdfDictionary::new();
+        dict.insert("Filter".to_string(), PdfValue::Name("FlateDecode".into()));
+        let stream = make_stream(dict, compressed);
+        assert_eq!(decode_stream(&stream).unwrap(), raw.to_vec());
+    }
+
+    #[test]
+    fn applies_png_up_predictor() {
+        // Original 2 rows of 4 bytes each.
+        let original: [u8; 8] = [10, 20, 30, 40, 15, 22, 33, 44];
+
+        // Encode with filter type 2 (Up) on row 2, type 0 on row 1.
+        let mut encoded = Vec::new();
+        encoded.push(0); // row 0: None
+        encoded.extend_from_slice(&original[0..4]);
+        encoded.push(2); // row 1: Up
+        let diff: Vec<u8> = original[4..8]
+            .iter()
+            .zip(original[0..4].iter())
+            .map(|(v, up)| v.wrapping_sub(*up))
+            .collect();
+        encoded.extend_from_slice(&diff);
+
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&encoded).unwrap();
+        let compressed = encoder.finish().unwrap();
+
+        let mut dict = PdfDictionary::new();
+        dict.insert("Filter".to_string(), PdfValue::Name("FlateDecode".into()));
+        let mut parms = PdfDictionary::new();
+        parms.insert("Predictor".to_string(), PdfValue::Integer(12));
+        parms.insert("Columns".to_string(), PdfValue::Integer(4));
+        dict.insert("DecodeParms".to_string(), PdfValue::Dictionary(parms));
+
+        let stream = make_stream(dict, compressed);
+        let decoded = decode_stream(&stream).expect("decode");
+        assert_eq!(decoded, original.to_vec());
+    }
+
+    #[test]
+    fn rejects_unsupported_predictor() {
+        let mut dict = PdfDictionary::new();
+        let mut parms = PdfDictionary::new();
+        parms.insert("Predictor".to_string(), PdfValue::Integer(2));
+        dict.insert("DecodeParms".to_string(), PdfValue::Dictionary(parms));
+        let stream = make_stream(dict, vec![0, 0, 0, 0]);
+        match decode_stream(&stream) {
+            Err(PdfError::Unsupported(msg)) => {
+                assert!(msg.contains("predictor"), "got: {msg}")
+            }
+            other => panic!("expected Unsupported, got: {other:?}"),
+        }
+    }
 }
