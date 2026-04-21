@@ -16,6 +16,7 @@ flate2.workspace = true
 md-5.workspace = true
 pdf_graphics = { package = "open-redact-pdf-graphics", path = "../pdf_graphics", version = "0.3.0" }
 serde.workspace = true
+sha2.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
