@@ -1583,6 +1583,178 @@ mod tests {
         assert_eq!(err, PdfError::InvalidPassword);
     }
 
+    /// Build a minimal V=5/R=6 AES-256 encrypted PDF. Reused by all the
+    /// AES-256 regression tests so the only per-test variable is which
+    /// password the caller supplies.
+    fn build_aes_256_encrypted_pdf(
+        user_password: &[u8],
+        owner_password: &[u8],
+        revision: crate::crypto::SecurityRevision,
+    ) -> (Vec<u8>, &'static [u8]) {
+        use crate::crypto::test_helpers::{
+            aes_256_cbc_encrypt, compute_v5_o_and_oe, compute_v5_u_and_ue,
+        };
+
+        let permissions: i32 = -4;
+        let file_key = [0x13u8; 32];
+        let u_validation_salt = [0xAAu8; 8];
+        let u_key_salt = [0xBBu8; 8];
+        let o_validation_salt = [0xCCu8; 8];
+        let o_key_salt = [0xDDu8; 8];
+
+        let (u_entry, ue_entry) = compute_v5_u_and_ue(
+            user_password,
+            &u_validation_salt,
+            &u_key_salt,
+            &file_key,
+            revision,
+        );
+        let u_vector: [u8; 48] = u_entry.as_slice().try_into().expect("U is 48 bytes");
+        let (o_entry, oe_entry) = compute_v5_o_and_oe(
+            owner_password,
+            &o_validation_salt,
+            &o_key_salt,
+            &u_vector,
+            &file_key,
+            revision,
+        );
+
+        let content_iv = [0x42u8; 16];
+        let content_plain: &'static [u8] = b"BT\n/F1 24 Tf\n72 700 Td\n(AES-256 SECRET) Tj\nET\n";
+        let content_cipher = aes_256_cbc_encrypt(&file_key, &content_iv, content_plain);
+
+        let escape_literal = |bytes: &[u8]| -> Vec<u8> {
+            let mut out = Vec::with_capacity(bytes.len() + 2);
+            out.push(b'(');
+            for &byte in bytes {
+                match byte {
+                    b'(' | b')' | b'\\' => {
+                        out.push(b'\\');
+                        out.push(byte);
+                    }
+                    _ => out.push(byte),
+                }
+            }
+            out.push(b')');
+            out
+        };
+
+        let mut pdf: Vec<u8> = Vec::new();
+        pdf.extend_from_slice(b"%PDF-2.0\n");
+
+        let catalog_offset = pdf.len();
+        pdf.extend_from_slice(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+
+        let pages_offset = pdf.len();
+        pdf.extend_from_slice(b"2 0 obj\n<< /Type /Pages /Count 1 /Kids [3 0 R] >>\nendobj\n");
+
+        let page_offset = pdf.len();
+        pdf.extend_from_slice(
+            b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
+              /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>\nendobj\n",
+        );
+
+        let content_offset = pdf.len();
+        pdf.extend_from_slice(
+            format!("4 0 obj\n<< /Length {} >>\nstream\n", content_cipher.len()).as_bytes(),
+        );
+        pdf.extend_from_slice(&content_cipher);
+        pdf.extend_from_slice(b"\nendstream\nendobj\n");
+
+        let font_offset = pdf.len();
+        pdf.extend_from_slice(
+            b"5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica \
+              /Encoding /WinAnsiEncoding >>\nendobj\n",
+        );
+
+        let r_value = match revision {
+            crate::crypto::SecurityRevision::R5 => 5,
+            crate::crypto::SecurityRevision::R6 => 6,
+            _ => panic!("V=5 fixture requires R=5 or R=6"),
+        };
+
+        let encrypt_offset = pdf.len();
+        pdf.extend_from_slice(
+            format!(
+                "6 0 obj\n<< /Filter /Standard /V 5 /R {r_value} /Length 256 \
+                  /CF << /StdCF << /CFM /AESV3 /Length 32 /AuthEvent /DocOpen >> >> \
+                  /StmF /StdCF /StrF /StdCF /P {permissions} "
+            )
+            .as_bytes(),
+        );
+        pdf.extend_from_slice(b"/O ");
+        pdf.extend_from_slice(&escape_literal(&o_entry));
+        pdf.extend_from_slice(b" /U ");
+        pdf.extend_from_slice(&escape_literal(&u_entry));
+        pdf.extend_from_slice(b" /OE ");
+        pdf.extend_from_slice(&escape_literal(&oe_entry));
+        pdf.extend_from_slice(b" /UE ");
+        pdf.extend_from_slice(&escape_literal(&ue_entry));
+        pdf.extend_from_slice(b" >>\nendobj\n");
+
+        let xref_offset = pdf.len();
+        pdf.extend_from_slice(b"xref\n0 7\n");
+        pdf.extend_from_slice(b"0000000000 65535 f \n");
+        for offset in [
+            catalog_offset,
+            pages_offset,
+            page_offset,
+            content_offset,
+            font_offset,
+            encrypt_offset,
+        ] {
+            pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        // V=5 still requires /ID in the trailer even though it is not
+        // consumed by the key-derivation algorithm.
+        let id_literal: [u8; 16] = [
+            0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE,
+            0xFF, 0x00,
+        ];
+        pdf.extend_from_slice(b"trailer\n<< /Size 7 /Root 1 0 R /Encrypt 6 0 R /ID [");
+        pdf.extend_from_slice(&escape_literal(&id_literal));
+        pdf.extend_from_slice(&escape_literal(&id_literal));
+        pdf.extend_from_slice(b"] >>\n");
+        pdf.extend_from_slice(format!("startxref\n{xref_offset}\n%%EOF\n").as_bytes());
+
+        (pdf, content_plain)
+    }
+
+    #[test]
+    fn parses_aes_256_r6_encrypted_pdf_with_user_password() {
+        let (pdf, plain) =
+            build_aes_256_encrypted_pdf(b"userpw", b"ownerpw", crate::crypto::SecurityRevision::R6);
+        let document = parse_pdf_with_password(&pdf, b"userpw")
+            .expect("correct user password should decrypt AES-256 R=6 PDF");
+        assert_decrypts_content_stream(&document, plain);
+    }
+
+    #[test]
+    fn parses_aes_256_r6_encrypted_pdf_with_owner_password() {
+        let (pdf, plain) =
+            build_aes_256_encrypted_pdf(b"userpw", b"ownerpw", crate::crypto::SecurityRevision::R6);
+        let document = parse_pdf_with_password(&pdf, b"ownerpw")
+            .expect("correct owner password should decrypt AES-256 R=6 PDF");
+        assert_decrypts_content_stream(&document, plain);
+    }
+
+    #[test]
+    fn parses_aes_256_r5_encrypted_pdf_with_empty_password() {
+        let (pdf, plain) =
+            build_aes_256_encrypted_pdf(b"", b"ownerpw", crate::crypto::SecurityRevision::R5);
+        let document = parse_pdf(&pdf).expect("empty-password AES-256 R=5 PDF should decrypt");
+        assert_decrypts_content_stream(&document, plain);
+    }
+
+    #[test]
+    fn aes_256_rejects_wrong_password() {
+        let (pdf, _) =
+            build_aes_256_encrypted_pdf(b"userpw", b"ownerpw", crate::crypto::SecurityRevision::R6);
+        let err = parse_pdf_with_password(&pdf, b"wrongpw")
+            .expect_err("wrong password must not decrypt AES-256 PDF");
+        assert_eq!(err, PdfError::InvalidPassword);
+    }
+
     #[test]
     fn parses_aes_128_with_encrypt_metadata_false() {
         // EncryptMetadata=false changes the file-key derivation (Algorithm 2
