@@ -59,7 +59,44 @@ pub fn apply_redactions(
         let parsed = parse_page_contents(file, &page)?;
         ensure_supported_operators(&parsed.operations)?;
         let xobjects = load_xobjects(file, &page.resources)?;
-        let glyph_removals = collect_glyph_removals(&extracted.glyphs, &targets);
+
+        // Partition glyphs by their origin: page content stream vs. Form
+        // XObject. Form-origin glyphs carry operation indices and byte
+        // locations relative to the Form's stream, so they cannot be mixed
+        // with the page's operations when rewriting.
+        let mut page_glyphs = Vec::with_capacity(extracted.glyphs.len());
+        let mut form_glyph_groups: BTreeMap<ObjectRef, Vec<Glyph>> = BTreeMap::new();
+        for glyph in extracted.glyphs.into_iter() {
+            match glyph.source_form {
+                None => page_glyphs.push(glyph),
+                Some(form_ref) => form_glyph_groups.entry(form_ref).or_default().push(glyph),
+            }
+        }
+
+        // Identify Forms invoked on this page whose bounding quad overlaps a
+        // target, and redact each of them by allocating a per-page copy and
+        // rewriting its content stream.
+        let form_redactions = redact_intersecting_forms(
+            file,
+            &page,
+            &parsed.operations,
+            &targets,
+            page_transform,
+            &xobjects,
+            &form_glyph_groups,
+            plan.mode,
+            &mut report.warnings,
+        )?;
+        let redacted_form_names: BTreeSet<String> =
+            form_redactions.iter().map(|r| r.name.clone()).collect();
+        for redaction in &form_redactions {
+            report.text_glyphs_removed += redaction.glyphs_removed;
+        }
+        if !form_redactions.is_empty() {
+            override_page_xobject_refs(file, page.page_ref, &page.resources, &form_redactions)?;
+        }
+
+        let glyph_removals = collect_glyph_removals(&page_glyphs, &targets);
         let mut operations = parsed.operations.clone();
         let text_removed = count_removed_glyphs(&glyph_removals);
         rewrite_text_operations(
@@ -74,8 +111,13 @@ pub fn apply_redactions(
             neutralize_vector_operations(&mut operations, &targets, page_transform)?;
         report.path_paints_removed += vector_removed;
 
-        let (image_removed, neutralized_xobjects) =
-            neutralize_image_operations(&mut operations, &targets, page_transform, &xobjects)?;
+        let (image_removed, neutralized_xobjects) = neutralize_image_operations(
+            &mut operations,
+            &targets,
+            page_transform,
+            &xobjects,
+            &redacted_form_names,
+        )?;
         report.image_draws_removed += image_removed;
         if image_removed > 0 {
             report.warnings.push(format!(
@@ -788,6 +830,7 @@ fn neutralize_image_operations(
     targets: &[&NormalizedPageTarget],
     page_transform: Matrix,
     xobjects: &BTreeMap<String, XObjectKind>,
+    redacted_form_names: &BTreeSet<String>,
 ) -> PdfResult<(usize, Vec<String>)> {
     let mut removed = 0usize;
     let mut neutralized_names = Vec::new();
@@ -818,20 +861,22 @@ fn neutralize_image_operations(
                         }
                     }
                     Some(XObjectKind::Form { bbox, matrix }) => {
-                        // The Form's effective transform in page space is
-                        // matrix × current CTM × page_transform. We skip the
-                        // Form entirely when its bounding rectangle, mapped
-                        // into page space, does not intersect any target; only
-                        // Forms that actually cover redacted content still
-                        // produce a hard error.
-                        let quad = bbox
-                            .to_quad()
-                            .transform(matrix.multiply(ctm).multiply(page_transform));
-                        if targets.iter().any(|target| target.intersects_quad(&quad)) {
-                            return Err(PdfError::Unsupported(
-                                "Form XObjects intersecting a redaction target are not supported"
-                                    .to_string(),
-                            ));
+                        // Forms whose content was rewritten by the pre-pass
+                        // have already been redacted in place, so their Do
+                        // still points (through the page's updated Resources)
+                        // at the per-page copy and must be left alone here.
+                        if redacted_form_names.contains(name) {
+                            // already handled upstream
+                        } else {
+                            let quad = bbox
+                                .to_quad()
+                                .transform(matrix.multiply(ctm).multiply(page_transform));
+                            if targets.iter().any(|target| target.intersects_quad(&quad)) {
+                                return Err(PdfError::Unsupported(
+                                    "Form XObjects intersecting a redaction target are not supported"
+                                        .to_string(),
+                                ));
+                            }
                         }
                     }
                     None => {
@@ -1000,6 +1045,181 @@ fn serialize_operations(operations: &[Operation]) -> Vec<u8> {
         output.push('\n');
     }
     output.into_bytes()
+}
+
+#[derive(Debug, Clone)]
+struct FormRedaction {
+    name: String,
+    new_ref: ObjectRef,
+    glyphs_removed: usize,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn redact_intersecting_forms(
+    file: &mut PdfFile,
+    page: &PageInfo,
+    operations: &[Operation],
+    targets: &[&NormalizedPageTarget],
+    page_transform: Matrix,
+    xobjects: &BTreeMap<String, XObjectKind>,
+    form_glyph_groups: &BTreeMap<ObjectRef, Vec<Glyph>>,
+    mode: RedactionMode,
+    warnings: &mut Vec<String>,
+) -> PdfResult<Vec<FormRedaction>> {
+    // Walk the page content stream once to find each Do of a Form XObject
+    // whose bounding quad in page space intersects a redaction target. We
+    // track each (name, invocation CTM) so that nested Do inside a Form
+    // could later be handled analogously; for this MVP, nested Forms
+    // inside a redacted Form still error out via ensure_supported_operators.
+    let mut intersecting: Vec<(String, ObjectRef)> = Vec::new();
+    let mut ctm = Matrix::identity();
+    let mut ctm_stack: Vec<Matrix> = Vec::new();
+    for operation in operations {
+        match operation.operator.as_str() {
+            "q" => ctm_stack.push(ctm),
+            "Q" => ctm = ctm_stack.pop().unwrap_or(Matrix::identity()),
+            "cm" => ctm = matrix_from_operands(&operation.operands)?.multiply(ctm),
+            "Do" => {
+                let name = operand_name(operation, 0)?;
+                if let Some(XObjectKind::Form { bbox, matrix }) = xobjects.get(name) {
+                    let quad = bbox
+                        .to_quad()
+                        .transform(matrix.multiply(ctm).multiply(page_transform));
+                    if targets.iter().any(|target| target.intersects_quad(&quad)) {
+                        if let Some(form_ref) = lookup_form_ref(file, &page.resources, name)? {
+                            intersecting.push((name.to_string(), form_ref));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut redactions = Vec::with_capacity(intersecting.len());
+    for (name, form_ref) in intersecting {
+        let empty = Vec::new();
+        let glyphs = form_glyph_groups.get(&form_ref).unwrap_or(&empty);
+        let (new_ref, removed) =
+            redact_form_xobject(file, form_ref, glyphs, targets, mode, warnings)?;
+        redactions.push(FormRedaction {
+            name,
+            new_ref,
+            glyphs_removed: removed,
+        });
+    }
+    Ok(redactions)
+}
+
+fn lookup_form_ref(
+    file: &PdfFile,
+    resources: &PdfDictionary,
+    name: &str,
+) -> PdfResult<Option<ObjectRef>> {
+    let xobject_dict = match resources.get("XObject") {
+        Some(value) => file.resolve_dict(value)?,
+        None => return Ok(None),
+    };
+    match xobject_dict.get(name) {
+        Some(PdfValue::Reference(object_ref)) => Ok(Some(*object_ref)),
+        _ => Ok(None),
+    }
+}
+
+fn redact_form_xobject(
+    file: &mut PdfFile,
+    form_ref: ObjectRef,
+    form_glyphs: &[Glyph],
+    targets: &[&NormalizedPageTarget],
+    mode: RedactionMode,
+    warnings: &mut Vec<String>,
+) -> PdfResult<(ObjectRef, usize)> {
+    let original = match file.get_object(form_ref)? {
+        PdfObject::Stream(stream) => stream.clone(),
+        _ => {
+            return Err(PdfError::Corrupt(format!(
+                "Form XObject {} {} is not a stream",
+                form_ref.object_number, form_ref.generation
+            )));
+        }
+    };
+
+    let decoded = pdf_objects::decode_stream(&original)?;
+    let parsed = pdf_content::parse_content_stream(&decoded)?;
+    ensure_supported_operators(&parsed.operations)?;
+
+    // Guard: nested Form XObjects inside a redacted Form are not handled.
+    // A Do of any XObject inside the Form will pass through as-is; if that
+    // XObject is an Image it still draws (safe), and if it is another Form
+    // it might carry text we cannot currently reach. Warn and carry on.
+    for operation in &parsed.operations {
+        if operation.operator == "Do" {
+            warnings.push(
+                "redacted Form XObject contains a nested Do; its inner XObjects were not \
+                 recursively redacted — verify that hidden content is not relied upon"
+                    .to_string(),
+            );
+            break;
+        }
+    }
+
+    let removals = collect_glyph_removals(form_glyphs, targets);
+    let glyphs_removed = count_removed_glyphs(&removals);
+    let mut new_ops = parsed.operations.clone();
+    rewrite_text_operations(&mut new_ops, &removals, mode, warnings);
+
+    let serialized = serialize_operations(&new_ops);
+    let (data, use_flate) = match pdf_objects::flate_encode(&serialized) {
+        Ok(compressed) => (compressed, true),
+        Err(_) => (serialized, false),
+    };
+
+    let mut new_dict = original.dict.clone();
+    new_dict.remove("Length");
+    new_dict.remove("Filter");
+    new_dict.remove("DecodeParms");
+    if use_flate {
+        new_dict.insert("Filter".to_string(), PdfValue::Name("FlateDecode".into()));
+    }
+
+    let new_ref = file.allocate_object_ref();
+    file.insert_object(new_ref, PdfObject::Stream(PdfStream { dict: new_dict, data }));
+    Ok((new_ref, glyphs_removed))
+}
+
+fn override_page_xobject_refs(
+    file: &mut PdfFile,
+    page_ref: ObjectRef,
+    effective_resources: &PdfDictionary,
+    redactions: &[FormRedaction],
+) -> PdfResult<()> {
+    let existing_xobject: PdfDictionary = match effective_resources.get("XObject") {
+        Some(value) => file.resolve_dict(value).cloned().unwrap_or_default(),
+        None => PdfDictionary::new(),
+    };
+    let mut new_xobject = existing_xobject;
+    for redaction in redactions {
+        new_xobject.insert(
+            redaction.name.clone(),
+            PdfValue::Reference(redaction.new_ref),
+        );
+    }
+    let mut new_resources = effective_resources.clone();
+    new_resources.insert("XObject".to_string(), PdfValue::Dictionary(new_xobject));
+
+    match file.get_object_mut(page_ref)? {
+        PdfObject::Value(PdfValue::Dictionary(page_dict)) => {
+            page_dict.insert(
+                "Resources".to_string(),
+                PdfValue::Dictionary(new_resources),
+            );
+            Ok(())
+        }
+        _ => Err(PdfError::Corrupt(format!(
+            "page {} {} is not a dictionary",
+            page_ref.object_number, page_ref.generation
+        ))),
+    }
 }
 
 /// Rejects documents whose default Optional Content configuration marks any

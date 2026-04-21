@@ -527,11 +527,13 @@ fn form_xobject_does_not_block_redaction_when_target_is_on_page_content() {
 }
 
 #[test]
-fn form_xobject_redaction_fails_cleanly_when_target_intersects_form() {
-    // The Form XObject in this fixture carries "Form Inner Secret". Redacting
-    // that string requires rewriting the Form's content stream, which the
-    // engine does not do yet — so the call must return an explicit
-    // Unsupported error instead of silently leaving the content in place.
+fn form_xobject_redaction_rewrites_the_form_content_stream() {
+    // The Form XObject in this fixture carries "Form Inner Secret".
+    // Redacting that string now succeeds: the engine allocates a per-page
+    // copy of the Form, rewrites its content stream to strip the targeted
+    // glyphs, and updates the page's Resources.XObject to point at the
+    // copy. The page text "Page Outer" (which lives in the page's own
+    // content stream) must survive untouched.
     let mut document = PdfDocument::open(&fixture("form-xobject-text.pdf"))
         .expect("form-xobject fixture should open");
     let matches = document
@@ -543,7 +545,7 @@ fn form_xobject_redaction_fails_cleanly_when_target_intersects_form() {
         .iter()
         .map(|quad| quad.points)
         .collect::<Vec<_>>();
-    let err = document
+    let report = document
         .apply_redactions(RedactionPlan {
             targets: vec![RedactionTarget::QuadGroup {
                 page_index: 0,
@@ -556,11 +558,23 @@ fn form_xobject_redaction_fails_cleanly_when_target_intersects_form() {
             strip_metadata: Some(false),
             strip_attachments: Some(false),
         })
-        .expect_err("redaction should fail when the target lands inside a Form");
-    let message = err.to_string();
+        .expect("redaction inside a Form XObject should succeed");
+    assert!(report.text_glyphs_removed > 0);
+
+    let saved = document.save().expect("save should succeed");
+    let reopened = PdfDocument::open(&saved).expect("saved pdf should reopen");
+    let extracted = reopened
+        .extract_text(0)
+        .expect("reopened extraction should succeed");
     assert!(
-        message.contains("Form XObject") || message.contains("Form XObjects"),
-        "error should mention Form XObjects, got: {message}"
+        !extracted.text.contains("Form Inner Secret"),
+        "Form-interior text should be gone after save, got: {}",
+        extracted.text
+    );
+    assert!(
+        extracted.text.contains("Page Outer"),
+        "outer page text should remain untouched, got: {}",
+        extracted.text
     );
 }
 

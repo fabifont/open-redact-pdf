@@ -58,6 +58,13 @@ pub struct Glyph {
     /// Raw advance width in 1/1000 em font units. Used by kern-compensating
     /// redaction modes to preserve text positioning after byte removal.
     pub width_units: f64,
+    /// When `Some`, the glyph originated inside a Form XObject invoked by
+    /// `Do` on the page's content stream. `operation_index` and `location`
+    /// then refer to positions inside that Form's content stream, not the
+    /// page's — callers that want to rewrite the bytes must look up the
+    /// corresponding Form object, decode its stream, and mutate the
+    /// operations of the *Form*, not the page.
+    pub source_form: Option<ObjectRef>,
 }
 
 #[derive(Debug, Clone)]
@@ -689,10 +696,16 @@ fn enter_form_xobject(
 
         // Form invocation is bracketed by an implicit q/Q. Save CTM and
         // text_state, pre-multiply the Form's /Matrix into the CTM, and
-        // restore both on exit.
+        // restore both on exit. The current_form marker on the context lets
+        // callers (redact) tell the difference between glyphs produced by
+        // the page's own content stream and glyphs produced inside this
+        // Form — their operation_index and location refer to different
+        // byte streams.
         let saved_ctm = *ctm;
         let saved_text_state = text_state.clone();
+        let saved_form = context.current_form;
         *ctm = form_matrix.multiply(saved_ctm);
+        context.current_form = Some(xobject_ref);
 
         run_operations(
             file,
@@ -711,6 +724,7 @@ fn enter_form_xobject(
 
         *ctm = saved_ctm;
         *text_state = saved_text_state;
+        context.current_form = saved_form;
         Ok(())
     })();
 
@@ -850,6 +864,12 @@ struct TextContext {
     items: Vec<TextItem>,
     glyphs: Vec<Glyph>,
     pending_line_break: bool,
+    /// The Form XObject reference whose content is currently being
+    /// interpreted. `None` while the page's own content stream is active.
+    /// Glyphs pushed while this is `Some(_)` carry the same reference in
+    /// their `source_form` field so downstream consumers (redact, in
+    /// particular) can identify which stream holds the glyph's bytes.
+    current_form: Option<ObjectRef>,
 }
 
 impl TextContext {
@@ -860,6 +880,7 @@ impl TextContext {
             items: Vec::new(),
             glyphs: Vec::new(),
             pending_line_break: false,
+            current_form: None,
         }
     }
 }
@@ -1019,6 +1040,7 @@ fn show_text(
                 quad,
                 page_char_index,
                 operation_index,
+                source_form: context.current_form,
                 location: match show_operand {
                     ShowOperand::Direct { operand_index } => GlyphLocation::Direct {
                         operand_index,
@@ -1821,6 +1843,7 @@ mod tests {
             },
             visible: true,
             width_units: 600.0,
+            source_form: None,
         }
     }
 
