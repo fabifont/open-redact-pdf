@@ -584,6 +584,19 @@ enum ShowOperand {
 struct SimpleFont {
     widths: Vec<f64>,
     first_char: u16,
+    unicode_map: BTreeMap<u16, String>,
+    encoding: SimpleEncoding,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum SimpleEncoding {
+    /// Fallback: treat bytes as identity if they map to ASCII, otherwise
+    /// emit the Unicode replacement character.
+    #[default]
+    Identity,
+    /// PDF `WinAnsiEncoding` — a superset of ISO-8859-1 with Windows-1252
+    /// punctuation and symbols in the `0x80..=0x9F` range.
+    WinAnsi,
 }
 
 #[derive(Debug, Clone)]
@@ -686,7 +699,14 @@ fn load_single_font(
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
-            Ok(LoadedFont::Simple(SimpleFont { widths, first_char }))
+            let unicode_map = load_to_unicode_map(file, font_dict)?;
+            let encoding = parse_simple_encoding(file, font_dict);
+            Ok(LoadedFont::Simple(SimpleFont {
+                widths,
+                first_char,
+                unicode_map,
+                encoding,
+            }))
         }
         "Type0" => Ok(LoadedFont::Composite(load_composite_font(file, font_dict)?)),
         other => Err(PdfError::Unsupported(format!(
@@ -854,11 +874,90 @@ fn show_text(
     Ok(())
 }
 
-fn decode_simple_byte(byte: u8) -> char {
+fn decode_simple_byte(font: &SimpleFont, byte: u8) -> String {
+    if let Some(mapped) = font.unicode_map.get(&u16::from(byte)) {
+        if !mapped.is_empty() {
+            return mapped.clone();
+        }
+    }
+    let character = match font.encoding {
+        SimpleEncoding::WinAnsi => winansi_byte_to_char(byte),
+        SimpleEncoding::Identity => identity_byte_to_char(byte),
+    };
+    character
+        .map(|character| character.to_string())
+        .unwrap_or_else(|| '\u{FFFD}'.to_string())
+}
+
+fn identity_byte_to_char(byte: u8) -> Option<char> {
     if byte.is_ascii() {
-        byte as char
+        Some(byte as char)
     } else {
-        '\u{FFFD}'
+        None
+    }
+}
+
+/// Decode a single byte under the PDF `WinAnsiEncoding` table.
+///
+/// Codes `0x20..=0x7E` are plain ASCII. Codes `0x80..=0x9F` carry the
+/// Windows-1252 punctuation repertoire (smart quotes, the Euro sign, the
+/// em/en dashes, and so on). Codes `0xA0..=0xFF` are ISO-8859-1.
+/// Undefined codes return `None`, which callers render as `U+FFFD`.
+fn winansi_byte_to_char(byte: u8) -> Option<char> {
+    match byte {
+        0x20..=0x7E => Some(byte as char),
+        0x80 => Some('\u{20AC}'),
+        0x82 => Some('\u{201A}'),
+        0x83 => Some('\u{0192}'),
+        0x84 => Some('\u{201E}'),
+        0x85 => Some('\u{2026}'),
+        0x86 => Some('\u{2020}'),
+        0x87 => Some('\u{2021}'),
+        0x88 => Some('\u{02C6}'),
+        0x89 => Some('\u{2030}'),
+        0x8A => Some('\u{0160}'),
+        0x8B => Some('\u{2039}'),
+        0x8C => Some('\u{0152}'),
+        0x8E => Some('\u{017D}'),
+        0x91 => Some('\u{2018}'),
+        0x92 => Some('\u{2019}'),
+        0x93 => Some('\u{201C}'),
+        0x94 => Some('\u{201D}'),
+        0x95 => Some('\u{2022}'),
+        0x96 => Some('\u{2013}'),
+        0x97 => Some('\u{2014}'),
+        0x98 => Some('\u{02DC}'),
+        0x99 => Some('\u{2122}'),
+        0x9A => Some('\u{0161}'),
+        0x9B => Some('\u{203A}'),
+        0x9C => Some('\u{0153}'),
+        0x9E => Some('\u{017E}'),
+        0x9F => Some('\u{0178}'),
+        0xA0..=0xFF => Some(byte as char),
+        _ => None,
+    }
+}
+
+fn parse_simple_encoding(file: &PdfFile, font_dict: &pdf_objects::PdfDictionary) -> SimpleEncoding {
+    match font_dict.get("Encoding") {
+        Some(PdfValue::Name(name)) => simple_encoding_from_name(name),
+        Some(value @ PdfValue::Reference(_)) | Some(value @ PdfValue::Dictionary(_)) => {
+            match file.resolve_dict(value) {
+                Ok(dict) => match dict.get("BaseEncoding").and_then(PdfValue::as_name) {
+                    Some(name) => simple_encoding_from_name(name),
+                    None => SimpleEncoding::Identity,
+                },
+                Err(_) => SimpleEncoding::Identity,
+            }
+        }
+        _ => SimpleEncoding::Identity,
+    }
+}
+
+fn simple_encoding_from_name(name: &str) -> SimpleEncoding {
+    match name {
+        "WinAnsiEncoding" => SimpleEncoding::WinAnsi,
+        _ => SimpleEncoding::Identity,
     }
 }
 
@@ -875,7 +974,7 @@ fn decode_font_glyphs(font: &LoadedFont, bytes: &[u8]) -> PdfResult<Vec<DecodedG
                     .copied()
                     .unwrap_or(600.0);
                 DecodedGlyph {
-                    text: decode_simple_byte(byte).to_string(),
+                    text: decode_simple_byte(font, byte),
                     width_units,
                     byte_start: byte_index,
                     byte_end: byte_index + 1,
