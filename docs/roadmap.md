@@ -7,7 +7,7 @@ title: Roadmap
 ## Implemented MVP
 
 - Classic xref parsing with incremental update chain support (follows `Prev` pointers)
-- Standard Security Handler decryption (V = 1/2, R = 2/3, RC4 up to 128-bit) under either the user password (including empty) or the owner password — the trailer's `/Encrypt` is consumed at parse time and downstream stages see a plaintext document
+- Standard Security Handler decryption (V = 1/2 RC4; V = 4 R = 4 with the `/StdCF` crypt filter in `/CFM /V2` or `/CFM /AESV2` mode) under either the user password (including empty) or the owner password — the trailer's `/Encrypt` is consumed at parse time and downstream stages see a plaintext document. `/EncryptMetadata false` is honoured: the Algorithm 2 step-5 `0xFFFFFFFF` suffix is applied during key derivation and Metadata streams are left in plaintext.
 - PDF 1.5+ cross-reference streams, object streams, and the hybrid `XRefStm` form
 - `FlateDecode` with the TIFF predictor (`/Predictor 2`) and PNG predictors (10–15) via `DecodeParms`
 - Page tree traversal with inherited resources, media boxes, crop boxes, and rotation
@@ -32,7 +32,7 @@ title: Roadmap
 - Partial image rewriting so redaction targets that overlap only part of an Image XObject mask the affected pixels instead of neutralizing the whole `Do`
 - Optional-content sanitization: today documents with hidden-by-default OCGs are refused up front; a future change would let callers opt in to stripping hidden layers so they can still redact the visible content
 - Incremental-save preservation (reading is supported; output is always a flat rewrite that flattens xref streams and object streams into a classic xref table)
-- Broaden encrypted-PDF support — Standard Security Handler V = 4 (AES-128), V = 5 / R = 6 (AES-256), and the public-key handler. RC4 under the user or owner password is in; these extensions would complete the story.
+- Broaden encrypted-PDF support — Standard Security Handler V = 5 / R = 6 (AES-256) and the public-key handler. RC4 (V = 1/2) and AES-128 (V = 4) under the user or owner password are in; these extensions would complete the story.
 - Smarter visual line grouping for dense layouts where several short text runs sit only a unit or two apart in `y` and the current heuristic merges them into one line
 - Adopt `cargo-release` for the Rust publish step so the workspace version bump, inter-crate pin rewrite, tag creation, and ordered publish happen through a single tool; extend `scripts/check-release-version.mjs` to verify every `crates/*/Cargo.toml` inter-crate pin matches the workspace version, so "bumped workspace but forgot the pins" stops being a silent foot-gun
 

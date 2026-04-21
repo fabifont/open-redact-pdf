@@ -164,7 +164,9 @@ The PDF spec requires exactly one line ending (CR, LF, or CRLF) between the `str
 
 ### Encryption check
 
-If the trailer dictionary contains an `Encrypt` key, `build_document` immediately returns `Err(PdfError::Unsupported)`. There is no attempt to parse encrypted content. Attempting to process encrypted PDF structure as if it were plaintext would produce garbage results with no error signal — explicit rejection is the only safe behavior.
+If the trailer dictionary contains an `Encrypt` key, `parse_pdf_with_password` runs decryption in place before `build_document` sees the objects: `StandardSecurityHandler::open` authenticates the supplied password against the Encrypt dictionary and every encrypted string / stream is rewritten in-place to its plaintext bytes. Object streams are decrypted before materialization so their members parse as plaintext. The trailer's `/Encrypt` entry is then removed so downstream stages never observe the ciphertext.
+
+Supported Encrypt configurations: V = 1 or 2 with R = 2 or 3 (RC4 up to 128-bit); V = 4 with R = 4 using the `/StdCF` crypt filter configured for `/CFM /V2` (RC4-128) or `/CFM /AESV2` (AES-128-CBC). Either the user password or the owner password authenticates (Algorithm 2 + 4/5 and Algorithm 7). When `/EncryptMetadata false` is set on a V=4 document, the Algorithm 2 step-5 `0xFFFFFFFF` suffix is applied to the file key and `/Type /Metadata` streams are left in plaintext. Unsupported configurations (V=5 / R=6 AES-256, public-key handlers, `/CFM` methods other than `/V2` and `/AESV2`) fail with `PdfError::Unsupported`; a wrong password fails with `PdfError::InvalidPassword`.
 
 ### Page tree traversal: `collect_pages`
 

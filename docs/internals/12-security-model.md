@@ -33,20 +33,44 @@ A visible black rectangle is not a redaction unless the underlying content is re
 
 Every unsupported feature returns `PdfError::Unsupported` or `PdfError::UnsupportedOption`. The engine never silently degrades. This is critical for redaction: silent degradation could mean unredacted content passes through to the output file without the caller being aware.
 
-## 6. Known security-relevant limitations
+## 6. Encrypted PDFs
+
+The Standard Security Handler is parsed and consumed at parse time so every stage downstream operates on plaintext objects. Supported configurations:
+
+| V | R | Method | Notes |
+|---|---|---|---|
+| 1 | 2 | RC4-40 | Algorithm 2 + 4 |
+| 2 | 3 | RC4-128 | Algorithm 2 + 5 (50-round rehash) |
+| 4 | 4 | RC4-128 via `/StdCF /CFM /V2` | Algorithm 1 per-object key, no `sAlT` suffix |
+| 4 | 4 | AES-128-CBC via `/StdCF /CFM /AESV2` | Algorithm 1a per-object key with `sAlT` suffix, PKCS#7-padded, 16-byte IV prepended |
+
+Either the user password or the owner password authenticates. The owner password is recovered to the user password via Algorithm 7; the file key is always derived from the user password.
+
+`/Identity` crypt filters are pass-through — bytes are returned unchanged without touching the cipher.
+
+When a V=4 document sets `/EncryptMetadata false`:
+
+- file-key derivation appends `0xFFFFFFFF` after the `/ID[0]` bytes (Algorithm 2 step 5)
+- streams with `/Type /Metadata` skip decryption so they stay readable as plaintext XMP
+
+Unsupported encryption configurations (V=5/R=6 AES-256, public-key handlers, `/CFM` methods other than `/V2` and `/AESV2`) fail explicitly with `PdfError::Unsupported`. Wrong passwords fail with `PdfError::InvalidPassword`.
+
+Writing encrypted PDFs is out of scope: the save path always emits a plaintext, deterministic full-save rewrite.
+
+## 7. Known security-relevant limitations
 
 - **`v` and `y` bezier curves**: path bounds may be underestimated because these curves are not fully accumulated
 - **Quad intersection uses AABB approximation**: for rotated quads, narrow slivers may be missed
 - **No ToUnicode for simple fonts**: non-ASCII text in Type1/TrueType fonts appears as replacement characters and cannot be searched or redacted by text search
 - **Text in invisible mode (`Tr=3`)**: included in glyphs for redaction but excluded from search results — this is correct behavior, since you must be able to redact what you cannot see
 
-## 7. Why it was coded this way
+## 8. Why it was coded this way
 
 - **Whitelist over blacklist**: an unknown operator might carry redactable content; passing it through blindly is unsafe
 - **Fail-explicit over fail-soft**: for a redaction tool, silent failure is a security vulnerability, not a graceful degradation
 - **Conservative annotation removal**: an annotation without geometric overlap may still contain sensitive information in its metadata
 
-## 8. What would break
+## 9. What would break
 
 | Change | Consequence |
 |---|---|
