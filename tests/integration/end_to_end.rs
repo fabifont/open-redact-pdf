@@ -356,12 +356,94 @@ fn form_xobject_text_is_extracted_and_searchable() {
 
     // The quad should land inside the page bounds (612 x 792). The Form's
     // Matrix translates content by +100 in y, and the page content stream
-    // places the Form origin at (72, 600), so the glyphs sit near y=700.
+    // places the Form origin at (72, 400), so the glyphs sit near y=500.
     let bbox = matches[0].quads[0].bounding_rect();
     assert!(
         bbox.x >= 0.0 && bbox.max_x() <= 612.0 && bbox.y >= 0.0 && bbox.max_y() <= 792.0,
         "quad should be within page bounds, got bbox: {:?}",
         bbox
+    );
+}
+
+#[test]
+fn form_xobject_does_not_block_redaction_when_target_is_on_page_content() {
+    // Redacting the outer page text must succeed even though the page also
+    // invokes a Form XObject — the Form does not overlap the target so the
+    // engine should leave the Do alone and proceed with the rewrite.
+    let mut document = PdfDocument::open(&fixture("form-xobject-text.pdf"))
+        .expect("form-xobject fixture should open");
+    let matches = document
+        .search_text(0, "Page Outer")
+        .expect("search should succeed");
+    assert_eq!(matches.len(), 1);
+    let quads = matches[0]
+        .quads
+        .iter()
+        .map(|quad| quad.points)
+        .collect::<Vec<_>>();
+    let report = document
+        .apply_redactions(RedactionPlan {
+            targets: vec![RedactionTarget::QuadGroup {
+                page_index: 0,
+                quads,
+            }],
+            mode: None,
+            fill_color: None,
+            overlay_text: None,
+            remove_intersecting_annotations: Some(false),
+            strip_metadata: Some(false),
+            strip_attachments: Some(false),
+        })
+        .expect("redaction of outer text should succeed even with a Form present");
+    assert!(report.text_glyphs_removed > 0);
+
+    let saved = document.save().expect("save should succeed");
+    let reopened = PdfDocument::open(&saved).expect("saved pdf should reopen");
+    let extracted_after = reopened
+        .extract_text(0)
+        .expect("reopened extraction should succeed");
+    assert!(!extracted_after.text.contains("Page Outer"));
+    assert!(
+        extracted_after.text.contains("Form Inner Secret"),
+        "Form XObject content should remain untouched since it did not intersect the target"
+    );
+}
+
+#[test]
+fn form_xobject_redaction_fails_cleanly_when_target_intersects_form() {
+    // The Form XObject in this fixture carries "Form Inner Secret". Redacting
+    // that string requires rewriting the Form's content stream, which the
+    // engine does not do yet — so the call must return an explicit
+    // Unsupported error instead of silently leaving the content in place.
+    let mut document = PdfDocument::open(&fixture("form-xobject-text.pdf"))
+        .expect("form-xobject fixture should open");
+    let matches = document
+        .search_text(0, "Form Inner Secret")
+        .expect("search should succeed");
+    assert_eq!(matches.len(), 1);
+    let quads = matches[0]
+        .quads
+        .iter()
+        .map(|quad| quad.points)
+        .collect::<Vec<_>>();
+    let err = document
+        .apply_redactions(RedactionPlan {
+            targets: vec![RedactionTarget::QuadGroup {
+                page_index: 0,
+                quads,
+            }],
+            mode: None,
+            fill_color: None,
+            overlay_text: None,
+            remove_intersecting_annotations: Some(false),
+            strip_metadata: Some(false),
+            strip_attachments: Some(false),
+        })
+        .expect_err("redaction should fail when the target lands inside a Form");
+    let message = err.to_string();
+    assert!(
+        message.contains("Form XObject") || message.contains("Form XObjects"),
+        "error should mention Form XObjects, got: {message}"
     );
 }
 

@@ -341,7 +341,10 @@ fn load_xobjects(
             .unwrap_or("");
         let kind = match subtype {
             "Image" => XObjectKind::Image,
-            "Form" => XObjectKind::Form,
+            "Form" => XObjectKind::Form {
+                bbox: parse_form_bbox(&stream.dict),
+                matrix: parse_form_matrix(&stream.dict),
+            },
             other => {
                 return Err(PdfError::Unsupported(format!(
                     "XObject subtype {other} is not supported"
@@ -353,10 +356,79 @@ fn load_xobjects(
     Ok(output)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+fn parse_form_bbox(dict: &PdfDictionary) -> Rect {
+    // Default to the unit square when the BBox is missing or malformed. Any
+    // intersection test against a user target will either correctly return
+    // true (when the target covers the origin) or correctly return false
+    // otherwise, which is the most conservative safe fallback.
+    let Some(PdfValue::Array(values)) = dict.get("BBox") else {
+        return Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 1.0,
+            height: 1.0,
+        };
+    };
+    if values.len() != 4 {
+        return Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 1.0,
+            height: 1.0,
+        };
+    }
+    let numbers: Option<[f64; 4]> = {
+        let mut nums = [0.0; 4];
+        for (slot, value) in nums.iter_mut().zip(values.iter()) {
+            match value.as_number() {
+                Some(n) => *slot = n,
+                None => return Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 1.0,
+                    height: 1.0,
+                },
+            }
+        }
+        Some(nums)
+    };
+    let [x1, y1, x2, y2] = numbers.unwrap();
+    Rect {
+        x: x1.min(x2),
+        y: y1.min(y2),
+        width: (x2 - x1).abs(),
+        height: (y2 - y1).abs(),
+    }
+}
+
+fn parse_form_matrix(dict: &PdfDictionary) -> Matrix {
+    let Some(PdfValue::Array(values)) = dict.get("Matrix") else {
+        return Matrix::identity();
+    };
+    if values.len() != 6 {
+        return Matrix::identity();
+    }
+    let mut nums = [0.0; 6];
+    for (slot, value) in nums.iter_mut().zip(values.iter()) {
+        match value.as_number() {
+            Some(n) => *slot = n,
+            None => return Matrix::identity(),
+        }
+    }
+    Matrix {
+        a: nums[0],
+        b: nums[1],
+        c: nums[2],
+        d: nums[3],
+        e: nums[4],
+        f: nums[5],
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum XObjectKind {
     Image,
-    Form,
+    Form { bbox: Rect, matrix: Matrix },
 }
 
 type GlyphRemovalMap = BTreeMap<usize, Vec<GlyphByteRef>>;
@@ -728,10 +800,22 @@ fn neutralize_image_operations(
                             removed += 1;
                         }
                     }
-                    Some(XObjectKind::Form) => {
-                        return Err(PdfError::Unsupported(
-                            "Form XObjects are not supported on redacted pages".to_string(),
-                        ));
+                    Some(XObjectKind::Form { bbox, matrix }) => {
+                        // The Form's effective transform in page space is
+                        // matrix × current CTM × page_transform. We skip the
+                        // Form entirely when its bounding rectangle, mapped
+                        // into page space, does not intersect any target; only
+                        // Forms that actually cover redacted content still
+                        // produce a hard error.
+                        let quad = bbox
+                            .to_quad()
+                            .transform(matrix.multiply(ctm).multiply(page_transform));
+                        if targets.iter().any(|target| target.intersects_quad(&quad)) {
+                            return Err(PdfError::Unsupported(
+                                "Form XObjects intersecting a redaction target are not supported"
+                                    .to_string(),
+                            ));
+                        }
                     }
                     None => {
                         return Err(PdfError::Unsupported(format!(
