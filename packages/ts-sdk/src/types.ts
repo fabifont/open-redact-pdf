@@ -84,5 +84,7 @@ export type ApplyReport = {
   pathPaintsRemoved: number;
   imageDrawsRemoved: number;
   annotationsRemoved: number;
+  /** Number of Form XObject per-page copies produced by copy-on-write redaction. */
+  formXObjectsRewritten: number;
   warnings: string[];
 };

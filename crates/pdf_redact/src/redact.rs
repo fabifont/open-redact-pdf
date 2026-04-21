@@ -17,6 +17,11 @@ pub struct ApplyReport {
     pub path_paints_removed: usize,
     pub image_draws_removed: usize,
     pub annotations_removed: usize,
+    /// Count of Form XObject copies produced by copy-on-write redaction, each
+    /// of which carries the rewrite of a Form whose `BBox × Matrix × CTM`
+    /// intersected at least one redaction target.
+    #[serde(default)]
+    pub form_xobjects_rewritten: usize,
     pub warnings: Vec<String>,
 }
 
@@ -92,6 +97,7 @@ pub fn apply_redactions(
         for redaction in &form_redactions {
             report.text_glyphs_removed += redaction.glyphs_removed;
         }
+        report.form_xobjects_rewritten += form_redactions.len();
         if !form_redactions.is_empty() {
             override_page_xobject_refs(file, page.page_ref, &page.resources, &form_redactions)?;
         }

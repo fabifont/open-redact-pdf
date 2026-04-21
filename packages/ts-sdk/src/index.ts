@@ -105,6 +105,7 @@ type RawApplyReport = {
   path_paints_removed: number;
   image_draws_removed: number;
   annotations_removed: number;
+  form_xobjects_rewritten?: number;
   warnings: string[];
 };
 
@@ -161,6 +162,7 @@ function normalizeApplyReport(raw: RawApplyReport): ApplyReport {
     pathPaintsRemoved: raw.path_paints_removed,
     imageDrawsRemoved: raw.image_draws_removed,
     annotationsRemoved: raw.annotations_removed,
+    formXObjectsRewritten: raw.form_xobjects_rewritten ?? 0,
     warnings: raw.warnings,
   };
 }
