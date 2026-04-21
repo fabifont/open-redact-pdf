@@ -34,7 +34,9 @@ Open Redact PDF is a browser-first PDF redaction engine implemented in Rust and 
 
 - [Redaction workflow](guides/redaction-workflow.md)
 - [Browser integration](guides/browser-integration.md)
+- [Encrypted PDFs](guides/encrypted-pdfs.md)
 - [Testing and fixtures](guides/testing-and-fixtures.md)
+- [Releasing](guides/releasing.md)
 
 ## Engine Internals
 
@@ -60,7 +62,7 @@ Deep technical documentation covering PDF spec concepts, implementation decision
 
 ## Current MVP scope
 
-- Unencrypted PDFs, plus Standard Security Handler decryption at V = 1/2, R = 2/3 (RC4 up to 128-bit) with the empty user password — classic xref tables, PDF 1.5+ cross-reference streams, object streams, and the hybrid `XRefStm` form are all handled
+- Unencrypted PDFs, plus Standard Security Handler decryption at V = 1/2 (RC4), V = 4 (AES-128), and V = 5 (AES-256 / R = 5 or R = 6) under either the user or owner password — classic xref tables, PDF 1.5+ cross-reference streams, object streams, and the hybrid `XRefStm` form are all handled
 - Unfiltered or `FlateDecode` streams, including PNG and TIFF `DecodeParms` predictors
 - Deterministic full-document rewrites with FlateDecode-compressed content streams
 - Form XObjects traversed for text extraction, search, and copy-on-write redaction (text, vector paint, and Image `Do` invocations inside the Form), with nested Forms handled recursively
@@ -68,7 +70,7 @@ Deep technical documentation covering PDF spec concepts, implementation decision
 - Rectangle, quad, and quad-group redaction targets in canonical page space
 - Three redaction modes: `strip`, `redact` (default), and `erase`, with optional `overlayText` labels in `redact` mode
 - Conservative image redaction at invocation level
-- Refusal up front for documents with hidden-by-default Optional Content Groups
+- Hidden-by-default Optional Content Groups are refused by default; callers can opt in via `sanitizeHiddenOcgs: true` to strip `BDC /OC /<name> ... EMC` content gated by hidden layers before redaction
 
 !!! warning "Fail-explicit design"
     Unsupported features return an explicit error instead of being silently ignored or producing incorrect output.
