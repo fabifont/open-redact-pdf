@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::crypto::StandardSecurityHandler;
+use crate::crypto::{BytesKind, StandardSecurityHandler};
 use crate::document::build_document;
 use crate::error::{PdfError, PdfResult};
 use crate::stream::decode_stream;
@@ -116,15 +116,22 @@ fn decrypt_document_if_encrypted(
             .expect("ref obtained from map keys must still be present");
         match object {
             PdfObject::Stream(stream) => {
-                // Cross-reference streams are not encrypted.
-                let is_xref_stream =
-                    stream.dict.get("Type").and_then(PdfValue::as_name) == Some("XRef");
-                decrypt_strings_in_dict(&mut stream.dict, &handler, object_ref);
-                if !is_xref_stream {
-                    stream.data = handler.decrypt_bytes(&stream.data, object_ref);
+                // Cross-reference streams are never encrypted; metadata
+                // streams are exempt when the document sets
+                // /EncryptMetadata false (Tr. ISO 32000-1 §7.6.1).
+                let type_name = stream.dict.get("Type").and_then(PdfValue::as_name);
+                let is_xref_stream = type_name == Some("XRef");
+                let is_exempt_metadata =
+                    !handler.encrypts_metadata() && type_name == Some("Metadata");
+                decrypt_strings_in_dict(&mut stream.dict, &handler, object_ref)?;
+                if !is_xref_stream && !is_exempt_metadata {
+                    stream.data =
+                        handler.decrypt_bytes(&stream.data, object_ref, BytesKind::Stream)?;
                 }
             }
-            PdfObject::Value(value) => decrypt_strings_in_value(value, &handler, object_ref),
+            PdfObject::Value(value) => {
+                decrypt_strings_in_value(value, &handler, object_ref)?;
+            }
         }
     }
 
@@ -151,31 +158,33 @@ fn decrypt_strings_in_value(
     value: &mut PdfValue,
     handler: &StandardSecurityHandler,
     object_ref: ObjectRef,
-) {
+) -> PdfResult<()> {
     match value {
         PdfValue::String(string) => {
-            string.0 = handler.decrypt_bytes(&string.0, object_ref);
+            string.0 = handler.decrypt_bytes(&string.0, object_ref, BytesKind::String)?;
         }
         PdfValue::Array(items) => {
             for item in items {
-                decrypt_strings_in_value(item, handler, object_ref);
+                decrypt_strings_in_value(item, handler, object_ref)?;
             }
         }
         PdfValue::Dictionary(dict) => {
-            decrypt_strings_in_dict(dict, handler, object_ref);
+            decrypt_strings_in_dict(dict, handler, object_ref)?;
         }
         _ => {}
     }
+    Ok(())
 }
 
 fn decrypt_strings_in_dict(
     dict: &mut PdfDictionary,
     handler: &StandardSecurityHandler,
     object_ref: ObjectRef,
-) {
+) -> PdfResult<()> {
     for value in dict.values_mut() {
-        decrypt_strings_in_value(value, handler, object_ref);
+        decrypt_strings_in_value(value, handler, object_ref)?;
     }
+    Ok(())
 }
 
 fn parse_header(bytes: &[u8]) -> PdfResult<String> {
@@ -1419,6 +1428,169 @@ mod tests {
         let (pdf, plain) = build_rc4_encrypted_pdf(password, b"ownerpw");
         let document =
             parse_pdf_with_password(&pdf, password).expect("UTF-8 user password should decrypt");
+        assert_decrypts_content_stream(&document, plain);
+    }
+
+    /// Build a minimal V=4/R=4 AES-128 encrypted PDF with the supplied
+    /// user / owner passwords and `/EncryptMetadata` flag. Reused by all
+    /// the AES encryption regression tests so the only per-test variable
+    /// is which password the caller supplies.
+    fn build_aes_128_encrypted_pdf(
+        user_password: &[u8],
+        owner_password: &[u8],
+        encrypt_metadata: bool,
+    ) -> (Vec<u8>, &'static [u8]) {
+        use crate::crypto::SecurityRevision;
+        use crate::crypto::test_helpers::{
+            aes_128_cbc_encrypt, compute_file_key_r4, compute_o, compute_u_r3, object_key_aes,
+        };
+
+        let id_first: [u8; 16] = [
+            0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88,
+            0x99, 0x00,
+        ];
+        let permissions: i32 = -4;
+
+        let owner_entry = compute_o(owner_password, user_password, SecurityRevision::R4, 16);
+        let file_key = compute_file_key_r4(
+            user_password,
+            &owner_entry,
+            permissions,
+            &id_first,
+            encrypt_metadata,
+        );
+        let u_entry = compute_u_r3(&file_key, &id_first);
+
+        // The IV for each encrypted string / stream is arbitrary. Use
+        // object-number-derived patterns so the two fixtures we produce
+        // here do not collide on a block.
+        let content_iv = [0x42u8; 16];
+        let content_plain: &'static [u8] =
+            b"BT\n/F1 24 Tf\n72 700 Td\n(AES SECRET REMOVED) Tj\nET\n";
+        let content_key = object_key_aes(&file_key, 4, 0);
+        let content_cipher = aes_128_cbc_encrypt(&content_key, &content_iv, content_plain);
+
+        let escape_literal = |bytes: &[u8]| -> Vec<u8> {
+            let mut out = Vec::with_capacity(bytes.len() + 2);
+            out.push(b'(');
+            for &byte in bytes {
+                match byte {
+                    b'(' | b')' | b'\\' => {
+                        out.push(b'\\');
+                        out.push(byte);
+                    }
+                    _ => out.push(byte),
+                }
+            }
+            out.push(b')');
+            out
+        };
+
+        let mut pdf: Vec<u8> = Vec::new();
+        pdf.extend_from_slice(b"%PDF-1.5\n");
+
+        let catalog_offset = pdf.len();
+        pdf.extend_from_slice(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+
+        let pages_offset = pdf.len();
+        pdf.extend_from_slice(b"2 0 obj\n<< /Type /Pages /Count 1 /Kids [3 0 R] >>\nendobj\n");
+
+        let page_offset = pdf.len();
+        pdf.extend_from_slice(
+            b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
+              /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>\nendobj\n",
+        );
+
+        let content_offset = pdf.len();
+        pdf.extend_from_slice(
+            format!("4 0 obj\n<< /Length {} >>\nstream\n", content_cipher.len()).as_bytes(),
+        );
+        pdf.extend_from_slice(&content_cipher);
+        pdf.extend_from_slice(b"\nendstream\nendobj\n");
+
+        let font_offset = pdf.len();
+        pdf.extend_from_slice(
+            b"5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica \
+              /Encoding /WinAnsiEncoding >>\nendobj\n",
+        );
+
+        let encrypt_offset = pdf.len();
+        pdf.extend_from_slice(
+            b"6 0 obj\n<< /Filter /Standard /V 4 /R 4 /Length 128 \
+              /CF << /StdCF << /CFM /AESV2 /Length 16 /AuthEvent /DocOpen >> >> \
+              /StmF /StdCF /StrF /StdCF ",
+        );
+        pdf.extend_from_slice(format!("/P {permissions} ").as_bytes());
+        if !encrypt_metadata {
+            pdf.extend_from_slice(b"/EncryptMetadata false ");
+        }
+        pdf.extend_from_slice(b"/O ");
+        pdf.extend_from_slice(&escape_literal(&owner_entry));
+        pdf.extend_from_slice(b" /U ");
+        pdf.extend_from_slice(&escape_literal(&u_entry));
+        pdf.extend_from_slice(b" >>\nendobj\n");
+
+        let xref_offset = pdf.len();
+        pdf.extend_from_slice(b"xref\n0 7\n");
+        pdf.extend_from_slice(b"0000000000 65535 f \n");
+        for offset in [
+            catalog_offset,
+            pages_offset,
+            page_offset,
+            content_offset,
+            font_offset,
+            encrypt_offset,
+        ] {
+            pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        pdf.extend_from_slice(b"trailer\n<< /Size 7 /Root 1 0 R /Encrypt 6 0 R /ID [");
+        pdf.extend_from_slice(&escape_literal(&id_first));
+        pdf.extend_from_slice(&escape_literal(&id_first));
+        pdf.extend_from_slice(b"] >>\n");
+        pdf.extend_from_slice(format!("startxref\n{xref_offset}\n%%EOF\n").as_bytes());
+
+        (pdf, content_plain)
+    }
+
+    #[test]
+    fn parses_aes_128_encrypted_pdf_with_empty_password() {
+        let (pdf, plain) = build_aes_128_encrypted_pdf(b"", b"arbitrary-owner-password", true);
+        let document = parse_pdf(&pdf).expect("empty-password AES-128 PDF should decrypt");
+        assert_decrypts_content_stream(&document, plain);
+    }
+
+    #[test]
+    fn parses_aes_128_encrypted_pdf_with_user_password() {
+        let (pdf, plain) = build_aes_128_encrypted_pdf(b"userpw", b"ownerpw", true);
+        let document = parse_pdf_with_password(&pdf, b"userpw")
+            .expect("correct user password should decrypt AES-128 PDF");
+        assert_decrypts_content_stream(&document, plain);
+    }
+
+    #[test]
+    fn parses_aes_128_encrypted_pdf_with_owner_password() {
+        let (pdf, plain) = build_aes_128_encrypted_pdf(b"userpw", b"ownerpw", true);
+        let document = parse_pdf_with_password(&pdf, b"ownerpw")
+            .expect("correct owner password should decrypt AES-128 PDF");
+        assert_decrypts_content_stream(&document, plain);
+    }
+
+    #[test]
+    fn aes_128_rejects_wrong_password() {
+        let (pdf, _) = build_aes_128_encrypted_pdf(b"userpw", b"ownerpw", true);
+        let err = parse_pdf_with_password(&pdf, b"wrongpw")
+            .expect_err("wrong password must not decrypt AES-128 PDF");
+        assert_eq!(err, PdfError::InvalidPassword);
+    }
+
+    #[test]
+    fn parses_aes_128_with_encrypt_metadata_false() {
+        // EncryptMetadata=false changes the file-key derivation (Algorithm 2
+        // step 5 appends 0xFFFFFFFF), so the whole decryption path fails if
+        // we do not honour the flag.
+        let (pdf, plain) = build_aes_128_encrypted_pdf(b"", b"ownerpw", false);
+        let document =
+            parse_pdf(&pdf).expect("empty-password AES-128 PDF should decrypt with metadata off");
         assert_decrypts_content_stream(&document, plain);
     }
 }
