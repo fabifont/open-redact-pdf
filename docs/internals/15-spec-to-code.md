@@ -53,7 +53,7 @@ The following PDF features are explicitly out of scope. Encountering any of thes
 
 - **Encryption** (ISO 32000 7.6) — standard security handler, public-key security handler, and crypt filters are all unsupported. Any `Encrypt` key in the trailer causes rejection.
 - **Digital signatures** (ISO 32000 12.8) — signature fields and signature dictionaries are not validated or preserved in any meaningful way.
-- **Optional content / layers** (ISO 32000 8.11) — optional content groups (OCGs) and optional content membership dictionaries (OCMDs) are not tracked. Visibility state is ignored.
+- **Optional content / layers** (ISO 32000 8.11) — optional content groups (OCGs) are inspected at the catalog level to reject documents with hidden-by-default layers. Callers can opt in via `sanitize_hidden_ocgs` to strip `BDC /OC /<name> ... EMC` content gated by hidden OCGs before redaction. Optional content membership dictionaries (OCMDs) are not yet tracked — pages that rely on them for visibility fall back to the rejection path.
 - **JavaScript actions** (ISO 32000 12.6.4.16) — no JavaScript engine is present. JavaScript actions are passed through unexamined.
 - **Forms / AcroForms** (ISO 32000 12.7) — interactive form fields, widget annotations, and form data are not extracted, filled, or redacted at the field level.
 - **Multimedia** (ISO 32000 13) — sound, video, 3D, and rich media annotations are not interpreted.

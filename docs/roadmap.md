@@ -16,7 +16,7 @@ title: Roadmap
 - `Type0` / `Identity-H` composite font extraction, search, and redaction when `ToUnicode` is available
 - Form XObject text extraction and search (recursive, with cycle protection and a depth cap)
 - Form XObject redaction via per-page copy-on-write: text glyphs, vector paint, and Image XObject `Do` invocations inside the Form are all neutralized; nested Forms recurse up to depth 8
-- Redaction refuses documents whose default Optional Content configuration hides any layer (no silent leaks from off-by-default OCGs)
+- Redaction refuses documents whose default Optional Content configuration hides any layer (no silent leaks from off-by-default OCGs). Callers can opt in to sanitization via `sanitizeHiddenOcgs: true`, which strips `BDC /OC /<name> ... EMC` content gated by hidden OCGs and clears the catalog's hidden state on save.
 - Geometry target normalization for rects, quads, and quad groups
 - Three redaction modes: `strip` (remove bytes), `redact` (blank space + overlay), `erase` (blank space, no overlay)
 - `overlayText` labels stamped in `redact` mode, auto-sized to the target and coloured for contrast against the fill
@@ -31,7 +31,6 @@ title: Roadmap
 
 - Broader composite font encodings beyond `Identity-H` + `ToUnicode` — required for CJK documents that use Adobe's predefined CMaps (`UniJIS-UTF16-H`, `UniGB-UCS2-H`, `UniCNS-UTF16-H`, `UniKS-UCS2-H`)
 - Partial image rewriting so redaction targets that overlap only part of an Image XObject mask the affected pixels instead of neutralizing the whole `Do`
-- Optional-content sanitization: today documents with hidden-by-default OCGs are refused up front; a future change would let callers opt in to stripping hidden layers so they can still redact the visible content
 - Incremental-save preservation (reading is supported; output is always a flat rewrite that flattens xref streams and object streams into a classic xref table)
 - Public-key security handler — Standard Security Handler V = 1/2/4/5 (RC4 + AES-128 + AES-256) under the user or owner password is in; the remaining gap is the public-key `/Filter /Adobe.PubSec` form, which wraps the file key in a PKCS#7 recipient envelope rather than deriving it from a password.
 - Smarter visual line grouping for dense layouts where several short text runs sit only a unit or two apart in `y` and the current heuristic merges them into one line

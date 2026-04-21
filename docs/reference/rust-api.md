@@ -99,6 +99,7 @@ Important fields:
 - `remove_intersecting_annotations`
 - `strip_metadata`
 - `strip_attachments`
+- `sanitize_hidden_ocgs` — opt in to stripping content gated by hidden Optional Content Groups; defaults to refusing such documents
 
 ### `RedactionTarget`
 

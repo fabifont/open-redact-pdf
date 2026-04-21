@@ -112,8 +112,11 @@ type RedactionPlan = {
   removeIntersectingAnnotations?: boolean
   stripMetadata?: boolean
   stripAttachments?: boolean
+  sanitizeHiddenOcgs?: boolean
 }
 ```
+
+Setting `sanitizeHiddenOcgs: true` lets redaction run on documents whose catalog declares Optional Content Groups that are off in the default configuration. The engine strips `BDC /OC /<name> ... EMC` content referenced by any hidden OCG from every page before redaction, then clears the catalog's hidden-layer state on save.
 
 ### `TextMatch`
 

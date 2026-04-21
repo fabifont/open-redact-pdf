@@ -46,6 +46,16 @@ export type RedactionPlan = {
   removeIntersectingAnnotations?: boolean;
   stripMetadata?: boolean;
   stripAttachments?: boolean;
+  /**
+   * When `true`, opt in to stripping Optional Content Group content that is
+   * off in the default configuration. By default, documents whose catalog
+   * declares hidden-by-default OCGs are rejected because hidden layers may
+   * carry content the user never saw and cannot safely target. With this
+   * flag set, content stream runs gated by `BDC /OC /<name> ... EMC` are
+   * stripped before redaction runs, and the catalog's hidden state is
+   * cleared on save.
+   */
+  sanitizeHiddenOcgs?: boolean;
 };
 
 /** Concrete fill color type derived from the plan shape. */

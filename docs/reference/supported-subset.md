@@ -44,7 +44,7 @@ This project intentionally targets a narrow, explicit MVP.
 - Public-key encryption handlers
 - Incremental update preservation (output is always a flat rewrite; xref streams are rewritten as a classic xref table)
 - Full redaction of text, vector paint, and Image XObject invocations inside Form XObjects via copy-on-write. Each Form whose `BBox × Matrix × CTM` intersects a target is cloned per page; the copy's content stream is rewritten to strip the targeted glyphs, neutralize any vector paint operator that falls under a target, and replace intersecting Image `Do` invocations with `n`. Nested Forms are handled recursively up to depth 8, with each outer Form's `Resources.XObject` repointed at the redacted inner copy; other pages that share the original Forms are left untouched.
-- Redaction of documents whose catalog has `/OCProperties` with any layer off in the default configuration, or with `/BaseState /OFF`/`/Unchanged` — the engine rejects these up front because hidden-layer content would otherwise survive the redaction
+- Redaction of documents whose catalog has `/OCProperties` with any layer off in the default configuration, or with `/BaseState /OFF`/`/Unchanged` — the engine rejects these up front because hidden-layer content would otherwise survive the redaction. Callers can opt in to an opt-in sanitization pass (`sanitizeHiddenOcgs: true`) which strips `BDC /OC /<name> ... EMC` content gated by hidden OCGs from every page before redaction runs, and clears the catalog's hidden-layer state on save. OCG markers inside nested Form XObjects are not yet rewritten — a warning is emitted when a page with sanitizable content also has XObjects.
 - Type3 fonts
 - broad CID font support beyond the current `Identity-H` path
 - partial image rewriting
