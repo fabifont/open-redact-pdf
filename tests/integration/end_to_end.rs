@@ -37,6 +37,7 @@ fn rectangle_redaction_removes_target_text_but_preserves_other_text() {
             remove_intersecting_annotations: Some(false),
             strip_metadata: Some(false),
             strip_attachments: Some(false),
+            sanitize_hidden_ocgs: None,
         })
         .expect("redaction should succeed");
     assert!(report.text_glyphs_removed > 0);
@@ -82,6 +83,7 @@ fn search_derived_quads_can_drive_redaction() {
             remove_intersecting_annotations: Some(false),
             strip_metadata: Some(false),
             strip_attachments: Some(false),
+            sanitize_hidden_ocgs: None,
         })
         .expect("quad redaction should succeed");
     assert!(report.text_glyphs_removed > 0);
@@ -123,6 +125,7 @@ fn type0_fonts_with_tounicode_are_searchable_and_redactable() {
             remove_intersecting_annotations: Some(false),
             strip_metadata: Some(false),
             strip_attachments: Some(false),
+            sanitize_hidden_ocgs: None,
         })
         .expect("redaction should succeed");
     assert!(report.text_glyphs_removed > 0);
@@ -149,6 +152,7 @@ fn can_strip_metadata_and_attachments() {
             remove_intersecting_annotations: Some(false),
             strip_metadata: Some(true),
             strip_attachments: Some(true),
+            sanitize_hidden_ocgs: None,
         })
         .expect("stripping should succeed");
     let saved = document.save().expect("save should succeed");
@@ -215,6 +219,7 @@ fn incremental_update_reads_latest_revision_and_redacts() {
             remove_intersecting_annotations: Some(false),
             strip_metadata: Some(false),
             strip_attachments: Some(false),
+            sanitize_hidden_ocgs: None,
         })
         .expect("redaction should succeed");
     assert!(report.text_glyphs_removed > 0);
@@ -264,6 +269,7 @@ fn extgstate_font_text_is_extractable_and_redactable() {
             remove_intersecting_annotations: Some(false),
             strip_metadata: Some(false),
             strip_attachments: Some(false),
+            sanitize_hidden_ocgs: None,
         })
         .expect("redaction should succeed");
     assert!(report.text_glyphs_removed > 0);
@@ -316,6 +322,7 @@ fn inline_image_and_dictionary_operand_pages_are_parseable() {
             remove_intersecting_annotations: Some(false),
             strip_metadata: Some(false),
             strip_attachments: Some(false),
+            sanitize_hidden_ocgs: None,
         })
         .expect("redaction should succeed");
     assert!(report.text_glyphs_removed > 0);
@@ -360,6 +367,7 @@ fn ocg_hidden_layer_refuses_redaction() {
             remove_intersecting_annotations: Some(false),
             strip_metadata: Some(false),
             strip_attachments: Some(false),
+            sanitize_hidden_ocgs: None,
         })
         .expect_err("redaction must refuse documents with hidden OCGs");
     let message = err.to_string();
@@ -368,6 +376,56 @@ fn ocg_hidden_layer_refuses_redaction() {
             || message.contains("OCProperties")
             || message.contains("hidden"),
         "error should mention hidden layers, got: {message}"
+    );
+}
+
+#[test]
+fn sanitize_hidden_ocgs_strips_hidden_content_and_allows_redaction() {
+    // Fixture: a page with "Visible Line" (outside any OCG) plus
+    // "Hidden Secret" inside a `BDC /OC /Hidden ... EMC` block pointing
+    // at an OCG that is OFF by default. With `sanitize_hidden_ocgs`
+    // set, the hidden block is stripped before redaction runs; the
+    // visible line survives, the hidden line is gone, and re-opening
+    // the saved PDF confirms the hidden bytes did not make it through.
+    let document =
+        PdfDocument::open(&fixture("ocg-hidden-content.pdf")).expect("fixture should open");
+    let extracted = document
+        .extract_text(0)
+        .expect("text extraction should still succeed");
+    assert!(extracted.text.contains("Visible Line"));
+    assert!(extracted.text.contains("Hidden Secret"));
+
+    let mut document =
+        PdfDocument::open(&fixture("ocg-hidden-content.pdf")).expect("fixture should open");
+    let report = document
+        .apply_redactions(RedactionPlan {
+            targets: vec![],
+            mode: None,
+            fill_color: None,
+            overlay_text: None,
+            remove_intersecting_annotations: Some(false),
+            strip_metadata: Some(false),
+            strip_attachments: Some(false),
+            sanitize_hidden_ocgs: Some(true),
+        })
+        .expect("sanitization should allow redaction to run");
+    assert_eq!(report.text_glyphs_removed, 0);
+
+    let saved = document.save().expect("save should succeed");
+    let reopened = PdfDocument::open(&saved).expect("saved PDF should reopen");
+    let extracted_after = reopened
+        .extract_text(0)
+        .expect("extraction should still succeed");
+    assert!(extracted_after.text.contains("Visible Line"));
+    assert!(
+        !extracted_after.text.contains("Hidden Secret"),
+        "sanitized output must not contain the previously-hidden OCG text"
+    );
+
+    let raw = String::from_utf8_lossy(&saved);
+    assert!(
+        !raw.contains("Hidden Secret"),
+        "Hidden OCG bytes must not survive in the saved PDF"
     );
 }
 
@@ -391,6 +449,7 @@ fn overlay_text_is_stamped_over_redacted_regions() {
             remove_intersecting_annotations: Some(false),
             strip_metadata: Some(false),
             strip_attachments: Some(false),
+            sanitize_hidden_ocgs: None,
         })
         .expect("redaction with overlay text should succeed");
     assert!(report.text_glyphs_removed > 0);
@@ -430,6 +489,7 @@ fn overlay_text_rejected_for_strip_mode() {
             remove_intersecting_annotations: Some(false),
             strip_metadata: Some(false),
             strip_attachments: Some(false),
+            sanitize_hidden_ocgs: None,
         })
         .expect_err("strip mode must refuse overlay_text");
     let message = err.to_string();
@@ -499,6 +559,7 @@ fn vector_v_and_y_curve_segments_are_included_in_path_bounds() {
             remove_intersecting_annotations: Some(false),
             strip_metadata: Some(false),
             strip_attachments: Some(false),
+            sanitize_hidden_ocgs: None,
         })
         .expect("redaction should succeed");
     assert!(report.text_glyphs_removed > 0);
@@ -578,6 +639,7 @@ fn form_xobject_does_not_block_redaction_when_target_is_on_page_content() {
             remove_intersecting_annotations: Some(false),
             strip_metadata: Some(false),
             strip_attachments: Some(false),
+            sanitize_hidden_ocgs: None,
         })
         .expect("redaction of outer text should succeed even with a Form present");
     assert!(report.text_glyphs_removed > 0);
@@ -631,6 +693,7 @@ fn nested_form_xobject_redaction_recurses_into_inner_forms() {
             remove_intersecting_annotations: Some(false),
             strip_metadata: Some(false),
             strip_attachments: Some(false),
+            sanitize_hidden_ocgs: None,
         })
         .expect("nested Form redaction should succeed");
     assert!(report.text_glyphs_removed > 0);
@@ -687,6 +750,7 @@ fn form_xobject_redaction_rewrites_the_form_content_stream() {
             remove_intersecting_annotations: Some(false),
             strip_metadata: Some(false),
             strip_attachments: Some(false),
+            sanitize_hidden_ocgs: None,
         })
         .expect("redaction inside a Form XObject should succeed");
     assert!(report.text_glyphs_removed > 0);
@@ -763,6 +827,7 @@ fn winansi_encoded_simple_font_decodes_non_ascii_bytes() {
             remove_intersecting_annotations: Some(false),
             strip_metadata: Some(false),
             strip_attachments: Some(false),
+            sanitize_hidden_ocgs: None,
         })
         .expect("redaction should succeed");
     assert!(report.text_glyphs_removed > 0);
@@ -814,6 +879,7 @@ fn xref_stream_and_object_stream_fixture_is_parseable_and_redactable() {
             remove_intersecting_annotations: Some(false),
             strip_metadata: Some(false),
             strip_attachments: Some(false),
+            sanitize_hidden_ocgs: None,
         })
         .expect("redaction should succeed on an ObjStm-backed page tree");
     assert!(report.text_glyphs_removed > 0);
@@ -881,6 +947,7 @@ fn nested_cm_operators_produce_page_space_quads() {
             remove_intersecting_annotations: Some(false),
             strip_metadata: Some(false),
             strip_attachments: Some(false),
+            sanitize_hidden_ocgs: None,
         })
         .expect("redaction should succeed");
     assert!(report.text_glyphs_removed > 0);

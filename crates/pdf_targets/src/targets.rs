@@ -103,6 +103,14 @@ pub struct RedactionPlan {
     pub strip_metadata: Option<bool>,
     #[serde(rename = "stripAttachments")]
     pub strip_attachments: Option<bool>,
+    /// When `Some(true)`, the engine accepts documents whose catalog
+    /// declares hidden-by-default Optional Content Groups. Content
+    /// stream runs gated by those OCGs (`BDC /OC /name ... EMC`) are
+    /// stripped so the output carries neither the hidden bytes nor the
+    /// visible-but-previously-redacted ones. Defaults to rejecting such
+    /// documents (`None` / `Some(false)`).
+    #[serde(rename = "sanitizeHiddenOcgs")]
+    pub sanitize_hidden_ocgs: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -133,6 +141,7 @@ pub struct NormalizedRedactionPlan {
     pub remove_intersecting_annotations: bool,
     pub strip_metadata: bool,
     pub strip_attachments: bool,
+    pub sanitize_hidden_ocgs: bool,
 }
 
 pub fn normalize_plan(
@@ -221,6 +230,7 @@ pub fn normalize_plan(
         remove_intersecting_annotations: plan.remove_intersecting_annotations.unwrap_or(true),
         strip_metadata: plan.strip_metadata.unwrap_or(false),
         strip_attachments: plan.strip_attachments.unwrap_or(false),
+        sanitize_hidden_ocgs: plan.sanitize_hidden_ocgs.unwrap_or(false),
     })
 }
 
@@ -278,6 +288,7 @@ mod tests {
             remove_intersecting_annotations: None,
             strip_metadata: None,
             strip_attachments: None,
+            sanitize_hidden_ocgs: None,
         };
         let normalized = normalize_plan(
             plan,
@@ -303,6 +314,7 @@ mod tests {
             remove_intersecting_annotations: None,
             strip_metadata: None,
             strip_attachments: None,
+            sanitize_hidden_ocgs: None,
         };
         assert!(
             normalize_plan(

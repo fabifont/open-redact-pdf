@@ -1,10 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use pdf_content::{Operation, PaintOperator, PathSegment, parse_page_contents};
+use pdf_content::{
+    Operation, PaintOperator, PathSegment, parse_content_stream, parse_page_contents,
+};
 use pdf_graphics::{Color, Matrix, Point, Rect};
 use pdf_objects::{
     ObjectRef, PageInfo, PdfDictionary, PdfError, PdfFile, PdfObject, PdfResult, PdfStream,
-    PdfString, PdfValue, flate_encode, serialize_value,
+    PdfString, PdfValue, decode_stream, flate_encode, serialize_value,
 };
 use pdf_targets::{NormalizedPageTarget, NormalizedRedactionPlan, RedactionMode};
 use pdf_text::{Glyph, GlyphLocation, analyze_page_text};
@@ -39,7 +41,11 @@ pub fn apply_redactions(
     let mut report = ApplyReport::default();
     let page_targets = group_targets(plan);
 
-    reject_hidden_optional_content(file)?;
+    if plan.sanitize_hidden_ocgs {
+        sanitize_hidden_optional_content(file, pages, &mut report.warnings)?;
+    } else {
+        reject_hidden_optional_content(file)?;
+    }
 
     if plan.strip_metadata {
         strip_metadata(file)?;
@@ -1564,6 +1570,312 @@ fn reject_hidden_optional_content(file: &PdfFile) -> PdfResult<()> {
             )));
         }
     }
+    Ok(())
+}
+
+/// Opt-in version of [`reject_hidden_optional_content`]. Rather than
+/// refusing the document, collect every OCG that is off in the default
+/// configuration, strip matching `BDC /OC /<name> ... EMC` runs from
+/// every page's content stream, and clear the hidden state in the
+/// catalog so the saved output no longer advertises a partially
+/// disabled layer. Form XObject content is currently only scanned at
+/// the top-level — OCG markers inside nested Form bodies are not
+/// rewritten and are flagged via a warning so callers can audit.
+fn sanitize_hidden_optional_content(
+    file: &mut PdfFile,
+    pages: &mut [PageInfo],
+    warnings: &mut Vec<String>,
+) -> PdfResult<()> {
+    let hidden_refs = collect_hidden_ocg_refs(file)?;
+    if hidden_refs.is_empty() {
+        return Ok(());
+    }
+
+    for page in pages.iter_mut() {
+        let hidden_names = collect_hidden_ocg_names_for_page(file, &page.resources, &hidden_refs)?;
+        if hidden_names.is_empty() {
+            continue;
+        }
+        for content_ref in page.content_refs.clone() {
+            rewrite_content_stream_stripping_hidden_ocgs(file, content_ref, &hidden_names)?;
+        }
+        if page.resources.contains_key("XObject") {
+            // Nested Form XObjects may themselves contain BDC /OC blocks.
+            // Surface a warning so callers know the current implementation
+            // does not walk into them.
+            warnings.push(format!(
+                "sanitize_hidden_ocgs: Form XObject content on page {} was not rewritten; \
+                 nested OCG markers inside Forms are not yet stripped",
+                page.page_ref.object_number
+            ));
+        }
+    }
+
+    clear_hidden_optional_content_config(file)?;
+    Ok(())
+}
+
+fn collect_hidden_ocg_refs(file: &PdfFile) -> PdfResult<BTreeSet<ObjectRef>> {
+    let Some(PdfValue::Reference(root_ref)) = file.trailer.get("Root") else {
+        return Ok(BTreeSet::new());
+    };
+    let Ok(catalog) = file.get_dictionary(*root_ref) else {
+        return Ok(BTreeSet::new());
+    };
+    let Some(oc_properties_value) = catalog.get("OCProperties") else {
+        return Ok(BTreeSet::new());
+    };
+    let Ok(oc_properties) = file.resolve_dict(oc_properties_value) else {
+        return Ok(BTreeSet::new());
+    };
+    let Some(default_value) = oc_properties.get("D") else {
+        return Ok(BTreeSet::new());
+    };
+    let Ok(default_config) = file.resolve_dict(default_value) else {
+        return Ok(BTreeSet::new());
+    };
+
+    let base_state = default_config
+        .get("BaseState")
+        .and_then(PdfValue::as_name)
+        .unwrap_or("ON");
+
+    let mut hidden = BTreeSet::new();
+    if matches!(base_state, "OFF" | "Unchanged") {
+        // All OCGs are hidden (except those in the /ON list).
+        if let Some(all_ocgs_value) = oc_properties.get("OCGs") {
+            if let Some(entries) = file
+                .resolve(all_ocgs_value)
+                .unwrap_or(all_ocgs_value)
+                .as_array()
+            {
+                for entry in entries {
+                    if let PdfValue::Reference(object_ref) = entry {
+                        hidden.insert(*object_ref);
+                    }
+                }
+            }
+        }
+        if let Some(on_value) = default_config.get("ON") {
+            if let Some(entries) = file.resolve(on_value).unwrap_or(on_value).as_array() {
+                for entry in entries {
+                    if let PdfValue::Reference(object_ref) = entry {
+                        hidden.remove(object_ref);
+                    }
+                }
+            }
+        }
+    } else if let Some(off_value) = default_config.get("OFF") {
+        if let Some(entries) = file.resolve(off_value).unwrap_or(off_value).as_array() {
+            for entry in entries {
+                if let PdfValue::Reference(object_ref) = entry {
+                    hidden.insert(*object_ref);
+                }
+            }
+        }
+    }
+    Ok(hidden)
+}
+
+fn collect_hidden_ocg_names_for_page(
+    file: &PdfFile,
+    page_resources: &PdfDictionary,
+    hidden_refs: &BTreeSet<ObjectRef>,
+) -> PdfResult<BTreeSet<String>> {
+    let Some(properties_value) = page_resources.get("Properties") else {
+        return Ok(BTreeSet::new());
+    };
+    let Ok(properties) = file.resolve_dict(properties_value) else {
+        return Ok(BTreeSet::new());
+    };
+    let mut hidden_names: BTreeSet<String> = BTreeSet::new();
+    for (name, value) in properties.iter() {
+        let resolved_ref = if let PdfValue::Reference(object_ref) = value {
+            *object_ref
+        } else {
+            // Direct OCG dicts do not carry a stable object ref, so we
+            // can only match by reference here. That matches how real
+            // writers emit OCG properties in practice.
+            continue;
+        };
+        if hidden_refs.contains(&resolved_ref) {
+            hidden_names.insert(name.clone());
+        }
+    }
+    Ok(hidden_names)
+}
+
+fn rewrite_content_stream_stripping_hidden_ocgs(
+    file: &mut PdfFile,
+    content_ref: ObjectRef,
+    hidden_names: &BTreeSet<String>,
+) -> PdfResult<()> {
+    let stream = match file.objects.get(&content_ref) {
+        Some(PdfObject::Stream(stream)) => stream.clone(),
+        _ => return Ok(()),
+    };
+    let decoded = decode_stream(&stream)?;
+    let parsed = parse_content_stream(&decoded)?;
+    let (filtered, stripped) = strip_hidden_ocg_operations(parsed.operations, hidden_names);
+    if stripped == 0 {
+        return Ok(());
+    }
+    let new_bytes = serialize_operations(&filtered);
+    let mut new_dict = stream.dict.clone();
+    // The sanitized bytes replace the original encoded payload; drop
+    // the filter pipeline so the saved output re-encodes from plain
+    // bytes (the writer compresses content streams on save).
+    new_dict.remove("Filter");
+    new_dict.remove("DecodeParms");
+    new_dict.insert(
+        "Length".to_string(),
+        PdfValue::Integer(new_bytes.len() as i64),
+    );
+    file.objects.insert(
+        content_ref,
+        PdfObject::Stream(PdfStream {
+            dict: new_dict,
+            data: new_bytes,
+        }),
+    );
+    Ok(())
+}
+
+/// Walk `operations` and drop every marked-content section whose
+/// opening `BDC` carries a tag of `OC` and a name operand that appears
+/// in `hidden_names`. Nested marked-content sections inside a
+/// suppressed block are also stripped; unrelated marked-content
+/// sections (Span, Artifact, etc.) are preserved verbatim. Returns the
+/// surviving operations plus a count of removed operations (nonzero
+/// iff anything was stripped).
+fn strip_hidden_ocg_operations(
+    operations: Vec<Operation>,
+    hidden_names: &BTreeSet<String>,
+) -> (Vec<Operation>, usize) {
+    // `suppress_stack[i]` is true when the marked-content section at
+    // depth `i` (1-based) should be dropped. Track nesting so that a
+    // `BDC /OC /hidden` inside a `BMC /Span` still terminates at the
+    // correct `EMC`.
+    let mut suppress_stack: Vec<bool> = Vec::new();
+    let mut output = Vec::with_capacity(operations.len());
+    let mut stripped = 0usize;
+
+    for op in operations {
+        let currently_suppressed = suppress_stack.iter().any(|flag| *flag);
+        match op.operator.as_str() {
+            "BMC" => {
+                suppress_stack.push(false);
+                if !currently_suppressed {
+                    output.push(op);
+                } else {
+                    stripped += 1;
+                }
+            }
+            "BDC" => {
+                let opens_hidden = !currently_suppressed && is_hidden_oc_bdc(&op, hidden_names);
+                suppress_stack.push(opens_hidden);
+                if currently_suppressed || opens_hidden {
+                    stripped += 1;
+                } else {
+                    output.push(op);
+                }
+            }
+            "EMC" => {
+                let was_suppressed = suppress_stack.pop().unwrap_or(false);
+                if currently_suppressed || was_suppressed {
+                    stripped += 1;
+                } else {
+                    output.push(op);
+                }
+            }
+            _ => {
+                if currently_suppressed {
+                    stripped += 1;
+                } else {
+                    output.push(op);
+                }
+            }
+        }
+    }
+
+    (output, stripped)
+}
+
+fn is_hidden_oc_bdc(op: &Operation, hidden_names: &BTreeSet<String>) -> bool {
+    if op.operands.len() != 2 {
+        return false;
+    }
+    let tag = match op.operands[0].as_name() {
+        Some(name) => name,
+        None => return false,
+    };
+    if tag != "OC" {
+        return false;
+    }
+    match &op.operands[1] {
+        PdfValue::Name(name) => hidden_names.contains(name),
+        _ => false,
+    }
+}
+
+fn clear_hidden_optional_content_config(file: &mut PdfFile) -> PdfResult<()> {
+    let Some(PdfValue::Reference(root_ref)) = file.trailer.get("Root") else {
+        return Ok(());
+    };
+    let root_ref = *root_ref;
+    let mut catalog = match file.get_dictionary(root_ref) {
+        Ok(dict) => dict.clone(),
+        Err(_) => return Ok(()),
+    };
+    let Some(oc_properties_ref_or_dict) = catalog.get("OCProperties").cloned() else {
+        return Ok(());
+    };
+
+    let mut oc_properties = file
+        .resolve_dict(&oc_properties_ref_or_dict)
+        .cloned()
+        .unwrap_or_default();
+    let oc_properties_ref = match &oc_properties_ref_or_dict {
+        PdfValue::Reference(reference) => Some(*reference),
+        _ => None,
+    };
+
+    if let Some(default_value) = oc_properties.get("D").cloned() {
+        let default_ref = match &default_value {
+            PdfValue::Reference(reference) => Some(*reference),
+            _ => None,
+        };
+        let mut default_config = file
+            .resolve_dict(&default_value)
+            .cloned()
+            .unwrap_or_default();
+        default_config.remove("OFF");
+        default_config.insert("BaseState".to_string(), PdfValue::Name("ON".to_string()));
+
+        if let Some(reference) = default_ref {
+            file.objects.insert(
+                reference,
+                PdfObject::Value(PdfValue::Dictionary(default_config)),
+            );
+        } else {
+            oc_properties.insert("D".to_string(), PdfValue::Dictionary(default_config));
+        }
+    }
+
+    if let Some(reference) = oc_properties_ref {
+        file.objects.insert(
+            reference,
+            PdfObject::Value(PdfValue::Dictionary(oc_properties)),
+        );
+    } else {
+        catalog.insert(
+            "OCProperties".to_string(),
+            PdfValue::Dictionary(oc_properties),
+        );
+        file.objects
+            .insert(root_ref, PdfObject::Value(PdfValue::Dictionary(catalog)));
+    }
+
     Ok(())
 }
 
