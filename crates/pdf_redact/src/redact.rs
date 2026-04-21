@@ -1235,12 +1235,44 @@ fn redact_intersecting_forms(
         }
     }
 
+    // The page's own content stream starts with CTM = identity and the
+    // page-space mapping is applied after the Form's own Matrix, so the
+    // base invocation CTM passed down to a top-level Form's redactor is
+    // effectively the CTM active at the Do (captured during the walk above).
+    // We do the walk again because the mutable recursive calls below require
+    // exclusive &mut to file.
+    let mut walk_ctm = Matrix::identity();
+    let mut walk_stack: Vec<Matrix> = Vec::new();
+    let mut invocation_ctms: BTreeMap<ObjectRef, Matrix> = BTreeMap::new();
+    for operation in operations {
+        match operation.operator.as_str() {
+            "q" => walk_stack.push(walk_ctm),
+            "Q" => walk_ctm = walk_stack.pop().unwrap_or(Matrix::identity()),
+            "cm" => walk_ctm = matrix_from_operands(&operation.operands)?.multiply(walk_ctm),
+            "Do" => {
+                let name = operand_name(operation, 0)?;
+                if let Some(form_ref) = lookup_form_ref(file, &page.resources, name)? {
+                    invocation_ctms.entry(form_ref).or_insert(walk_ctm);
+                }
+            }
+            _ => {}
+        }
+    }
+
     let mut redactions = Vec::with_capacity(intersecting.len());
     for (name, form_ref) in intersecting {
-        let empty = Vec::new();
-        let glyphs = form_glyph_groups.get(&form_ref).unwrap_or(&empty);
-        let (new_ref, removed) =
-            redact_form_xobject(file, form_ref, glyphs, targets, mode, warnings)?;
+        let base_ctm = invocation_ctms.get(&form_ref).copied().unwrap_or(Matrix::identity());
+        let (new_ref, removed) = redact_form_xobject(
+            file,
+            form_ref,
+            form_glyph_groups,
+            targets,
+            page_transform,
+            base_ctm,
+            mode,
+            warnings,
+            0,
+        )?;
         redactions.push(FormRedaction {
             name,
             new_ref,
@@ -1265,14 +1297,27 @@ fn lookup_form_ref(
     }
 }
 
+const MAX_FORM_REDACTION_DEPTH: usize = 8;
+
+#[allow(clippy::too_many_arguments)]
 fn redact_form_xobject(
     file: &mut PdfFile,
     form_ref: ObjectRef,
-    form_glyphs: &[Glyph],
+    form_glyphs_by_ref: &BTreeMap<ObjectRef, Vec<Glyph>>,
     targets: &[&NormalizedPageTarget],
+    page_transform: Matrix,
+    base_ctm: Matrix,
     mode: RedactionMode,
     warnings: &mut Vec<String>,
+    depth: usize,
 ) -> PdfResult<(ObjectRef, usize)> {
+    if depth >= MAX_FORM_REDACTION_DEPTH {
+        warnings.push(format!(
+            "Form XObject recursion depth {MAX_FORM_REDACTION_DEPTH} exceeded; nested Form \
+             redaction stopped — verify that deeper hidden content is not relied upon"
+        ));
+        return Ok((form_ref, 0));
+    }
     let original = match file.get_object(form_ref)? {
         PdfObject::Stream(stream) => stream.clone(),
         _ => {
@@ -1283,27 +1328,79 @@ fn redact_form_xobject(
         }
     };
 
+    let form_matrix = parse_form_matrix(&original.dict);
+    // CTM active while interpreting this Form's content stream.
+    let form_invocation_ctm = form_matrix.multiply(base_ctm);
+
+    let form_resources: PdfDictionary = match original.dict.get("Resources") {
+        Some(value) => file.resolve_dict(value).cloned().unwrap_or_default(),
+        None => PdfDictionary::new(),
+    };
+
     let decoded = pdf_objects::decode_stream(&original)?;
     let parsed = pdf_content::parse_content_stream(&decoded)?;
     ensure_supported_operators(&parsed.operations)?;
 
-    // Guard: nested Form XObjects inside a redacted Form are not handled.
-    // A Do of any XObject inside the Form will pass through as-is; if that
-    // XObject is an Image it still draws (safe), and if it is another Form
-    // it might carry text we cannot currently reach. Warn and carry on.
-    for operation in &parsed.operations {
-        if operation.operator == "Do" {
-            warnings.push(
-                "redacted Form XObject contains a nested Do; its inner XObjects were not \
-                 recursively redacted — verify that hidden content is not relied upon"
-                    .to_string(),
-            );
-            break;
+    // Walk the Form's content to find nested Do of Form XObjects whose
+    // bounding quad in page space intersects any target. For each, recurse
+    // so the inner Form's content is rewritten too; record the override so
+    // we can repoint this Form's own Resources.XObject at the copy.
+    let inner_xobjects = load_xobjects(file, &form_resources)?;
+    let mut inner_targets: Vec<(String, ObjectRef)> = Vec::new();
+    let mut inner_invocation_ctms: BTreeMap<ObjectRef, Matrix> = BTreeMap::new();
+    {
+        let mut ctm = form_invocation_ctm;
+        let mut stack: Vec<Matrix> = Vec::new();
+        for operation in &parsed.operations {
+            match operation.operator.as_str() {
+                "q" => stack.push(ctm),
+                "Q" => ctm = stack.pop().unwrap_or(form_invocation_ctm),
+                "cm" => ctm = matrix_from_operands(&operation.operands)?.multiply(ctm),
+                "Do" => {
+                    let name = operand_name(operation, 0)?;
+                    if let Some(XObjectKind::Form { bbox, matrix }) = inner_xobjects.get(name) {
+                        let quad = bbox
+                            .to_quad()
+                            .transform(matrix.multiply(ctm).multiply(page_transform));
+                        if targets.iter().any(|target| target.intersects_quad(&quad)) {
+                            if let Some(inner_ref) = lookup_form_ref(file, &form_resources, name)? {
+                                inner_invocation_ctms.entry(inner_ref).or_insert(ctm);
+                                inner_targets.push((name.to_string(), inner_ref));
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
         }
     }
 
-    let removals = collect_glyph_removals(form_glyphs, targets);
-    let glyphs_removed = count_removed_glyphs(&removals);
+    let mut glyphs_removed_total = 0usize;
+    let mut inner_overrides: BTreeMap<String, ObjectRef> = BTreeMap::new();
+    for (name, inner_ref) in inner_targets {
+        let invocation_ctm = inner_invocation_ctms
+            .get(&inner_ref)
+            .copied()
+            .unwrap_or(form_invocation_ctm);
+        let (new_ref, removed) = redact_form_xobject(
+            file,
+            inner_ref,
+            form_glyphs_by_ref,
+            targets,
+            page_transform,
+            invocation_ctm,
+            mode,
+            warnings,
+            depth + 1,
+        )?;
+        inner_overrides.insert(name, new_ref);
+        glyphs_removed_total += removed;
+    }
+
+    let empty = Vec::new();
+    let own_glyphs = form_glyphs_by_ref.get(&form_ref).unwrap_or(&empty);
+    let removals = collect_glyph_removals(own_glyphs, targets);
+    glyphs_removed_total += count_removed_glyphs(&removals);
     let mut new_ops = parsed.operations.clone();
     rewrite_text_operations(&mut new_ops, &removals, mode, warnings);
 
@@ -1321,9 +1418,26 @@ fn redact_form_xobject(
         new_dict.insert("Filter".to_string(), PdfValue::Name("FlateDecode".into()));
     }
 
+    // If any inner Form was redacted, rewrite this Form's Resources.XObject
+    // entries so the saved PDF references the redacted copies. Other Forms
+    // (and other pages) that still use the original refs are unaffected.
+    if !inner_overrides.is_empty() {
+        let existing_xobject: PdfDictionary = match form_resources.get("XObject") {
+            Some(value) => file.resolve_dict(value).cloned().unwrap_or_default(),
+            None => PdfDictionary::new(),
+        };
+        let mut new_xobject = existing_xobject;
+        for (name, new_ref) in &inner_overrides {
+            new_xobject.insert(name.clone(), PdfValue::Reference(*new_ref));
+        }
+        let mut new_resources = form_resources.clone();
+        new_resources.insert("XObject".to_string(), PdfValue::Dictionary(new_xobject));
+        new_dict.insert("Resources".to_string(), PdfValue::Dictionary(new_resources));
+    }
+
     let new_ref = file.allocate_object_ref();
     file.insert_object(new_ref, PdfObject::Stream(PdfStream { dict: new_dict, data }));
-    Ok((new_ref, glyphs_removed))
+    Ok((new_ref, glyphs_removed_total))
 }
 
 fn override_page_xobject_refs(
