@@ -1,0 +1,49 @@
+# cargo-release configuration.
+#
+# With this file in place, `cargo release <level>` (e.g. `cargo release minor`)
+# performs the whole Rust-side bump locally: updates the workspace
+# `[workspace.package].version`, rewrites every `path = "../foo", version = "X.Y.Z"`
+# inter-crate pin inside `crates/*/Cargo.toml` (via `dependent-version = "upgrade"`),
+# keeps the two JavaScript `package.json` files in lock-step (via
+# `pre-release-replacements`), commits the result, creates the `vX.Y.Z` tag,
+# and pushes it. The existing `.github/workflows/release.yml` then takes over:
+# `scripts/check-release-version.mjs` re-verifies the pin invariants (defence
+# in depth against a pre-release-replacements bug) and `scripts/publish-crates.sh`
+# publishes the Rust crates in topological order with retries for the crates.io
+# propagation delay. `pdf_wasm` stays out of this flow (its `publish = false` in
+# `crates/pdf_wasm/Cargo.toml` already opts it out of crates.io).
+
+# All workspace crates publish together under a single version.
+shared-version = true
+
+# Automatically rewrite `path = "..." version = "X.Y.Z"` workspace-internal
+# dependencies whenever a sibling crate bumps. With `shared-version = true`
+# every crate bumps at once, so every inter-crate pin rewrites at once too.
+dependent-version = "upgrade"
+
+# Keep the JavaScript side in lock-step with the workspace version so
+# `scripts/check-release-version.mjs` does not have to reject the release at
+# CI time.
+pre-release-replacements = [
+  { file = "package.json", search = "\"version\": \"[0-9A-Za-z.+-]+\"", replace = "\"version\": \"{{version}}\"", exactly = 1 },
+  { file = "packages/ts-sdk/package.json", search = "\"version\": \"[0-9A-Za-z.+-]+\"", replace = "\"version\": \"{{version}}\"", exactly = 1 },
+]
+
+# Tag the workspace version once, not once per crate. Only the first
+# crate processed creates the tag; every sibling after that sees the
+# same tag-name (because `shared-version = true`) and skips re-creating
+# it.
+tag = true
+tag-name = "v{{version}}"
+tag-message = "Release v{{version}}"
+
+# Push the commit and tag after a successful bump; this is what the
+# release workflow is listening for.
+push = true
+
+# The actual publish happens through `.github/workflows/release.yml`, which
+# runs `scripts/publish-crates.sh` in a controlled environment (network
+# access, CARGO_REGISTRY_TOKEN, topological ordering with propagation
+# retries). Disable cargo-release's own publish step so running
+# `cargo release` locally cannot accidentally bypass CI.
+publish = false

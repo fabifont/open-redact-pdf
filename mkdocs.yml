@@ -73,6 +73,7 @@ nav:
     - Redaction Workflow: guides/redaction-workflow.md
     - Browser Integration: guides/browser-integration.md
     - Testing and Fixtures: guides/testing-and-fixtures.md
+    - Releasing: guides/releasing.md
   - Reference:
     - Rust API: reference/rust-api.md
     - TypeScript SDK: reference/ts-sdk.md

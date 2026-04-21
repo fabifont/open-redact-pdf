@@ -25,6 +25,7 @@ title: Roadmap
 - Deterministic full-save rewrite with FlateDecode-compressed content streams
 - WASM bindings and a browser demo
 - Demo UI with zoom controls, collapsible pages, search-driven redaction, Form-rewrite count in the report, and in-app error reporting
+- `cargo-release` workspace configuration (`release.toml`) bumps every crate's version, rewrites the inter-crate `path + version` pins and both `package.json` files, tags and pushes — all in a single command; `scripts/check-release-version.mjs` retains its defence-in-depth verification of the same invariants in CI
 
 ## Next priorities
 
@@ -34,7 +35,6 @@ title: Roadmap
 - Incremental-save preservation (reading is supported; output is always a flat rewrite that flattens xref streams and object streams into a classic xref table)
 - Public-key security handler — Standard Security Handler V = 1/2/4/5 (RC4 + AES-128 + AES-256) under the user or owner password is in; the remaining gap is the public-key `/Filter /Adobe.PubSec` form, which wraps the file key in a PKCS#7 recipient envelope rather than deriving it from a password.
 - Smarter visual line grouping for dense layouts where several short text runs sit only a unit or two apart in `y` and the current heuristic merges them into one line
-- Adopt `cargo-release` for the Rust publish step so the workspace version bump, inter-crate pin rewrite, tag creation, and ordered publish happen through a single tool; extend `scripts/check-release-version.mjs` to verify every `crates/*/Cargo.toml` inter-crate pin matches the workspace version, so "bumped workspace but forgot the pins" stops being a silent foot-gun
 
 ## Documentation policy
 

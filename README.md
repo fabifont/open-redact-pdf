@@ -42,7 +42,7 @@ See the [getting started guide](https://fabifont.github.io/open-redact-pdf/getti
 
 ## Releases
 
-Push a version tag (e.g. `v0.1.0`) to trigger the release workflow, which publishes both the Rust crates to crates.io and `@fabifont/open-redact-pdf` to npm. Versions must match across `Cargo.toml`, `packages/ts-sdk/package.json`, and the tag.
+Run `cargo release <level>` (after `cargo install cargo-release`). The bundled `release.toml` bumps the workspace version, rewrites every inter-crate pin and the two `package.json` files, commits, tags `vX.Y.Z`, and pushes. The release workflow then publishes both the Rust crates to crates.io and `@fabifont/open-redact-pdf` to npm. See [docs/guides/releasing.md](docs/guides/releasing.md) for details.
 
 ## License
 
