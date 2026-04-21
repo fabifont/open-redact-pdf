@@ -4,7 +4,7 @@ use pdf_content::{Operation, PaintOperator, PathSegment, parse_page_contents};
 use pdf_graphics::{Color, Matrix, Point, Rect};
 use pdf_objects::{
     ObjectRef, PageInfo, PdfDictionary, PdfError, PdfFile, PdfObject, PdfResult, PdfStream,
-    PdfString, PdfValue, serialize_value,
+    PdfString, PdfValue, flate_encode, serialize_value,
 };
 use pdf_targets::{NormalizedPageTarget, NormalizedRedactionPlan, RedactionMode};
 use pdf_text::{Glyph, GlyphLocation, analyze_page_text};
@@ -913,12 +913,20 @@ fn write_page_contents_without_removal(
         .ok_or(PdfError::InvalidPageIndex(page_index))?;
 
     let content_ref = file.allocate_object_ref();
+    let mut dict = PdfDictionary::new();
+    // FlateDecode-compress the rewritten content stream so the saved PDF does
+    // not bloat with plaintext bytes. If compression fails for any reason,
+    // fall back to writing the raw bytes.
+    let (data, filter) = match flate_encode(&bytes) {
+        Ok(compressed) => (compressed, true),
+        Err(_) => (bytes, false),
+    };
+    if filter {
+        dict.insert("Filter".to_string(), PdfValue::Name("FlateDecode".into()));
+    }
     file.insert_object(
         content_ref,
-        PdfObject::Stream(PdfStream {
-            dict: PdfDictionary::new(),
-            data: bytes,
-        }),
+        PdfObject::Stream(PdfStream { dict, data }),
     );
     if let PdfObject::Value(PdfValue::Dictionary(dictionary)) =
         file.get_object_mut(page.page_ref)?

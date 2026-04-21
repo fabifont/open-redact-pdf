@@ -1,9 +1,24 @@
-use std::io::Read;
+use std::io::{Read, Write};
 
+use flate2::Compression;
 use flate2::read::ZlibDecoder;
+use flate2::write::ZlibEncoder;
 
 use crate::error::{PdfError, PdfResult};
 use crate::types::{PdfStream, PdfValue};
+
+/// Compress `data` with FlateDecode (zlib / deflate) at the default
+/// compression level. Used by the writer when re-emitting rewritten content
+/// streams so the saved PDF does not bloat with plaintext content bytes.
+pub fn flate_encode(data: &[u8]) -> PdfResult<Vec<u8>> {
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+    encoder
+        .write_all(data)
+        .map_err(|error| PdfError::Corrupt(format!("flate encode failed: {error}")))?;
+    encoder
+        .finish()
+        .map_err(|error| PdfError::Corrupt(format!("flate encode finalize failed: {error}")))
+}
 
 pub fn decode_stream(stream: &PdfStream) -> PdfResult<Vec<u8>> {
     let inflated = match stream.dict.get("Filter") {
