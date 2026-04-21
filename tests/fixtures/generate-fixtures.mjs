@@ -634,6 +634,59 @@ writeFixture("ocg-hidden-content.pdf", {
   trailer: { Root: { ref: [1, 0] } },
 });
 
+// Same fixture shape as ocg-hidden-content.pdf but the default
+// configuration uses `/BaseState /OFF`, which hides every OCG unless
+// it is explicitly listed under `/ON`. Tests that the sanitization
+// pass recognises the BaseState form and still strips hidden content.
+writeFixture("ocg-base-state-off.pdf", {
+  objects: [
+    {
+      id: 1,
+      value: {
+        Type: "/Catalog",
+        Pages: { ref: [2, 0] },
+        OCProperties: {
+          OCGs: [{ ref: [7, 0] }],
+          D: {
+            Order: [{ ref: [7, 0] }],
+            BaseState: "/OFF",
+          },
+        },
+      },
+    },
+    { id: 2, value: { Type: "/Pages", Count: 1, Kids: [{ ref: [3, 0] }] } },
+    basePageObjects({
+      pageId: 3,
+      pagesId: 2,
+      contentId: 4,
+      resources: {
+        Font: { F1: { ref: [5, 0] } },
+        Properties: { Hidden: { ref: [7, 0] } },
+      },
+    }),
+    {
+      id: 4,
+      stream: {
+        dict: {},
+        data:
+          "BT\n/F1 20 Tf\n72 700 Td\n(Visible Line) Tj\nET\n" +
+          "/OC /Hidden BDC\n" +
+          "BT\n/F1 20 Tf\n72 670 Td\n(Hidden Secret) Tj\nET\n" +
+          "EMC\n",
+      },
+    },
+    fontObject,
+    {
+      id: 7,
+      value: {
+        Type: "/OCG",
+        Name: "Hidden Layer",
+      },
+    },
+  ],
+  trailer: { Root: { ref: [1, 0] } },
+});
+
 // Form XObject fixture. Page text is split between the page content stream
 // ("Page Outer") and a referenced Form XObject ("Form Inner Secret"). The
 // Form has its own Matrix (translating the inner text by +100 in y) and its

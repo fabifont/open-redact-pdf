@@ -430,6 +430,34 @@ fn sanitize_hidden_ocgs_strips_hidden_content_and_allows_redaction() {
 }
 
 #[test]
+fn sanitize_hidden_ocgs_handles_base_state_off() {
+    // /BaseState /OFF hides every OCG unless it is explicitly listed
+    // under /ON. Verify the sanitization pass recognises that form and
+    // still strips the hidden block.
+    let mut document =
+        PdfDocument::open(&fixture("ocg-base-state-off.pdf")).expect("fixture should open");
+    document
+        .apply_redactions(RedactionPlan {
+            targets: vec![],
+            mode: None,
+            fill_color: None,
+            overlay_text: None,
+            remove_intersecting_annotations: Some(false),
+            strip_metadata: Some(false),
+            strip_attachments: Some(false),
+            sanitize_hidden_ocgs: Some(true),
+        })
+        .expect("sanitization should accept /BaseState /OFF");
+    let saved = document.save().expect("save should succeed");
+    let reopened = PdfDocument::open(&saved).expect("saved PDF should reopen");
+    let extracted_after = reopened
+        .extract_text(0)
+        .expect("extraction should still succeed");
+    assert!(extracted_after.text.contains("Visible Line"));
+    assert!(!extracted_after.text.contains("Hidden Secret"));
+}
+
+#[test]
 fn overlay_text_is_stamped_over_redacted_regions() {
     use open_redact_pdf::{FillColor, RedactionMode};
 
