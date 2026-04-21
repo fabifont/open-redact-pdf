@@ -12,7 +12,7 @@ name = "pdf_objects"
 
 [dependencies]
 flate2.workspace = true
-pdf_graphics = { package = "open-redact-pdf-graphics", path = "../pdf_graphics", version = "0.1.0" }
+pdf_graphics = { package = "open-redact-pdf-graphics", path = "../pdf_graphics", version = "0.2.0" }
 serde.workspace = true
 
 [dev-dependencies]

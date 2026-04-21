@@ -11,7 +11,7 @@ version.workspace = true
 name = "pdf_text"
 
 [dependencies]
-pdf_content = { package = "open-redact-pdf-content", path = "../pdf_content", version = "0.1.0" }
-pdf_graphics = { package = "open-redact-pdf-graphics", path = "../pdf_graphics", version = "0.1.0" }
-pdf_objects = { package = "open-redact-pdf-objects", path = "../pdf_objects", version = "0.1.0" }
+pdf_content = { package = "open-redact-pdf-content", path = "../pdf_content", version = "0.2.0" }
+pdf_graphics = { package = "open-redact-pdf-graphics", path = "../pdf_graphics", version = "0.2.0" }
+pdf_objects = { package = "open-redact-pdf-objects", path = "../pdf_objects", version = "0.2.0" }
 serde.workspace = true
