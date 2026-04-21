@@ -24,6 +24,7 @@ This page documents the current known limitations of the engine, organized by su
 
 - **No caching:** `analyze_page_text` re-executes the full content stream interpretation on every call. For pages with large or complex content streams, repeated calls are expensive.
 - **No annotation text:** Text in annotation appearances (widget annotations, free text annotations, etc.) is not extracted.
+- _(resolved)_ Text inside Form XObjects is now extracted by recursing into their content streams; their `Matrix`, their local `Resources.Font`, and their local `Resources.ExtGState` are honoured, and the recursion is cycle-protected and depth-capped at 16.
 
 ### Search
 
@@ -53,14 +54,14 @@ This page documents the current known limitations of the engine, organized by su
 
 The following improvements are listed in priority order, weighted by coverage impact and security relevance:
 
-1. **Xref stream support** — required to process the majority of PDFs produced by modern tools (Acrobat, Preview, LibreOffice, Chrome print-to-PDF).
-2. **ToUnicode/Encoding support for simple fonts** — required for correct text extraction from non-ASCII Type1 and TrueType fonts (accented Latin, Greek, Cyrillic, etc.).
-3. **Non-Identity-H composite font encodings** — required for CJK documents using standard CMaps.
-4. **Form XObject support** — at minimum, read-through text extraction so that text inside reusable XObjects is searchable and redactable.
-5. **Page-level extraction caching** — avoid re-parsing content streams on every `analyze_page_text` call; cache results keyed by page reference and content stream digest.
-6. **Additional stream filters** — ASCII85Decode and LZWDecode are the most commonly encountered unsupported filters after FlateDecode.
-7. **Output stream re-compression** — compress rewritten content streams with FlateDecode to reduce output size.
-8. **Encrypted PDF support** — at least password-based decryption (RC4 and AES standard security handler) so that password-protected documents can be opened, redacted, and re-saved without encryption.
+1. **Form XObject redaction** — text extraction and search already recurse into Form XObjects, and redaction already refuses cleanly when a target intersects a Form. What remains is copy-on-write rewriting of the Form's own content stream (plus recursive rewrites for nested Forms), so redaction targets that fall inside a Form can be satisfied instead of erroring.
+2. **Non-Identity-H composite font encodings** — required for CJK documents using standard CMaps (`UniJIS-UTF16-H`, `UniGB-UCS2-H`, `UniCNS-UTF16-H`, `UniKS-UCS2-H`, and friends).
+3. **Page-level extraction caching** — avoid re-parsing content streams on every `analyze_page_text` call; cache results keyed by page reference and content stream digest.
+4. **Additional stream filters** — ASCII85Decode and LZWDecode are the most commonly encountered unsupported filters after FlateDecode.
+5. **Output stream re-compression** — compress rewritten content streams with FlateDecode to reduce output size.
+6. **Encrypted PDF support** — at least password-based decryption (RC4 and AES standard security handler) so that password-protected documents can be opened, redacted, and re-saved without encryption.
+7. **`overlay_text` rendering** — wire the `overlay_text` plan field through to the content-stream rewrite so that redacted regions can carry a user-specified replacement label.
+8. **Smarter line grouping** — the current visual line-detection heuristic merges text runs whose centres are within `line_height × 0.55` of one another, which fails on dense layouts (e.g., bank statements) where several short lines sit only a unit or two apart.
 
 ---
 
