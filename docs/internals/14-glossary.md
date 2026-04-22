@@ -46,7 +46,7 @@ The mapping from byte values in a string operand to glyph codes. Simple fonts us
 A named graphics state parameter dictionary stored in the page's `/Resources/ExtGState` subdictionary. Applied with the `gs` operator. Can carry a `Font` array that sets the current font and size; the engine pre-loads these fonts at page initialization. See `06-text-system.md §1`.
 
 ### Filter
-A compression or encoding algorithm applied to a **stream**'s raw bytes. Common filters: `FlateDecode` (zlib/deflate), `ASCII85Decode`, `LZWDecode`. Multiple filters can be chained. The engine supports `FlateDecode` and rejects unknown filters with an explicit error.
+A compression or encoding algorithm applied to a **stream**'s raw bytes. Multiple filters can be chained (e.g. `[/ASCII85Decode /FlateDecode]`). The engine supports `FlateDecode`, `ASCII85Decode`, `ASCIIHexDecode`, `LZWDecode` (with `DecodeParms /EarlyChange`), and `RunLengthDecode`; any other filter causes `decode_stream` to return an explicit `PdfError::Unsupported`.
 
 ### Font descriptor
 A dictionary associated with a font object that describes global font metrics and properties: `FontBBox`, `Ascent`, `Descent`, `CapHeight`, `Flags`, and a reference to the embedded font program. This engine does not parse font descriptor metrics; glyph height is estimated by heuristic. See `06-text-system.md §3`.

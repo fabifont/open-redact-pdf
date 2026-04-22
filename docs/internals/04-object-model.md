@@ -137,9 +137,9 @@ Applies the filters listed in the stream dictionary to decode `stream.data` into
 
 ### Supported filters
 
-Only `FlateDecode` (zlib/deflate compression) is supported. If the stream dictionary specifies any other filter — `LZWDecode`, `CCITTFaxDecode`, `DCTDecode`, `JBIG2Decode`, `JPXDecode`, `ASCII85Decode`, `ASCIIHexDecode`, or any other — `decode_stream` returns `Err(PdfError::Unsupported)`.
+`decode_stream` handles `FlateDecode` (zlib/deflate, with TIFF `/Predictor 2` and PNG predictors 10–15), `ASCII85Decode`, `ASCIIHexDecode`, `LZWDecode` (with `DecodeParms /EarlyChange` 0 or 1, default 1), and `RunLengthDecode`. These cover every text-oriented filter encountered in practice and can be chained (e.g. `[/ASCII85Decode /FlateDecode]`). Any other filter — `CCITTFaxDecode`, `DCTDecode` (JPEG), `JBIG2Decode`, `JPXDecode`, and so on — causes `decode_stream` to return `Err(PdfError::Unsupported)`.
 
-This is a deliberate scope constraint. Supporting additional decoders would expand the attack surface and the maintenance burden without benefiting the redaction use case: redaction only needs to decode content streams (which are always `FlateDecode`) and font programs (also `FlateDecode`). Image data, which uses JPEG or JBIG2 filters, is not modified by redaction.
+Image filters (JPEG, JBIG2, JPX) remain unsupported by design: redaction operates at the content-stream and font-program level rather than modifying image data, so carrying decoders for those formats would expand the attack surface and maintenance burden without unlocking any new redaction capability.
 
 ### Decompression bomb protection
 
