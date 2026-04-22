@@ -8,6 +8,53 @@ function pdfString(value) {
   return `(${value.replaceAll("\\", "\\\\").replaceAll("(", "\\(").replaceAll(")", "\\)")})`;
 }
 
+// Encode `text` (interpreted as Latin-1 bytes) with the TIFF-compatible LZW
+// variant used by PDF streams: 9–12-bit codes, 256 = CLEAR, 257 = EOD,
+// default /EarlyChange = 1 (width bumps one code earlier). The Rust decoder
+// in crates/pdf_objects/src/stream.rs mirrors this encoder's width logic.
+function encodeLzw(text) {
+  const dict = new Map();
+  for (let byte = 0; byte < 256; byte += 1) {
+    dict.set(String.fromCharCode(byte), byte);
+  }
+  let nextCode = 258;
+  let codeWidth = 9;
+  const bits = [];
+  const emit = (code, width) => {
+    for (let i = width - 1; i >= 0; i -= 1) {
+      bits.push((code >> i) & 1);
+    }
+  };
+  emit(256, 9);
+  let buffer = "";
+  for (const ch of text) {
+    const extended = buffer + ch;
+    if (dict.has(extended)) {
+      buffer = extended;
+      continue;
+    }
+    emit(dict.get(buffer), codeWidth);
+    dict.set(extended, nextCode);
+    nextCode += 1;
+    if (nextCode >= (1 << codeWidth) - 1 && codeWidth < 12) {
+      codeWidth += 1;
+    }
+    buffer = ch;
+  }
+  if (buffer.length > 0) {
+    emit(dict.get(buffer), codeWidth);
+  }
+  emit(257, codeWidth);
+  while (bits.length % 8 !== 0) bits.push(0);
+  let binary = "";
+  for (let i = 0; i < bits.length; i += 8) {
+    let byte = 0;
+    for (let j = 0; j < 8; j += 1) byte = (byte << 1) | bits[i + j];
+    binary += String.fromCharCode(byte);
+  }
+  return binary;
+}
+
 function serializeValue(value) {
   if (value === null) return "null";
   if (typeof value === "number") return Number.isInteger(value) ? String(value) : String(value);
@@ -158,6 +205,33 @@ writeFixture("simple-text.pdf", {
       stream: {
         dict: {},
         data: "BT\n/F1 24 Tf\n72 700 Td\n(Secret Alpha) Tj\n0 -32 Td\n(Beta Gamma) Tj\nET\n",
+      },
+    },
+    fontObject,
+  ],
+  trailer: { Root: { ref: [1, 0] } },
+});
+
+// Content stream compressed with the LZW filter. Exercises the
+// parser/decoder path for `/Filter /LZWDecode` and the default
+// `/EarlyChange 1` setting end-to-end.
+const lzwContentStream =
+  "BT\n/F1 24 Tf\n72 700 Td\n(Redact LZW sample) Tj\n0 -32 Td\n(Keep alpha) Tj\nET\n";
+writeFixture("lzw-content.pdf", {
+  objects: [
+    { id: 1, value: { Type: "/Catalog", Pages: { ref: [2, 0] } } },
+    { id: 2, value: { Type: "/Pages", Count: 1, Kids: [{ ref: [3, 0] }] } },
+    basePageObjects({
+      pageId: 3,
+      pagesId: 2,
+      contentId: 4,
+      resources: { Font: { F1: { ref: [5, 0] } } },
+    }),
+    {
+      id: 4,
+      stream: {
+        dict: { Filter: "/LZWDecode" },
+        data: encodeLzw(lzwContentStream),
       },
     },
     fontObject,
