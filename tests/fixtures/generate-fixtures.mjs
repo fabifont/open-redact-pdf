@@ -231,6 +231,40 @@ writeFixture("simple-text.pdf", {
   trailer: { Root: { ref: [1, 0] } },
 });
 
+// Dense layout: small font, very tight leading between rows so adjacent
+// baselines sit ~2pt apart. Exercises the visual-line grouping heuristic
+// under conditions where a naive y-tolerance could merge rows.
+writeFixture("dense-layout.pdf", {
+  objects: [
+    { id: 1, value: { Type: "/Catalog", Pages: { ref: [2, 0] } } },
+    { id: 2, value: { Type: "/Pages", Count: 1, Kids: [{ ref: [3, 0] }] } },
+    basePageObjects({
+      pageId: 3,
+      pagesId: 2,
+      contentId: 4,
+      resources: { Font: { F1: { ref: [5, 0] } } },
+    }),
+    {
+      id: 4,
+      stream: {
+        dict: {},
+        // Each line is placed at explicit absolute coordinates using Td,
+        // 2 pt apart. Helvetica 6pt keeps glyph bounding boxes small enough
+        // that without the absolute y-tolerance cap the rows would merge.
+        data:
+          "BT\n/F1 6 Tf\n" +
+          "72 700 Td (Account A 1111) Tj\n" +
+          "0 -2 Td (Account B 2222) Tj\n" +
+          "0 -2 Td (Account C 3333) Tj\n" +
+          "0 -2 Td (Account D 4444) Tj\n" +
+          "ET\n",
+      },
+    },
+    fontObject,
+  ],
+  trailer: { Root: { ref: [1, 0] } },
+});
+
 // Content stream that uses a BX/EX compatibility section to wrap an
 // unrecognized operator (`sh`). Without BX/EX support the engine would
 // refuse to redact the page; with it, the unknown op is passed through

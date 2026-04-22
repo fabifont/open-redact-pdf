@@ -990,6 +990,55 @@ fn nested_cm_operators_produce_page_space_quads() {
 }
 
 #[test]
+fn dense_layout_rows_are_not_merged_into_one_line() {
+    // The fixture stacks four rows only 2pt apart in y at 6pt Helvetica,
+    // the kind of layout that previously tripped up `line_height × 0.3`
+    // tolerance heuristics. Extraction should yield four distinct matches
+    // for "Account" and each account number's surrounding row text should
+    // stay on its own visual line so search and quad derivation don't
+    // confuse adjacent rows.
+    let document =
+        PdfDocument::open(&fixture("dense-layout.pdf")).expect("fixture should open");
+    let extracted = document
+        .extract_text(0)
+        .expect("extraction should succeed");
+    assert!(extracted.text.contains("Account A 1111"));
+    assert!(extracted.text.contains("Account B 2222"));
+    assert!(extracted.text.contains("Account C 3333"));
+    assert!(extracted.text.contains("Account D 4444"));
+
+    let matches = document
+        .search_text(0, "Account")
+        .expect("search should succeed");
+    assert_eq!(
+        matches.len(),
+        4,
+        "each row's Account label should be its own match"
+    );
+
+    // Each match's quad should stay within a single row — height of a
+    // single 6pt line (≈ 4.8pt), not span two rows (≈ 6.8pt+). If the
+    // line grouper collapses two rows into one the resulting match quad
+    // would straddle both rows and be noticeably taller.
+    for m in &matches {
+        let rect = m
+            .quads
+            .first()
+            .expect("each match should have a quad")
+            .bounding_rect();
+        // A single 6pt row has glyph-height ~5.5pt from the ascent/descent
+        // heuristic. Two merged rows sitting 2pt apart would produce a
+        // match quad of ~7.5pt or more — guard against that boundary.
+        assert!(
+            rect.height < 7.0,
+            "match should be confined to a single row: got height {} for {:?}",
+            rect.height,
+            m
+        );
+    }
+}
+
+#[test]
 fn bx_ex_compat_section_lets_redaction_proceed() {
     let mut document =
         PdfDocument::open(&fixture("bx-ex-compat.pdf")).expect("fixture should open");
