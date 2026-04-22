@@ -351,9 +351,24 @@ fn remove_neutralized_xobjects(
 }
 
 fn ensure_supported_operators(operations: &[Operation]) -> PdfResult<()> {
+    // PDF § 7.8.2 lets a BX/EX compatibility section enclose operators that
+    // a conforming reader may ignore. Within such a section we still require
+    // every operator we recognize to be one we can redact safely, but any
+    // unrecognized operator is passed through — matching what a viewer does
+    // — so a page that is otherwise supported isn't rejected outright.
+    let mut compat_depth: u32 = 0;
     for operation in operations {
+        let op = operation.operator.as_str();
+        if op == "BX" {
+            compat_depth = compat_depth.saturating_add(1);
+            continue;
+        }
+        if op == "EX" {
+            compat_depth = compat_depth.saturating_sub(1);
+            continue;
+        }
         let supported = matches!(
-            operation.operator.as_str(),
+            op,
             // Graphics state
             "q" | "Q" | "cm" | "gs" | "w" | "J" | "j" | "M" | "d" | "ri" | "i"
             // Text state & operators
@@ -374,7 +389,7 @@ fn ensure_supported_operators(operations: &[Operation]) -> PdfResult<()> {
             // Marked content (safe passthrough)
             | "BMC" | "BDC" | "EMC" | "MP" | "DP"
         );
-        if !supported {
+        if !supported && compat_depth == 0 {
             return Err(PdfError::Unsupported(format!(
                 "operator {} is not supported on redacted pages",
                 operation.operator
@@ -2089,5 +2104,55 @@ mod tests {
         ];
 
         ensure_supported_operators(&operations).expect("operators should be supported");
+    }
+
+    #[test]
+    fn bx_ex_compat_section_masks_unknown_operator() {
+        // Unknown operator `sh` outside a BX/EX section is rejected so the
+        // engine never silently drops a paint call that would leave visible
+        // content behind.
+        let outside = vec![Operation {
+            operator: "sh".to_string(),
+            operands: vec![],
+        }];
+        assert!(ensure_supported_operators(&outside).is_err());
+
+        // Inside a BX/EX compatibility section the same operator is allowed
+        // through, matching the PDF § 7.8.2 rule that conforming readers
+        // may ignore unrecognized operators in that context.
+        let inside = vec![
+            Operation {
+                operator: "BX".to_string(),
+                operands: vec![],
+            },
+            Operation {
+                operator: "sh".to_string(),
+                operands: vec![],
+            },
+            Operation {
+                operator: "EX".to_string(),
+                operands: vec![],
+            },
+        ];
+        ensure_supported_operators(&inside)
+            .expect("unknown operator inside BX/EX should be accepted");
+
+        // Once the BX/EX section closes, the same unknown operator is again
+        // rejected.
+        let after = vec![
+            Operation {
+                operator: "BX".to_string(),
+                operands: vec![],
+            },
+            Operation {
+                operator: "EX".to_string(),
+                operands: vec![],
+            },
+            Operation {
+                operator: "sh".to_string(),
+                operands: vec![],
+            },
+        ];
+        assert!(ensure_supported_operators(&after).is_err());
     }
 }

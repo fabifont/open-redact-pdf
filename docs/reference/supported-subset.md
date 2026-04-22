@@ -27,6 +27,7 @@ This project intentionally targets a narrow, explicit MVP.
 - Color operators for device and general color spaces (`rg`/`RG`, `g`/`G`, `k`/`K`, `cs`/`CS`, `sc`/`SC`, `scn`/`SCN`)
 - Curve segment operators (`c`, `v`, `y`) — all three are included in path bounds used by vector paint neutralization
 - Marked-content operators as safe pass-through (`BMC`, `BDC`, `EMC`, `MP`, `DP`)
+- Compatibility sections (`BX` / `EX`) — recognized operators inside the section are processed normally, and unrecognized operators are passed through per PDF § 7.8.2 instead of rejecting the page
 - ExtGState font entries (fonts set via `gs` operator)
 - Image XObject invocation detection
 - `Type1` and `TrueType` fonts in the current text path, including `ToUnicode` CMap decoding, `/Encoding /WinAnsiEncoding` for non-ASCII bytes, and `/Encoding` dictionaries with a `/Differences` array resolved through an Adobe Glyph List subset
