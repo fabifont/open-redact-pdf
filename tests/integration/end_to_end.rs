@@ -990,6 +990,55 @@ fn nested_cm_operators_produce_page_space_quads() {
 }
 
 #[test]
+fn apply_redactions_invalidates_cached_page_text() {
+    let mut document =
+        PdfDocument::open(&fixture("simple-text.pdf")).expect("fixture should open");
+
+    // Warm the per-page text cache.
+    let before = document
+        .extract_text(0)
+        .expect("extraction should succeed");
+    assert!(before.text.contains("Secret Alpha"));
+
+    // Redact the "Secret" glyph run in place.
+    let matches = document
+        .search_text(0, "Secret Alpha")
+        .expect("search should succeed");
+    let quads = matches[0]
+        .quads
+        .iter()
+        .map(|quad| quad.points)
+        .collect::<Vec<_>>();
+    document
+        .apply_redactions(RedactionPlan {
+            targets: vec![RedactionTarget::QuadGroup {
+                page_index: 0,
+                quads,
+            }],
+            mode: None,
+            fill_color: None,
+            overlay_text: None,
+            remove_intersecting_annotations: Some(false),
+            strip_metadata: Some(false),
+            strip_attachments: Some(false),
+            sanitize_hidden_ocgs: None,
+        })
+        .expect("redaction should succeed");
+
+    // The cache must have been cleared — a second extraction reflects
+    // the post-redaction content stream.
+    let after = document
+        .extract_text(0)
+        .expect("post-redaction extraction should succeed");
+    assert!(
+        !after.text.contains("Secret Alpha"),
+        "cache should be invalidated after apply_redactions, got: {:?}",
+        after.text
+    );
+    assert!(after.text.contains("Beta Gamma"));
+}
+
+#[test]
 fn run_length_compressed_content_stream_is_readable_and_redactable() {
     let document =
         PdfDocument::open(&fixture("run-length-content.pdf")).expect("fixture should open");

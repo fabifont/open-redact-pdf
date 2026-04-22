@@ -22,7 +22,7 @@ This page documents the current known limitations of the engine, organized by su
 
 ### Text Extraction
 
-- **No caching:** `analyze_page_text` re-executes the full content stream interpretation on every call. For pages with large or complex content streams, repeated calls are expensive.
+- _(resolved)_ Per-page extraction results are now cached on `PdfDocument` via an `Arc`-wrapped map keyed by page index; `extract_text` and `search_text` reuse the cached walk across calls, and `apply_redactions` clears the cache so post-redaction reads reflect the rewritten content stream.
 - **No annotation text:** Text in annotation appearances (widget annotations, free text annotations, etc.) is not extracted.
 - _(resolved)_ Text inside Form XObjects is now extracted by recursing into their content streams; their `Matrix`, their local `Resources.Font`, and their local `Resources.ExtGState` are honoured, and the recursion is cycle-protected and depth-capped at 16.
 
@@ -55,10 +55,9 @@ This page documents the current known limitations of the engine, organized by su
 The following improvements are listed in priority order, weighted by coverage impact and security relevance:
 
 1. **Broader composite font encodings** — documents using Adobe's predefined CMaps (`UniJIS-UTF16-H`, `UniGB-UCS2-H`, `UniCNS-UTF16-H`, `UniKS-UCS2-H`) still error out; wiring these in would unlock CJK PDFs.
-2. **Page-level extraction caching** — avoid re-parsing content streams on every `analyze_page_text` call; cache results keyed by page reference and content stream digest.
-3. **Object stream re-emission on save** — the writer currently flattens the input xref stream and any object streams into a classic xref table with inline indirect objects, which can double the saved size of modern PDFs. Re-emitting as an xref stream + object streams would match the input shape.
-4. **Broaden encrypted PDF support** — RC4 (V = 1/2), AES-128 (V = 4 R = 4), and AES-256 (V = 5 R = 5 / R = 6) under the user or owner password are in. The remaining gap is the public-key security handler (`/Filter /Adobe.PubSec`), which wraps the file key in a PKCS#7 recipient envelope rather than deriving it from a password. Adding it would allow opening PDFs sent to a specific certificate.
-5. **Smarter line grouping** — the current visual line-detection heuristic groups glyphs whose y-centres are within `min(line_height × 0.3, 1.0)` user-space units; dense layouts (e.g., bank statements with several short lines a unit or two apart) still stress it, so adaptive thresholds or second-pass x-monotonic splitting remain future work.
+2. **Object stream re-emission on save** — the writer currently flattens the input xref stream and any object streams into a classic xref table with inline indirect objects, which can double the saved size of modern PDFs. Re-emitting as an xref stream + object streams would match the input shape.
+3. **Broaden encrypted PDF support** — RC4 (V = 1/2), AES-128 (V = 4 R = 4), and AES-256 (V = 5 R = 5 / R = 6) under the user or owner password are in. The remaining gap is the public-key security handler (`/Filter /Adobe.PubSec`), which wraps the file key in a PKCS#7 recipient envelope rather than deriving it from a password. Adding it would allow opening PDFs sent to a specific certificate.
+4. **Smarter line grouping** — the current visual line-detection heuristic groups glyphs whose y-centres are within `min(line_height × 0.3, 1.0)` user-space units; dense layouts (e.g., bank statements with several short lines a unit or two apart) still stress it, so adaptive thresholds or second-pass x-monotonic splitting remain future work.
 
 ---
 
