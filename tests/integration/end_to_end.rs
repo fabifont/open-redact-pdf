@@ -990,6 +990,61 @@ fn nested_cm_operators_produce_page_space_quads() {
 }
 
 #[test]
+fn run_length_compressed_content_stream_is_readable_and_redactable() {
+    let document =
+        PdfDocument::open(&fixture("run-length-content.pdf")).expect("fixture should open");
+    let extracted = document
+        .extract_text(0)
+        .expect("text extraction should succeed");
+    assert!(
+        extracted.text.contains("Redact RLE sample"),
+        "RunLength stream text should extract: got {:?}",
+        extracted.text
+    );
+    assert!(extracted.text.contains("Keep alpha"));
+
+    let mut document =
+        PdfDocument::open(&fixture("run-length-content.pdf")).expect("fixture should open");
+    let matches = document
+        .search_text(0, "RLE")
+        .expect("search should succeed");
+    assert_eq!(matches.len(), 1);
+    let quads = matches[0]
+        .quads
+        .iter()
+        .map(|quad| quad.points)
+        .collect::<Vec<_>>();
+    let report = document
+        .apply_redactions(RedactionPlan {
+            targets: vec![RedactionTarget::QuadGroup {
+                page_index: 0,
+                quads,
+            }],
+            mode: None,
+            fill_color: None,
+            overlay_text: None,
+            remove_intersecting_annotations: Some(false),
+            strip_metadata: Some(false),
+            strip_attachments: Some(false),
+            sanitize_hidden_ocgs: None,
+        })
+        .expect("RunLength-stream redaction should succeed");
+    assert!(report.text_glyphs_removed > 0);
+
+    let saved = document.save().expect("save should succeed");
+    let reopened = PdfDocument::open(&saved).expect("saved pdf should reopen");
+    let extracted_after = reopened
+        .extract_text(0)
+        .expect("reopened extraction should succeed");
+    assert!(
+        !extracted_after.text.contains("RLE"),
+        "RLE glyphs should be removed after redaction: got {:?}",
+        extracted_after.text
+    );
+    assert!(extracted_after.text.contains("Keep alpha"));
+}
+
+#[test]
 fn lzw_compressed_content_stream_is_readable_and_redactable() {
     let document =
         PdfDocument::open(&fixture("lzw-content.pdf")).expect("fixture should open");

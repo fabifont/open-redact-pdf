@@ -8,6 +8,25 @@ function pdfString(value) {
   return `(${value.replaceAll("\\", "\\\\").replaceAll("(", "\\(").replaceAll(")", "\\)")})`;
 }
 
+// Encode `text` (interpreted as Latin-1 bytes) with the RunLengthDecode
+// filter (PDF § 7.4.5). This is a "plain" encoder — it emits only literal
+// runs of at most 128 bytes followed by the 128 EOD marker, which keeps
+// the fixture easy to reason about while still exercising the filter's
+// literal-run path end-to-end.
+function encodeRunLength(text) {
+  const bytes = Buffer.from(text, "binary");
+  let out = "";
+  let offset = 0;
+  while (offset < bytes.length) {
+    const run = Math.min(128, bytes.length - offset);
+    out += String.fromCharCode(run - 1);
+    for (let i = 0; i < run; i += 1) out += String.fromCharCode(bytes[offset + i]);
+    offset += run;
+  }
+  out += String.fromCharCode(128); // EOD
+  return out;
+}
+
 // Encode `text` (interpreted as Latin-1 bytes) with the TIFF-compatible LZW
 // variant used by PDF streams: 9–12-bit codes, 256 = CLEAR, 257 = EOD,
 // default /EarlyChange = 1 (width bumps one code earlier). The Rust decoder
@@ -205,6 +224,32 @@ writeFixture("simple-text.pdf", {
       stream: {
         dict: {},
         data: "BT\n/F1 24 Tf\n72 700 Td\n(Secret Alpha) Tj\n0 -32 Td\n(Beta Gamma) Tj\nET\n",
+      },
+    },
+    fontObject,
+  ],
+  trailer: { Root: { ref: [1, 0] } },
+});
+
+// Content stream compressed with the RunLengthDecode filter. Exercises
+// the parser/decoder path for `/Filter /RunLengthDecode` end-to-end.
+const runLengthContentStream =
+  "BT\n/F1 24 Tf\n72 700 Td\n(Redact RLE sample) Tj\n0 -32 Td\n(Keep alpha) Tj\nET\n";
+writeFixture("run-length-content.pdf", {
+  objects: [
+    { id: 1, value: { Type: "/Catalog", Pages: { ref: [2, 0] } } },
+    { id: 2, value: { Type: "/Pages", Count: 1, Kids: [{ ref: [3, 0] }] } },
+    basePageObjects({
+      pageId: 3,
+      pagesId: 2,
+      contentId: 4,
+      resources: { Font: { F1: { ref: [5, 0] } } },
+    }),
+    {
+      id: 4,
+      stream: {
+        dict: { Filter: "/RunLengthDecode" },
+        data: encodeRunLength(runLengthContentStream),
       },
     },
     fontObject,
