@@ -926,6 +926,31 @@ mod tests {
     }
 
     #[test]
+    fn decodes_lzw_with_tiff_predictor() {
+        // Original 2 rows × 4 bytes, 1 colour, 8 bits per component.
+        // TIFF predictor leaves the first byte per row as-is and stores
+        // the rest as delta from the previous byte. The LZW filter sits
+        // on top: it compresses the predictor-encoded bytes.
+        let original: [u8; 8] = [10, 20, 30, 40, 15, 22, 33, 44];
+        let mut predictor_encoded = Vec::new();
+        for row in original.chunks(4) {
+            predictor_encoded.push(row[0]);
+            for index in 1..row.len() {
+                predictor_encoded.push(row[index].wrapping_sub(row[index - 1]));
+            }
+        }
+        let lzw_bytes = encode_lzw(&predictor_encoded, true);
+        let mut dict = PdfDictionary::new();
+        dict.insert("Filter".to_string(), PdfValue::Name("LZWDecode".into()));
+        let mut parms = PdfDictionary::new();
+        parms.insert("Predictor".to_string(), PdfValue::Integer(2));
+        parms.insert("Columns".to_string(), PdfValue::Integer(4));
+        dict.insert("DecodeParms".to_string(), PdfValue::Dictionary(parms));
+        let stream = make_stream(dict, lzw_bytes);
+        assert_eq!(decode_stream(&stream).unwrap(), original.to_vec());
+    }
+
+    #[test]
     fn decodes_lzw_exercises_code_width_transitions() {
         // Build an input long enough to force the dictionary past 511
         // entries so the decoder exercises the 9→10 and 10→11 bit width
