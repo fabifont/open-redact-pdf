@@ -422,7 +422,7 @@ checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
 
 [[package]]
 name = "open-redact-pdf"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "open-redact-pdf-content",
  "open-redact-pdf-graphics",
@@ -436,7 +436,7 @@ dependencies = [
 
 [[package]]
 name = "open-redact-pdf-content"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "open-redact-pdf-graphics",
  "open-redact-pdf-objects",
@@ -445,14 +445,14 @@ dependencies = [
 
 [[package]]
 name = "open-redact-pdf-graphics"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "open-redact-pdf-objects"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "aes",
  "flate2",
@@ -465,7 +465,7 @@ dependencies = [
 
 [[package]]
 name = "open-redact-pdf-redact"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "open-redact-pdf-content",
  "open-redact-pdf-graphics",
@@ -477,7 +477,7 @@ dependencies = [
 
 [[package]]
 name = "open-redact-pdf-targets"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "open-redact-pdf-graphics",
  "open-redact-pdf-objects",
@@ -486,7 +486,7 @@ dependencies = [
 
 [[package]]
 name = "open-redact-pdf-text"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "open-redact-pdf-content",
  "open-redact-pdf-graphics",
@@ -496,14 +496,14 @@ dependencies = [
 
 [[package]]
 name = "open-redact-pdf-writer"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "open-redact-pdf-objects",
 ]
 
 [[package]]
 name = "pdf_wasm"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "js-sys",
  "open-redact-pdf",
