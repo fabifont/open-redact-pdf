@@ -77,6 +77,7 @@ fn apply_filter(filter: &str, data: &[u8]) -> PdfResult<Vec<u8>> {
         "ASCII85Decode" | "A85" => ascii85_decode(data),
         "ASCIIHexDecode" | "AHx" => ascii_hex_decode(data),
         "LZWDecode" | "LZW" => lzw_decode(data, true),
+        "RunLengthDecode" | "RL" => run_length_decode(data),
         other => Err(PdfError::Unsupported(format!(
             "stream filter /{other} is not supported"
         ))),
@@ -386,6 +387,53 @@ fn ascii_hex_decode(data: &[u8]) -> PdfResult<Vec<u8>> {
     }
     if let Some(h) = high {
         output.push(h << 4);
+    }
+    Ok(output)
+}
+
+/// Decode a RunLengthDecode byte run (PDF § 7.4.5). Each control byte `L`
+/// either introduces a literal run (`0..=127` → copy `L+1` bytes), a
+/// repeated byte (`129..=255` → repeat the next byte `257-L` times), or
+/// the end-of-data marker (`128`). A stream that ends before the EOD
+/// marker is accepted — some producers omit it — but truncated literal
+/// or repeat runs are treated as corruption.
+fn run_length_decode(data: &[u8]) -> PdfResult<Vec<u8>> {
+    let mut output: Vec<u8> = Vec::with_capacity(data.len());
+    let mut index = 0usize;
+    while index < data.len() {
+        let length_byte = data[index];
+        index += 1;
+        if length_byte == 128 {
+            return Ok(output);
+        }
+        if length_byte < 128 {
+            let run_len = usize::from(length_byte) + 1;
+            let end = index
+                .checked_add(run_len)
+                .ok_or_else(|| PdfError::Corrupt("RunLengthDecode index overflow".to_string()))?;
+            if end > data.len() {
+                return Err(PdfError::Corrupt(
+                    "RunLengthDecode literal run runs past end of stream".to_string(),
+                ));
+            }
+            output.extend_from_slice(&data[index..end]);
+            index = end;
+        } else {
+            let repeat = 257usize - usize::from(length_byte);
+            if index >= data.len() {
+                return Err(PdfError::Corrupt(
+                    "RunLengthDecode repeat run is missing its payload byte".to_string(),
+                ));
+            }
+            let byte = data[index];
+            index += 1;
+            output.extend(std::iter::repeat_n(byte, repeat));
+        }
+        if output.len() as u64 > MAX_DECOMPRESSED_SIZE {
+            return Err(PdfError::Corrupt(
+                "decompressed stream exceeds maximum allowed size".to_string(),
+            ));
+        }
     }
     Ok(output)
 }
@@ -894,6 +942,73 @@ mod tests {
         dict.insert("Filter".to_string(), PdfValue::Name("LZWDecode".into()));
         let stream = make_stream(dict, encoded);
         assert_eq!(decode_stream(&stream).unwrap(), plaintext);
+    }
+
+    #[test]
+    fn decodes_run_length_literal_runs() {
+        // Length byte 2 means "copy next 3 bytes literally". EOD = 128.
+        let encoded = vec![2, b'A', b'B', b'C', 128];
+        let mut dict = PdfDictionary::new();
+        dict.insert(
+            "Filter".to_string(),
+            PdfValue::Name("RunLengthDecode".into()),
+        );
+        let stream = make_stream(dict, encoded);
+        assert_eq!(decode_stream(&stream).unwrap(), b"ABC".to_vec());
+    }
+
+    #[test]
+    fn decodes_run_length_repeat_runs() {
+        // Length byte 0xFF (255) means "repeat next byte (257-255)=2 times".
+        let encoded = vec![0xFF, b'Z', 128];
+        let mut dict = PdfDictionary::new();
+        dict.insert("Filter".to_string(), PdfValue::Name("RL".into()));
+        let stream = make_stream(dict, encoded);
+        assert_eq!(decode_stream(&stream).unwrap(), b"ZZ".to_vec());
+    }
+
+    #[test]
+    fn decodes_run_length_mixed_runs_without_eod() {
+        // "ABBBCD" packed as literal A, repeat B x3, literal CD. No trailing
+        // EOD byte — some producers omit it and we treat that as end of
+        // stream rather than corruption.
+        let encoded = vec![0, b'A', 0xFE, b'B', 1, b'C', b'D'];
+        let mut dict = PdfDictionary::new();
+        dict.insert(
+            "Filter".to_string(),
+            PdfValue::Name("RunLengthDecode".into()),
+        );
+        let stream = make_stream(dict, encoded);
+        assert_eq!(decode_stream(&stream).unwrap(), b"ABBBCD".to_vec());
+    }
+
+    #[test]
+    fn rejects_run_length_truncated_literal_run() {
+        // Length byte 3 claims 4 bytes of literal but only 2 follow.
+        let encoded = vec![3, b'A', b'B'];
+        let mut dict = PdfDictionary::new();
+        dict.insert(
+            "Filter".to_string(),
+            PdfValue::Name("RunLengthDecode".into()),
+        );
+        let stream = make_stream(dict, encoded);
+        let err = decode_stream(&stream).unwrap_err();
+        assert!(matches!(err, PdfError::Corrupt(_)), "got: {err:?}");
+    }
+
+    #[test]
+    fn rejects_run_length_truncated_repeat_run() {
+        // Length byte 200 implies a repeat with a payload byte, but the
+        // payload is missing (stream ends immediately after the length).
+        let encoded = vec![200];
+        let mut dict = PdfDictionary::new();
+        dict.insert(
+            "Filter".to_string(),
+            PdfValue::Name("RunLengthDecode".into()),
+        );
+        let stream = make_stream(dict, encoded);
+        let err = decode_stream(&stream).unwrap_err();
+        assert!(matches!(err, PdfError::Corrupt(_)), "got: {err:?}");
     }
 
     #[test]
