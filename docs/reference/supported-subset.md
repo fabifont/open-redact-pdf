@@ -17,7 +17,7 @@ This project intentionally targets a narrow, explicit MVP.
 - PDF 1.5+ cross-reference streams (`/Type /XRef`) and the hybrid form where a legacy trailer carries an `XRefStm` pointer
 - Object streams (`/Type /ObjStm`) — compressed objects are materialized into the regular object store during parsing
 - Full-document rewrites on save (incremental updates and xref streams are flattened into a single classic-xref revision on output)
-- Unfiltered, `FlateDecode`, `ASCII85Decode`, `ASCIIHexDecode`, and `LZWDecode` stream filters — including filter chains (e.g. `[/ASCII85Decode /FlateDecode]`) — with the TIFF predictor (`/Predictor 2`) and PNG predictors 10–15 (via `DecodeParms /Predictor`) applied to the final stage. `LZWDecode` honours `DecodeParms /EarlyChange` (0 or 1, defaulting to 1).
+- Unfiltered, `FlateDecode`, `ASCII85Decode`, `ASCIIHexDecode`, `LZWDecode`, and `RunLengthDecode` stream filters — including filter chains (e.g. `[/ASCII85Decode /FlateDecode]`) — with the TIFF predictor (`/Predictor 2`) and PNG predictors 10–15 (via `DecodeParms /Predictor`) applied to the final stage. `LZWDecode` honours `DecodeParms /EarlyChange` (0 or 1, defaulting to 1).
 - Page tree traversal with inherited resources, media boxes, crop boxes, and page rotation
 - Inline images (`BI`/`ID`/`EI`) are safely skipped during content stream parsing
 - Dictionary operands in content streams (e.g., `BDC` with `<</MCID 0>>`)
@@ -46,7 +46,7 @@ This project intentionally targets a narrow, explicit MVP.
 - Type3 fonts
 - Composite (Type0) fonts with encodings other than `Identity-H`
 - Partial image rewriting when a redaction target covers only part of an Image XObject — whole-invocation neutralization is used instead
-- Stream filters outside the `FlateDecode` / `ASCII85Decode` / `ASCIIHexDecode` / `LZWDecode` set (notably `DCTDecode`, `JBIG2Decode`, `JPXDecode`, `CCITTFaxDecode`, `RunLengthDecode`)
+- Stream filters outside the `FlateDecode` / `ASCII85Decode` / `ASCIIHexDecode` / `LZWDecode` / `RunLengthDecode` set (notably `DCTDecode`, `JBIG2Decode`, `JPXDecode`, `CCITTFaxDecode`)
 
 ## Failure model
 
