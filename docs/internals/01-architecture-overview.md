@@ -206,9 +206,9 @@ Errors propagate as `Result<T, PdfError>` throughout the Rust API. At the WASM b
 
 The following capabilities are explicitly outside the current design. They are not planned for the near term and should not be assumed by callers or contributors.
 
-**No caching.** Every call to `analyze_page_text` or `search_page_text` re-parses and re-interprets the content stream from scratch. There is no page-level cache, no document-level cache, and no shared glyph map between calls.
+**Page-level extraction cache.** `PdfDocument` keeps a `Mutex<HashMap<usize, Arc<ExtractedPageText>>>` so repeated `extract_text` / `search_text` calls on the same page reuse the parsed glyph list; `apply_redactions` clears the map because the underlying content streams are about to change. Lower-level helpers like `analyze_page_text` are still cache-free and re-walk the stream on every call — callers that go around the facade get no caching.
 
-**No multi-threading.** The engine is single-threaded. There are no `Arc`, `Mutex`, or rayon usages. WASM targets are inherently single-threaded in the browser main thread and in most worker configurations.
+**Minimal multi-threading surface.** The engine is still designed for single-threaded use. The only synchronization primitive is the `Mutex` used by the text-extraction cache above; there is no rayon usage. WASM targets are inherently single-threaded in the browser main thread and in most worker configurations.
 
 **No streaming or incremental output.** The writer produces the entire output file as a single `Vec<u8>` before returning. There is no streaming writer and no append-only incremental update path (we intentionally write full rewrites to avoid leaving prior content in the file).
 

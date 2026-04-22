@@ -54,21 +54,21 @@ The WASM layer returns snake_case keys. The TS SDK normalizes these to camelCase
 
 In TypeScript: `type PdfHandle = { readonly __brand: "PdfHandle" }`. Callers cannot construct one directly. This prevents accidental misuse such as passing an arbitrary object to SDK functions that expect a loaded PDF handle.
 
-## 8. No caching
+## 8. Per-page extraction cache
 
-`extract_text` and `search_text` re-run full analysis on each call. Each call performs: parse content stream → load fonts → interpret operators → decode glyphs. This is a conscious MVP simplicity choice. Caching would require invalidation logic after `apply_redactions` modifies the document.
+`extract_text` and `search_text` consult a `Mutex<HashMap<usize, Arc<ExtractedPageText>>>` on `PdfDocument`. On a miss, the call performs the full parse content stream → load fonts → interpret operators → decode glyphs pipeline once and stores the `Arc` result. Subsequent calls for the same page clone the `Arc` and skip the walk entirely. `apply_redactions` takes `&mut self`, clears the cache, then runs the redaction so post-redaction extractions always reflect the rewritten content stream.
 
 ## 9. Why it was coded this way
 
 - **Bundler target** (not `web`/`nodejs`): works with Vite, Webpack, and Rollup without extra configuration
-- **`RefCell` over `Mutex`**: simpler, and JS is single-threaded so `Mutex` adds overhead with no benefit
+- **`Mutex<HashMap>` cache**: picks up `Send + Sync` cheaply for native callers that might wrap a document in a background task, and has no practical cost in the single-threaded browser where lock contention does not exist
 - **Branded type**: type safety at the TS layer without any runtime cost
-- **No caching**: correctness over performance for MVP; extraction results would be stale after redaction
+- **Cache invalidated on `apply_redactions`**: correctness comes first — stale extractions would mis-locate text that has just been removed
 
 ## 10. What would break
 
 | Change | Consequence |
 |---|---|
-| `Mutex` instead of `RefCell` | Unnecessary overhead; potential deadlock if a panic occurs inside a lock |
+| Forgetting to clear the cache in `apply_redactions` | `extract_text` after redaction would return pre-redaction glyphs and mis-route subsequent target geometry |
 | Not normalizing snake_case | TS callers receive wrong property names; all field accesses return `undefined` |
 | Not calling `freePdf` | Memory leak; WASM heap grows unbounded across PDF loads |
