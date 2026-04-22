@@ -531,8 +531,8 @@ fn run_operations(
                 context.pending_line_break = true;
             }
             "T*" => {
-                text_state.line_matrix = Matrix::translate(0.0, -text_state.leading)
-                    .multiply(text_state.line_matrix);
+                text_state.line_matrix =
+                    Matrix::translate(0.0, -text_state.leading).multiply(text_state.line_matrix);
                 text_state.text_matrix = text_state.line_matrix;
                 context.pending_line_break = true;
             }
@@ -562,8 +562,8 @@ fn run_operations(
                 )?;
             }
             "'" => {
-                text_state.line_matrix = Matrix::translate(0.0, -text_state.leading)
-                    .multiply(text_state.line_matrix);
+                text_state.line_matrix =
+                    Matrix::translate(0.0, -text_state.leading).multiply(text_state.line_matrix);
                 text_state.text_matrix = text_state.line_matrix;
                 context.pending_line_break = true;
                 let string = operand_string(operation, 0)?;
@@ -581,8 +581,8 @@ fn run_operations(
             "\"" => {
                 text_state.word_spacing = operand_number(operation, 0)?;
                 text_state.character_spacing = operand_number(operation, 1)?;
-                text_state.line_matrix = Matrix::translate(0.0, -text_state.leading)
-                    .multiply(text_state.line_matrix);
+                text_state.line_matrix =
+                    Matrix::translate(0.0, -text_state.leading).multiply(text_state.line_matrix);
                 text_state.text_matrix = text_state.line_matrix;
                 context.pending_line_break = true;
                 let string = operand_string(operation, 2)?;
@@ -625,8 +625,8 @@ fn run_operations(
                             let scaled = -(adjustment / 1000.0)
                                 * text_state.font_size
                                 * (text_state.horizontal_scaling / 100.0);
-                            text_state.text_matrix = Matrix::translate(scaled, 0.0)
-                                .multiply(text_state.text_matrix);
+                            text_state.text_matrix =
+                                Matrix::translate(scaled, 0.0).multiply(text_state.text_matrix);
                         }
                     }
                 }
@@ -1090,8 +1090,7 @@ fn show_text(
                 item_text.push(character);
             }
         }
-        text_state.text_matrix =
-            Matrix::translate(advance, 0.0).multiply(text_state.text_matrix);
+        text_state.text_matrix = Matrix::translate(advance, 0.0).multiply(text_state.text_matrix);
     }
 
     if !item_text.is_empty() {

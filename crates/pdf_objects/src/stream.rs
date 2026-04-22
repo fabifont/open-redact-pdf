@@ -490,10 +490,7 @@ mod tests {
         // Full 4-byte group "Man " → ASCII85 "9jqo^".
         let encoded = b"9jqo^~>".to_vec();
         let mut dict = PdfDictionary::new();
-        dict.insert(
-            "Filter".to_string(),
-            PdfValue::Name("ASCII85Decode".into()),
-        );
+        dict.insert("Filter".to_string(), PdfValue::Name("ASCII85Decode".into()));
         let stream = make_stream(dict, encoded);
         assert_eq!(decode_stream(&stream).unwrap(), b"Man ".to_vec());
     }
@@ -502,10 +499,7 @@ mod tests {
     fn decodes_ascii85_z_shortcut() {
         let encoded = b"z~>".to_vec();
         let mut dict = PdfDictionary::new();
-        dict.insert(
-            "Filter".to_string(),
-            PdfValue::Name("ASCII85Decode".into()),
-        );
+        dict.insert("Filter".to_string(), PdfValue::Name("ASCII85Decode".into()));
         let stream = make_stream(dict, encoded);
         assert_eq!(decode_stream(&stream).unwrap(), vec![0, 0, 0, 0]);
     }
