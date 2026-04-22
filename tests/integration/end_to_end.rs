@@ -990,6 +990,25 @@ fn nested_cm_operators_produce_page_space_quads() {
 }
 
 #[test]
+fn mac_roman_encoded_simple_font_decodes_mac_specific_bytes() {
+    // The fixture encodes `Hello "World"` where the outer quotes are
+    // Mac Roman bytes 0xD2 (U+201C) and 0xD3 (U+201D). Under WinAnsi
+    // these bytes would decode to different glyphs (or U+FFFD), so a
+    // correct MacRoman path is the only way the expected Unicode comes
+    // out.
+    let document =
+        PdfDocument::open(&fixture("mac-roman-encoding.pdf")).expect("fixture should open");
+    let extracted = document
+        .extract_text(0)
+        .expect("text extraction should succeed");
+    assert!(
+        extracted.text.contains("Hello \u{201C}World\u{201D}"),
+        "MacRoman bytes 0xD2/0xD3 should decode to curly double quotes: got {:?}",
+        extracted.text
+    );
+}
+
+#[test]
 fn dense_layout_rows_are_not_merged_into_one_line() {
     // The fixture stacks four rows only 2pt apart in y at 6pt Helvetica,
     // the kind of layout that previously tripped up `line_height × 0.3`

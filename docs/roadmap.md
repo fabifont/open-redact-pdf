@@ -12,7 +12,7 @@ title: Roadmap
 - `FlateDecode` and `LZWDecode` with the TIFF predictor (`/Predictor 2`) and PNG predictors (10–15) via `DecodeParms`, plus `ASCII85Decode`, `ASCIIHexDecode`, and `RunLengthDecode` for text-oriented filter chains (`LZWDecode` honours `DecodeParms /EarlyChange`)
 - Page tree traversal with inherited resources, media boxes, crop boxes, and rotation
 - Content parsing for common text, path, image, clipping, color, graphics-state, and marked-content operators (including inline images and dictionary operands)
-- Simple-font text extraction and search geometry (including fonts set via ExtGState `gs` operator), with `ToUnicode` CMap decoding, `WinAnsiEncoding` for non-ASCII bytes, and `/Encoding /Differences` arrays resolved through an Adobe Glyph List subset
+- Simple-font text extraction and search geometry (including fonts set via ExtGState `gs` operator), with `ToUnicode` CMap decoding, `WinAnsiEncoding` + `MacRomanEncoding` for non-ASCII bytes, and `/Encoding /Differences` arrays resolved through an Adobe Glyph List subset
 - `Type0` / `Identity-H` composite font extraction, search, and redaction when `ToUnicode` is available
 - Form XObject text extraction and search (recursive, with cycle protection and a depth cap)
 - Form XObject redaction via per-page copy-on-write: text glyphs, vector paint, and Image XObject `Do` invocations inside the Form are all neutralized; nested Forms recurse up to depth 8

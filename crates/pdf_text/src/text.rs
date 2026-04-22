@@ -828,6 +828,11 @@ enum SimpleEncodingBase {
     /// PDF `WinAnsiEncoding` — a superset of ISO-8859-1 with Windows-1252
     /// punctuation and symbols in the `0x80..=0x9F` range.
     WinAnsi,
+    /// PDF `MacRomanEncoding` — Apple's 8-bit Roman encoding used by
+    /// PostScript Type1 fonts that were generated on classic Mac systems.
+    /// Codes `0x20..=0x7E` are ASCII; `0x80..=0xFF` carry the Mac Roman
+    /// punctuation and accented-letter repertoire (e.g. `0xD2` = U+201C).
+    MacRoman,
 }
 
 #[derive(Debug, Clone)]
@@ -1125,6 +1130,7 @@ fn decode_simple_byte(font: &SimpleFont, byte: u8) -> String {
     }
     let character = match font.encoding.base {
         SimpleEncodingBase::WinAnsi => winansi_byte_to_char(byte),
+        SimpleEncodingBase::MacRoman => mac_roman_byte_to_char(byte),
         SimpleEncodingBase::Identity => identity_byte_to_char(byte),
     };
     character
@@ -1379,6 +1385,148 @@ fn winansi_byte_to_char(byte: u8) -> Option<char> {
     }
 }
 
+/// Decode a single byte under the PDF `MacRomanEncoding` table (PDF Annex D).
+///
+/// Codes `0x20..=0x7E` are plain ASCII. Codes `0x80..=0xFF` carry the Mac
+/// Roman repertoire: accented Latin letters, math symbols, punctuation,
+/// ligatures, and (at `0xF0`) the Apple logo mapped to the Corporate Use
+/// Area `U+F8FF`. Undefined codes return `None`, which callers render as
+/// `U+FFFD`.
+fn mac_roman_byte_to_char(byte: u8) -> Option<char> {
+    match byte {
+        0x20..=0x7E => Some(byte as char),
+        0x80 => Some('\u{00C4}'), // Ä
+        0x81 => Some('\u{00C5}'), // Å
+        0x82 => Some('\u{00C7}'), // Ç
+        0x83 => Some('\u{00C9}'), // É
+        0x84 => Some('\u{00D1}'), // Ñ
+        0x85 => Some('\u{00D6}'), // Ö
+        0x86 => Some('\u{00DC}'), // Ü
+        0x87 => Some('\u{00E1}'), // á
+        0x88 => Some('\u{00E0}'), // à
+        0x89 => Some('\u{00E2}'), // â
+        0x8A => Some('\u{00E4}'), // ä
+        0x8B => Some('\u{00E3}'), // ã
+        0x8C => Some('\u{00E5}'), // å
+        0x8D => Some('\u{00E7}'), // ç
+        0x8E => Some('\u{00E9}'), // é
+        0x8F => Some('\u{00E8}'), // è
+        0x90 => Some('\u{00EA}'), // ê
+        0x91 => Some('\u{00EB}'), // ë
+        0x92 => Some('\u{00ED}'), // í
+        0x93 => Some('\u{00EC}'), // ì
+        0x94 => Some('\u{00EE}'), // î
+        0x95 => Some('\u{00EF}'), // ï
+        0x96 => Some('\u{00F1}'), // ñ
+        0x97 => Some('\u{00F3}'), // ó
+        0x98 => Some('\u{00F2}'), // ò
+        0x99 => Some('\u{00F4}'), // ô
+        0x9A => Some('\u{00F6}'), // ö
+        0x9B => Some('\u{00F5}'), // õ
+        0x9C => Some('\u{00FA}'), // ú
+        0x9D => Some('\u{00F9}'), // ù
+        0x9E => Some('\u{00FB}'), // û
+        0x9F => Some('\u{00FC}'), // ü
+        0xA0 => Some('\u{2020}'), // †
+        0xA1 => Some('\u{00B0}'), // °
+        0xA2 => Some('\u{00A2}'), // ¢
+        0xA3 => Some('\u{00A3}'), // £
+        0xA4 => Some('\u{00A7}'), // §
+        0xA5 => Some('\u{2022}'), // •
+        0xA6 => Some('\u{00B6}'), // ¶
+        0xA7 => Some('\u{00DF}'), // ß
+        0xA8 => Some('\u{00AE}'), // ®
+        0xA9 => Some('\u{00A9}'), // ©
+        0xAA => Some('\u{2122}'), // ™
+        0xAB => Some('\u{00B4}'), // ´
+        0xAC => Some('\u{00A8}'), // ¨
+        0xAD => Some('\u{2260}'), // ≠
+        0xAE => Some('\u{00C6}'), // Æ
+        0xAF => Some('\u{00D8}'), // Ø
+        0xB0 => Some('\u{221E}'), // ∞
+        0xB1 => Some('\u{00B1}'), // ±
+        0xB2 => Some('\u{2264}'), // ≤
+        0xB3 => Some('\u{2265}'), // ≥
+        0xB4 => Some('\u{00A5}'), // ¥
+        0xB5 => Some('\u{00B5}'), // µ
+        0xB6 => Some('\u{2202}'), // ∂
+        0xB7 => Some('\u{2211}'), // ∑
+        0xB8 => Some('\u{220F}'), // ∏
+        0xB9 => Some('\u{03C0}'), // π
+        0xBA => Some('\u{222B}'), // ∫
+        0xBB => Some('\u{00AA}'), // ª
+        0xBC => Some('\u{00BA}'), // º
+        0xBD => Some('\u{03A9}'), // Ω
+        0xBE => Some('\u{00E6}'), // æ
+        0xBF => Some('\u{00F8}'), // ø
+        0xC0 => Some('\u{00BF}'), // ¿
+        0xC1 => Some('\u{00A1}'), // ¡
+        0xC2 => Some('\u{00AC}'), // ¬
+        0xC3 => Some('\u{221A}'), // √
+        0xC4 => Some('\u{0192}'), // ƒ
+        0xC5 => Some('\u{2248}'), // ≈
+        0xC6 => Some('\u{2206}'), // ∆
+        0xC7 => Some('\u{00AB}'), // «
+        0xC8 => Some('\u{00BB}'), // »
+        0xC9 => Some('\u{2026}'), // …
+        0xCA => Some('\u{00A0}'), // non-breaking space
+        0xCB => Some('\u{00C0}'), // À
+        0xCC => Some('\u{00C3}'), // Ã
+        0xCD => Some('\u{00D5}'), // Õ
+        0xCE => Some('\u{0152}'), // Œ
+        0xCF => Some('\u{0153}'), // œ
+        0xD0 => Some('\u{2013}'), // –
+        0xD1 => Some('\u{2014}'), // —
+        0xD2 => Some('\u{201C}'), // "
+        0xD3 => Some('\u{201D}'), // "
+        0xD4 => Some('\u{2018}'), // '
+        0xD5 => Some('\u{2019}'), // '
+        0xD6 => Some('\u{00F7}'), // ÷
+        0xD7 => Some('\u{25CA}'), // ◊
+        0xD8 => Some('\u{00FF}'), // ÿ
+        0xD9 => Some('\u{0178}'), // Ÿ
+        0xDA => Some('\u{2044}'), // ⁄
+        0xDB => Some('\u{20AC}'), // €
+        0xDC => Some('\u{2039}'), // ‹
+        0xDD => Some('\u{203A}'), // ›
+        0xDE => Some('\u{FB01}'), // ﬁ
+        0xDF => Some('\u{FB02}'), // ﬂ
+        0xE0 => Some('\u{2021}'), // ‡
+        0xE1 => Some('\u{00B7}'), // ·
+        0xE2 => Some('\u{201A}'), // ‚
+        0xE3 => Some('\u{201E}'), // „
+        0xE4 => Some('\u{2030}'), // ‰
+        0xE5 => Some('\u{00C2}'), // Â
+        0xE6 => Some('\u{00CA}'), // Ê
+        0xE7 => Some('\u{00C1}'), // Á
+        0xE8 => Some('\u{00CB}'), // Ë
+        0xE9 => Some('\u{00C8}'), // È
+        0xEA => Some('\u{00CD}'), // Í
+        0xEB => Some('\u{00CE}'), // Î
+        0xEC => Some('\u{00CF}'), // Ï
+        0xED => Some('\u{00CC}'), // Ì
+        0xEE => Some('\u{00D3}'), // Ó
+        0xEF => Some('\u{00D4}'), // Ô
+        0xF0 => Some('\u{F8FF}'), // Apple logo (Corporate Use Area)
+        0xF1 => Some('\u{00D2}'), // Ò
+        0xF2 => Some('\u{00DA}'), // Ú
+        0xF3 => Some('\u{00DB}'), // Û
+        0xF4 => Some('\u{00D9}'), // Ù
+        0xF5 => Some('\u{0131}'), // ı
+        0xF6 => Some('\u{02C6}'), // ˆ
+        0xF7 => Some('\u{02DC}'), // ˜
+        0xF8 => Some('\u{00AF}'), // ¯
+        0xF9 => Some('\u{02D8}'), // ˘
+        0xFA => Some('\u{02D9}'), // ˙
+        0xFB => Some('\u{02DA}'), // ˚
+        0xFC => Some('\u{00B8}'), // ¸
+        0xFD => Some('\u{02DD}'), // ˝
+        0xFE => Some('\u{02DB}'), // ˛
+        0xFF => Some('\u{02C7}'), // ˇ
+        _ => None,
+    }
+}
+
 fn parse_simple_encoding(file: &PdfFile, font_dict: &pdf_objects::PdfDictionary) -> SimpleEncoding {
     match font_dict.get("Encoding") {
         Some(PdfValue::Name(name)) => SimpleEncoding {
@@ -1410,6 +1558,7 @@ fn parse_simple_encoding(file: &PdfFile, font_dict: &pdf_objects::PdfDictionary)
 fn simple_encoding_base_from_name(name: &str) -> SimpleEncodingBase {
     match name {
         "WinAnsiEncoding" => SimpleEncodingBase::WinAnsi,
+        "MacRomanEncoding" => SimpleEncodingBase::MacRoman,
         _ => SimpleEncodingBase::Identity,
     }
 }

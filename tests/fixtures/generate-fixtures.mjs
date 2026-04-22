@@ -231,6 +231,44 @@ writeFixture("simple-text.pdf", {
   trailer: { Root: { ref: [1, 0] } },
 });
 
+// MacRomanEncoding fixture: Helvetica simple font with `/Encoding
+// /MacRomanEncoding`. The content stream uses a PDF hex string to
+// embed bytes that only make sense under Mac Roman — e.g. 0xD2/0xD3
+// decode to U+201C / U+201D (curly double quotes) under Mac Roman
+// but to the Private Use Area under WinAnsi.
+writeFixture("mac-roman-encoding.pdf", {
+  objects: [
+    { id: 1, value: { Type: "/Catalog", Pages: { ref: [2, 0] } } },
+    { id: 2, value: { Type: "/Pages", Count: 1, Kids: [{ ref: [3, 0] }] } },
+    basePageObjects({
+      pageId: 3,
+      pagesId: 2,
+      contentId: 4,
+      resources: { Font: { F1: { ref: [6, 0] } } },
+    }),
+    {
+      id: 4,
+      stream: {
+        dict: {},
+        // Hex string bytes: 48656C6C6F20 = "Hello ", D2 = U+201C,
+        // 576F726C64 = "World", D3 = U+201D.
+        data: "BT\n/F1 24 Tf\n72 700 Td\n<48656C6C6F20D2576F726C64D3> Tj\nET\n",
+      },
+    },
+    fontObject,
+    {
+      id: 6,
+      value: {
+        Type: "/Font",
+        Subtype: "/Type1",
+        BaseFont: "/Helvetica",
+        Encoding: "/MacRomanEncoding",
+      },
+    },
+  ],
+  trailer: { Root: { ref: [1, 0] } },
+});
+
 // Dense layout: small font, very tight leading between rows so adjacent
 // baselines sit ~2pt apart. Exercises the visual-line grouping heuristic
 // under conditions where a naive y-tolerance could merge rows.
