@@ -21,25 +21,51 @@ pub fn flate_encode(data: &[u8]) -> PdfResult<Vec<u8>> {
 }
 
 pub fn decode_stream(stream: &PdfStream) -> PdfResult<Vec<u8>> {
-    let inflated = match stream.dict.get("Filter") {
-        None => stream.data.clone(),
-        Some(PdfValue::Name(name)) if name == "FlateDecode" => inflate(stream.data.as_slice())?,
-        Some(PdfValue::Array(filters)) if filters.len() == 1 => match filters.first() {
-            Some(PdfValue::Name(name)) if name == "FlateDecode" => inflate(stream.data.as_slice())?,
-            _ => {
-                return Err(PdfError::Unsupported(
-                    "only a single FlateDecode filter is supported".to_string(),
-                ));
-            }
-        },
-        Some(_) => {
-            return Err(PdfError::Unsupported(
-                "unsupported stream filter configuration".to_string(),
-            ));
-        }
-    };
+    let filter_names = normalize_filter_list(stream.dict.get("Filter"))?;
+    let mut decoded = stream.data.clone();
+    for filter_name in &filter_names {
+        decoded = apply_filter(filter_name, &decoded)?;
+    }
+    apply_predictor(&decoded, stream.dict.get("DecodeParms"))
+}
 
-    apply_predictor(&inflated, stream.dict.get("DecodeParms"))
+/// Return the /Filter entry as an ordered list of filter names, whether
+/// the source dictionary uses the single-name shorthand or the array
+/// form. Empty list means no filters applied (raw data).
+fn normalize_filter_list(value: Option<&PdfValue>) -> PdfResult<Vec<String>> {
+    match value {
+        None => Ok(Vec::new()),
+        Some(PdfValue::Null) => Ok(Vec::new()),
+        Some(PdfValue::Name(name)) => Ok(vec![name.clone()]),
+        Some(PdfValue::Array(items)) => {
+            let mut names = Vec::with_capacity(items.len());
+            for item in items {
+                match item {
+                    PdfValue::Name(name) => names.push(name.clone()),
+                    _ => {
+                        return Err(PdfError::Corrupt(
+                            "stream /Filter array contains a non-name entry".to_string(),
+                        ));
+                    }
+                }
+            }
+            Ok(names)
+        }
+        Some(_) => Err(PdfError::Corrupt(
+            "stream /Filter is neither a name nor an array of names".to_string(),
+        )),
+    }
+}
+
+fn apply_filter(filter: &str, data: &[u8]) -> PdfResult<Vec<u8>> {
+    match filter {
+        "FlateDecode" | "Fl" => inflate(data),
+        "ASCII85Decode" | "A85" => ascii85_decode(data),
+        "ASCIIHexDecode" | "AHx" => ascii_hex_decode(data),
+        other => Err(PdfError::Unsupported(format!(
+            "stream filter /{other} is not supported"
+        ))),
+    }
 }
 
 /// Maximum decompressed stream size (256 MiB). Prevents decompression bombs from
@@ -57,6 +83,110 @@ fn inflate(data: &[u8]) -> PdfResult<Vec<u8>> {
         return Err(PdfError::Corrupt(
             "decompressed stream exceeds maximum allowed size".to_string(),
         ));
+    }
+    Ok(output)
+}
+
+/// Decode an ASCII85-encoded byte run (PDF § 7.4.3). Whitespace is
+/// ignored, `z` expands to four zero bytes, and `~>` terminates the
+/// stream; a short final group is padded with `u` and the decoded
+/// tail is truncated accordingly.
+fn ascii85_decode(data: &[u8]) -> PdfResult<Vec<u8>> {
+    let mut output = Vec::with_capacity(data.len());
+    let mut group = [0u8; 5];
+    let mut group_len = 0usize;
+
+    for &byte in data {
+        if byte == b'~' {
+            break; // `~>` EOD marker; the `>` is allowed to follow or be absent.
+        }
+        if matches!(byte, b' ' | b'\t' | b'\n' | b'\r' | 0x0C) {
+            continue;
+        }
+        if byte == b'z' {
+            if group_len != 0 {
+                return Err(PdfError::Corrupt(
+                    "ASCII85 'z' shortcut inside a partial group".to_string(),
+                ));
+            }
+            output.extend_from_slice(&[0u8; 4]);
+            continue;
+        }
+        if !(b'!'..=b'u').contains(&byte) {
+            return Err(PdfError::Corrupt(format!(
+                "invalid ASCII85 byte 0x{byte:02X}"
+            )));
+        }
+        group[group_len] = byte - b'!';
+        group_len += 1;
+        if group_len == 5 {
+            let value = (group[0] as u64) * 85u64.pow(4)
+                + (group[1] as u64) * 85u64.pow(3)
+                + (group[2] as u64) * 85u64.pow(2)
+                + (group[3] as u64) * 85
+                + (group[4] as u64);
+            if value > u32::MAX as u64 {
+                return Err(PdfError::Corrupt(
+                    "ASCII85 group value exceeds 32 bits".to_string(),
+                ));
+            }
+            output.extend_from_slice(&(value as u32).to_be_bytes());
+            group_len = 0;
+        }
+    }
+
+    if group_len > 0 {
+        if group_len == 1 {
+            return Err(PdfError::Corrupt(
+                "ASCII85 final group contains a single byte".to_string(),
+            ));
+        }
+        // Pad with the max digit so truncating yields the right tail.
+        for entry in group.iter_mut().skip(group_len) {
+            *entry = 84;
+        }
+        let value = (group[0] as u64) * 85u64.pow(4)
+            + (group[1] as u64) * 85u64.pow(3)
+            + (group[2] as u64) * 85u64.pow(2)
+            + (group[3] as u64) * 85
+            + (group[4] as u64);
+        let bytes = (value as u32).to_be_bytes();
+        output.extend_from_slice(&bytes[..group_len - 1]);
+    }
+
+    Ok(output)
+}
+
+/// Decode an ASCIIHex-encoded byte run (PDF § 7.4.2). Whitespace is
+/// ignored, `>` terminates the stream, and a trailing odd nibble is
+/// treated as if followed by `0`.
+fn ascii_hex_decode(data: &[u8]) -> PdfResult<Vec<u8>> {
+    let mut output = Vec::with_capacity(data.len() / 2 + 1);
+    let mut high: Option<u8> = None;
+    for &byte in data {
+        if byte == b'>' {
+            break;
+        }
+        if matches!(byte, b' ' | b'\t' | b'\n' | b'\r' | 0x0C) {
+            continue;
+        }
+        let nibble = match byte {
+            b'0'..=b'9' => byte - b'0',
+            b'a'..=b'f' => byte - b'a' + 10,
+            b'A'..=b'F' => byte - b'A' + 10,
+            _ => {
+                return Err(PdfError::Corrupt(format!(
+                    "invalid ASCIIHex byte 0x{byte:02X}"
+                )));
+            }
+        };
+        match high.take() {
+            None => high = Some(nibble),
+            Some(h) => output.push((h << 4) | nibble),
+        }
+    }
+    if let Some(h) = high {
+        output.push(h << 4);
     }
     Ok(output)
 }
@@ -353,6 +483,89 @@ mod tests {
         let stream = make_stream(dict, compressed);
         let decoded = decode_stream(&stream).expect("decode");
         assert_eq!(decoded, original.to_vec());
+    }
+
+    #[test]
+    fn decodes_ascii85_full_group() {
+        // Full 4-byte group "Man " → ASCII85 "9jqo^".
+        let encoded = b"9jqo^~>".to_vec();
+        let mut dict = PdfDictionary::new();
+        dict.insert(
+            "Filter".to_string(),
+            PdfValue::Name("ASCII85Decode".into()),
+        );
+        let stream = make_stream(dict, encoded);
+        assert_eq!(decode_stream(&stream).unwrap(), b"Man ".to_vec());
+    }
+
+    #[test]
+    fn decodes_ascii85_z_shortcut() {
+        let encoded = b"z~>".to_vec();
+        let mut dict = PdfDictionary::new();
+        dict.insert(
+            "Filter".to_string(),
+            PdfValue::Name("ASCII85Decode".into()),
+        );
+        let stream = make_stream(dict, encoded);
+        assert_eq!(decode_stream(&stream).unwrap(), vec![0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn decodes_filter_chain_ascii85_then_flate() {
+        // Encode plaintext with FlateDecode first, then ASCII85 wrap. The
+        // order the filter list uses is the DECODE order, so reading the
+        // stream applies ASCII85 first and FlateDecode second — the same
+        // order we use to produce the bytes in reverse.
+        let plaintext = b"PdfStreamFilterChainTest".to_vec();
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&plaintext).unwrap();
+        let flate_bytes = encoder.finish().unwrap();
+
+        // ASCII85 encode the FlateDecode payload.
+        let mut ascii85 = String::new();
+        for chunk in flate_bytes.chunks(4) {
+            let mut buf = [0u8; 4];
+            buf[..chunk.len()].copy_from_slice(chunk);
+            let value = u32::from_be_bytes(buf);
+            if chunk.len() == 4 && value == 0 {
+                ascii85.push('z');
+                continue;
+            }
+            let mut digits = [0u8; 5];
+            let mut v = value as u64;
+            for i in (0..5).rev() {
+                digits[i] = (v % 85) as u8 + b'!';
+                v /= 85;
+            }
+            let take = chunk.len() + 1;
+            for &digit in &digits[..take] {
+                ascii85.push(digit as char);
+            }
+        }
+        ascii85.push_str("~>");
+
+        let mut dict = PdfDictionary::new();
+        dict.insert(
+            "Filter".to_string(),
+            PdfValue::Array(vec![
+                PdfValue::Name("ASCII85Decode".into()),
+                PdfValue::Name("FlateDecode".into()),
+            ]),
+        );
+        let stream = make_stream(dict, ascii85.into_bytes());
+        assert_eq!(decode_stream(&stream).unwrap(), plaintext);
+    }
+
+    #[test]
+    fn decodes_ascii_hex() {
+        let encoded = b"48656C6C6F>".to_vec();
+        let mut dict = PdfDictionary::new();
+        dict.insert(
+            "Filter".to_string(),
+            PdfValue::Name("ASCIIHexDecode".into()),
+        );
+        let stream = make_stream(dict, encoded);
+        assert_eq!(decode_stream(&stream).unwrap(), b"Hello".to_vec());
     }
 
     #[test]

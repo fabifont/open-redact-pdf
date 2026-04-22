@@ -17,7 +17,7 @@ This project intentionally targets a narrow, explicit MVP.
 - PDF 1.5+ cross-reference streams (`/Type /XRef`) and the hybrid form where a legacy trailer carries an `XRefStm` pointer
 - Object streams (`/Type /ObjStm`) — compressed objects are materialized into the regular object store during parsing
 - Full-document rewrites on save (incremental updates and xref streams are flattened into a single classic-xref revision on output)
-- Unfiltered or `FlateDecode` streams, including `FlateDecode` with the TIFF predictor (`/Predictor 2`) and PNG predictors 10–15 (via `DecodeParms /Predictor`)
+- Unfiltered, `FlateDecode`, `ASCII85Decode`, and `ASCIIHexDecode` stream filters — including filter chains (e.g. `[/ASCII85Decode /FlateDecode]`) — with `FlateDecode`'s TIFF predictor (`/Predictor 2`) and PNG predictors 10–15 (via `DecodeParms /Predictor`) applied to the final stage
 - Page tree traversal with inherited resources, media boxes, crop boxes, and page rotation
 - Inline images (`BI`/`ID`/`EI`) are safely skipped during content stream parsing
 - Dictionary operands in content streams (e.g., `BDC` with `<</MCID 0>>`)
