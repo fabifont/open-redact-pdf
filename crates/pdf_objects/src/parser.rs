@@ -39,7 +39,7 @@ pub fn parse_pdf_with_password(
                 if object_ref.object_number == 0 {
                     continue;
                 }
-                let object = parse_indirect_object(bytes, *offset)?;
+                let object = parse_indirect_object(bytes, *offset, Some(&xref))?;
                 max_object_number = max_object_number.max(object_ref.object_number);
                 objects.insert(*object_ref, object);
             }
@@ -323,7 +323,11 @@ fn parse_classic_xref_section(bytes: &[u8], offset: usize) -> PdfResult<XrefSect
 }
 
 fn parse_xref_stream_section(bytes: &[u8], offset: usize) -> PdfResult<XrefSection> {
-    let object = parse_indirect_object(bytes, offset)?;
+    // The xref stream itself is read while the xref map is still being
+    // built, so there is no xref available to resolve indirect /Length
+    // references. Pass `None` and fall back to the endstream scan if the
+    // xref stream ever uses an indirect /Length (vanishingly rare).
+    let object = parse_indirect_object(bytes, offset, None)?;
     let stream = match object {
         PdfObject::Stream(stream) => stream,
         PdfObject::Value(_) => {
@@ -570,7 +574,11 @@ fn materialize_object_streams(
     Ok(())
 }
 
-fn parse_indirect_object(bytes: &[u8], offset: usize) -> PdfResult<PdfObject> {
+fn parse_indirect_object(
+    bytes: &[u8],
+    offset: usize,
+    xref: Option<&BTreeMap<ObjectRef, XrefEntry>>,
+) -> PdfResult<PdfObject> {
     let mut cursor = Cursor::new(bytes, offset);
     let _object_number = cursor.parse_u32()?;
     cursor.skip_ws_and_comments();
@@ -590,15 +598,19 @@ fn parse_indirect_object(bytes: &[u8], offset: usize) -> PdfResult<PdfObject> {
         cursor.consume_stream_line_break();
         let stream_start = cursor.position;
         // Prefer the Length entry from the stream dictionary to determine the
-        // data boundary.  This prevents binary stream data that happens to
-        // contain the literal bytes "endstream" from being truncated.
-        // Fall back to scanning for `endstream` when Length is absent,
-        // an indirect reference (can't resolve yet), or past EOF.
-        let length_hint = dict
-            .get("Length")
-            .and_then(PdfValue::as_integer)
-            .filter(|&len| len >= 0)
-            .map(|len| len as usize);
+        // data boundary. This prevents binary stream data that happens to
+        // contain the literal bytes "endstream" from being truncated. When
+        // /Length is an indirect reference we resolve it by following the
+        // xref entry for the referenced integer object; see
+        // `resolve_stream_length_ref`. A missing or unresolvable /Length
+        // falls back to scanning forward for `endstream`.
+        let length_hint = match dict.get("Length") {
+            Some(PdfValue::Integer(len)) if *len >= 0 => Some(*len as usize),
+            Some(PdfValue::Reference(target)) => {
+                xref.and_then(|map| resolve_stream_length_ref(bytes, map, *target))
+            }
+            _ => None,
+        };
         let (data, endstream_pos) = match length_hint {
             Some(len) if stream_start + len <= bytes.len() => {
                 // Verify the endstream keyword follows at the expected offset.
@@ -630,6 +642,36 @@ fn parse_indirect_object(bytes: &[u8], offset: usize) -> PdfResult<PdfObject> {
     } else {
         cursor.expect_keyword("endobj")?;
         Ok(PdfObject::Value(value))
+    }
+}
+
+/// Resolve an indirect `/Length` reference inside a stream dictionary to
+/// the plain non-negative integer it points at. Follows `target` through
+/// the xref table, parses the referenced object, and returns its integer
+/// value if and only if the resolved object is a plain integer value
+/// (not a stream, reference, or negative integer). Returns `None` when
+/// the target entry is missing, compressed, or the resolved value is not
+/// a usable length; the caller then falls back to scanning for
+/// `endstream`.
+fn resolve_stream_length_ref(
+    bytes: &[u8],
+    xref: &BTreeMap<ObjectRef, XrefEntry>,
+    target: ObjectRef,
+) -> Option<usize> {
+    let entry = xref.get(&target)?;
+    let offset = match entry {
+        XrefEntry::Uncompressed { offset, .. } => *offset,
+        // Compressed (ObjStm) length refs are exotic and have not shown up
+        // in the wild for stream /Length specifically; skip for now.
+        XrefEntry::Compressed { .. } | XrefEntry::Free => return None,
+    };
+    // Do not pass `xref` into the recursive parse — a /Length reference
+    // should point at a plain integer, and forbidding further recursion
+    // keeps a malformed cycle from spiralling.
+    let object = parse_indirect_object(bytes, offset, None).ok()?;
+    match object {
+        PdfObject::Value(PdfValue::Integer(len)) if len >= 0 => Some(len as usize),
+        _ => None,
     }
 }
 
@@ -1058,6 +1100,62 @@ mod tests {
 
         let document = parse_pdf(&pdf).expect("circular Prev should be tolerated");
         assert_eq!(document.pages.len(), 0);
+    }
+
+    #[test]
+    fn stream_length_indirect_reference_is_resolved() {
+        // Minimal PDF whose page content stream has `/Length 5 0 R`, where
+        // object 5 is a plain integer. The stream's payload includes the
+        // literal bytes "endstream" so the fallback endstream scan would
+        // underflow; resolving the indirect /Length reads the exact bytes.
+        let payload = b"--endstream--HIDDEN";
+        let mut pdf = Vec::new();
+        pdf.extend_from_slice(b"%PDF-1.4\n");
+
+        let obj1_offset = pdf.len();
+        pdf.extend_from_slice(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+
+        let obj2_offset = pdf.len();
+        pdf.extend_from_slice(
+            b"2 0 obj\n<< /Type /Pages /Count 1 /Kids [3 0 R] >>\nendobj\n",
+        );
+
+        let obj3_offset = pdf.len();
+        pdf.extend_from_slice(
+            b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << >> /Contents 4 0 R >>\nendobj\n",
+        );
+
+        let obj4_offset = pdf.len();
+        pdf.extend_from_slice(b"4 0 obj\n<< /Length 5 0 R >>\nstream\n");
+        pdf.extend_from_slice(payload);
+        pdf.extend_from_slice(b"\nendstream\nendobj\n");
+
+        let obj5_offset = pdf.len();
+        pdf.extend_from_slice(format!("5 0 obj\n{}\nendobj\n", payload.len()).as_bytes());
+
+        let xref_offset = pdf.len();
+        pdf.extend_from_slice(b"xref\n0 6\n");
+        pdf.extend_from_slice(b"0000000000 65535 f \n");
+        pdf.extend_from_slice(format!("{:010} 00000 n \n", obj1_offset).as_bytes());
+        pdf.extend_from_slice(format!("{:010} 00000 n \n", obj2_offset).as_bytes());
+        pdf.extend_from_slice(format!("{:010} 00000 n \n", obj3_offset).as_bytes());
+        pdf.extend_from_slice(format!("{:010} 00000 n \n", obj4_offset).as_bytes());
+        pdf.extend_from_slice(format!("{:010} 00000 n \n", obj5_offset).as_bytes());
+        pdf.extend_from_slice(b"trailer\n<< /Size 6 /Root 1 0 R >>\n");
+        pdf.extend_from_slice(format!("startxref\n{}\n%%EOF\n", xref_offset).as_bytes());
+
+        let document = parse_pdf(&pdf).expect("indirect-length fixture should parse");
+        let content_refs = &document.pages[0].content_refs;
+        let content_obj = document.file.objects.get(&content_refs[0]).unwrap();
+        let data = match content_obj {
+            PdfObject::Stream(stream) => &stream.data,
+            _ => panic!("expected stream object for page content"),
+        };
+        assert_eq!(
+            data.as_slice(),
+            payload,
+            "resolved indirect /Length should yield the exact original payload bytes"
+        );
     }
 
     #[test]
