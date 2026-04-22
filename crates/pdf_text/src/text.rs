@@ -306,21 +306,26 @@ fn build_visual_lines(page: &ExtractedPageText) -> Vec<Vec<usize>> {
     let mut indices = (0..page.glyphs.len())
         .filter(|i| page.glyphs[*i].visible)
         .collect::<Vec<_>>();
+    // Deterministic sort: primary y descending, secondary x ascending,
+    // with no threshold-based bucketing. A tolerant bucket (e.g. 1.5 pt)
+    // produced an intransitive comparator — two close-but-distinct lines
+    // would interleave in the sorted output, scrambling their characters
+    // once per-line x-sorting ran. Line grouping itself is handled by
+    // `glyph_belongs_to_line`, which still tolerates intra-line y
+    // jitter from subscripts or baseline adjustments.
     indices.sort_by(|left, right| {
         let left_center = glyph_center_y(&page.glyphs[*left]);
         let right_center = glyph_center_y(&page.glyphs[*right]);
-        let y_delta = (left_center - right_center).abs();
-        if y_delta > 1.5 {
-            right_center
-                .partial_cmp(&left_center)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        } else {
-            page.glyphs[*left]
-                .bbox
-                .x
-                .partial_cmp(&page.glyphs[*right].bbox.x)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        }
+        right_center
+            .partial_cmp(&left_center)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| {
+                page.glyphs[*left]
+                    .bbox
+                    .x
+                    .partial_cmp(&page.glyphs[*right].bbox.x)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
     });
 
     let mut lines: Vec<Vec<usize>> = Vec::new();
@@ -344,8 +349,36 @@ fn glyph_belongs_to_line(page: &ExtractedPageText, glyph_index: usize, line: &[u
     let line_height = average_line_height(page, line)
         .max(glyph.bbox.height)
         .max(1.0);
-    let overlap = line_vertical_overlap(page, glyph, line);
-    (glyph_center - line_center).abs() <= line_height * 0.55 || overlap >= line_height * 0.35
+    // Y tolerance with an absolute cap. Glyph bbox heights fall back
+    // to ~80% of the font em-square when font-metrics parsing is not
+    // available; for dense layouts (bank statements, address blocks,
+    // tax forms) the actual inter-line spacing is a fraction of that
+    // estimate, so a purely ratio-based tolerance over-merges adjacent
+    // rows. Capping the tolerance at 1 pt in user space lets typical
+    // per-line jitter through while keeping 1-2 pt baseline steps on
+    // separate lines.
+    let y_tolerance = (line_height * 0.3).min(1.0);
+    if (glyph_center - line_center).abs() > y_tolerance {
+        return false;
+    }
+
+    // X-monotonicity guard. A row of text has glyphs whose starting
+    // x coordinates ascend monotonically; a new glyph whose start x
+    // sits meaningfully before the last-encountered glyph's start x
+    // is almost certainly on a different visual row that happens to
+    // be only a point or two apart in y. Use `bbox.x` of each glyph
+    // (not `bbox.max_x()`) because aggressive TJ-array kerning in
+    // compressed text blocks makes successive glyph bboxes overlap
+    // heavily; the start-x of the most-recently appended glyph is a
+    // reliable "line watermark" thanks to the (y-desc, x-asc) feeder
+    // sort.
+    if let Some(last_on_line) = line.last().copied().map(|i| &page.glyphs[i]) {
+        let kerning_slack = 1.0;
+        if glyph.bbox.x + kerning_slack < last_on_line.bbox.x {
+            return false;
+        }
+    }
+    true
 }
 
 fn average_line_center_y(page: &ExtractedPageText, line: &[usize]) -> f64 {
@@ -362,15 +395,6 @@ fn average_line_height(page: &ExtractedPageText, line: &[usize]) -> f64 {
         .map(|glyph_index| page.glyphs[*glyph_index].bbox.height)
         .sum::<f64>();
     total / line.len().max(1) as f64
-}
-
-fn line_vertical_overlap(page: &ExtractedPageText, glyph: &Glyph, line: &[usize]) -> f64 {
-    line.iter()
-        .map(|glyph_index| {
-            let candidate = &page.glyphs[*glyph_index];
-            glyph.bbox.max_y().min(candidate.bbox.max_y()) - glyph.bbox.y.max(candidate.bbox.y)
-        })
-        .fold(0.0, f64::max)
 }
 
 fn glyph_center_y(glyph: &Glyph) -> f64 {
@@ -487,7 +511,12 @@ fn run_operations(
             "Td" => {
                 let tx = operand_number(operation, 0)?;
                 let ty = operand_number(operation, 1)?;
-                text_state.line_matrix = text_state.line_matrix.multiply(Matrix::translate(tx, ty));
+                // Text/line matrix updates compose a text-space translation
+                // BEFORE the current matrix (row-vector: `translate * Tm`),
+                // not after. With scaled text matrices (Tm like 9.5 0 0 9.5 x y)
+                // the previous `Tm * translate` form added tx/ty directly to
+                // page coordinates instead of applying them in text space.
+                text_state.line_matrix = Matrix::translate(tx, ty).multiply(text_state.line_matrix);
                 text_state.text_matrix = text_state.line_matrix;
                 if ty.abs() > f64::EPSILON {
                     context.pending_line_break = true;
@@ -497,14 +526,13 @@ fn run_operations(
                 let tx = operand_number(operation, 0)?;
                 let ty = operand_number(operation, 1)?;
                 text_state.leading = -ty;
-                text_state.line_matrix = text_state.line_matrix.multiply(Matrix::translate(tx, ty));
+                text_state.line_matrix = Matrix::translate(tx, ty).multiply(text_state.line_matrix);
                 text_state.text_matrix = text_state.line_matrix;
                 context.pending_line_break = true;
             }
             "T*" => {
-                text_state.line_matrix = text_state
-                    .line_matrix
-                    .multiply(Matrix::translate(0.0, -text_state.leading));
+                text_state.line_matrix = Matrix::translate(0.0, -text_state.leading)
+                    .multiply(text_state.line_matrix);
                 text_state.text_matrix = text_state.line_matrix;
                 context.pending_line_break = true;
             }
@@ -534,9 +562,8 @@ fn run_operations(
                 )?;
             }
             "'" => {
-                text_state.line_matrix = text_state
-                    .line_matrix
-                    .multiply(Matrix::translate(0.0, -text_state.leading));
+                text_state.line_matrix = Matrix::translate(0.0, -text_state.leading)
+                    .multiply(text_state.line_matrix);
                 text_state.text_matrix = text_state.line_matrix;
                 context.pending_line_break = true;
                 let string = operand_string(operation, 0)?;
@@ -554,9 +581,8 @@ fn run_operations(
             "\"" => {
                 text_state.word_spacing = operand_number(operation, 0)?;
                 text_state.character_spacing = operand_number(operation, 1)?;
-                text_state.line_matrix = text_state
-                    .line_matrix
-                    .multiply(Matrix::translate(0.0, -text_state.leading));
+                text_state.line_matrix = Matrix::translate(0.0, -text_state.leading)
+                    .multiply(text_state.line_matrix);
                 text_state.text_matrix = text_state.line_matrix;
                 context.pending_line_break = true;
                 let string = operand_string(operation, 2)?;
@@ -599,9 +625,8 @@ fn run_operations(
                             let scaled = -(adjustment / 1000.0)
                                 * text_state.font_size
                                 * (text_state.horizontal_scaling / 100.0);
-                            text_state.text_matrix = text_state
-                                .text_matrix
-                                .multiply(Matrix::translate(scaled, 0.0));
+                            text_state.text_matrix = Matrix::translate(scaled, 0.0)
+                                .multiply(text_state.text_matrix);
                         }
                     }
                 }
@@ -1065,9 +1090,8 @@ fn show_text(
                 item_text.push(character);
             }
         }
-        text_state.text_matrix = text_state
-            .text_matrix
-            .multiply(Matrix::translate(advance, 0.0));
+        text_state.text_matrix =
+            Matrix::translate(advance, 0.0).multiply(text_state.text_matrix);
     }
 
     if !item_text.is_empty() {
