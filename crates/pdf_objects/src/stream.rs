@@ -1008,6 +1008,41 @@ mod tests {
     }
 
     #[test]
+    fn decodes_filter_chain_run_length_then_flate() {
+        // Flate-compress a plaintext, then wrap the Flate bytes as a pure
+        // literal RunLengthDecode stream. Decoding has to run RL first and
+        // then Flate on the recovered payload — guarding the dispatch
+        // order inside `decode_stream`.
+        let plaintext = b"RunLengthInsideAFilterChain".to_vec();
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&plaintext).unwrap();
+        let flate_bytes = encoder.finish().unwrap();
+
+        // Encode `flate_bytes` as RunLengthDecode using only literal runs
+        // of up to 128 bytes followed by the 128 EOD marker.
+        let mut rl_bytes = Vec::new();
+        let mut offset = 0usize;
+        while offset < flate_bytes.len() {
+            let run_len = (flate_bytes.len() - offset).min(128);
+            rl_bytes.push((run_len - 1) as u8);
+            rl_bytes.extend_from_slice(&flate_bytes[offset..offset + run_len]);
+            offset += run_len;
+        }
+        rl_bytes.push(128);
+
+        let mut dict = PdfDictionary::new();
+        dict.insert(
+            "Filter".to_string(),
+            PdfValue::Array(vec![
+                PdfValue::Name("RunLengthDecode".into()),
+                PdfValue::Name("FlateDecode".into()),
+            ]),
+        );
+        let stream = make_stream(dict, rl_bytes);
+        assert_eq!(decode_stream(&stream).unwrap(), plaintext);
+    }
+
+    #[test]
     fn rejects_run_length_truncated_literal_run() {
         // Length byte 3 claims 4 bytes of literal but only 2 follow.
         let encoded = vec![3, b'A', b'B'];
