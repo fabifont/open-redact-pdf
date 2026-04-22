@@ -40,16 +40,13 @@ This project intentionally targets a narrow, explicit MVP.
 
 ## Explicitly unsupported or incomplete
 
-- Encrypted PDFs that use the public-key security handler — V = 1/2/4/5 Standard Security Handler with RC4, AES-128, and AES-256 are supported; non-empty user or owner passwords are supplied through the `open_with_password` / `openPdfWithPassword` entry points
-- Public-key encryption handlers
+- Encrypted PDFs that use the public-key security handler (`/Filter /Adobe.PubSec`) — V = 1/2/4/5 Standard Security Handler with RC4, AES-128, and AES-256 are supported; non-empty user or owner passwords are supplied through the `open_with_password` / `openPdfWithPassword` entry points
 - Incremental update preservation (output is always a flat rewrite; xref streams are rewritten as a classic xref table)
-- Full redaction of text, vector paint, and Image XObject invocations inside Form XObjects via copy-on-write. Each Form whose `BBox × Matrix × CTM` intersects a target is cloned per page; the copy's content stream is rewritten to strip the targeted glyphs, neutralize any vector paint operator that falls under a target, and replace intersecting Image `Do` invocations with `n`. Nested Forms are handled recursively up to depth 8, with each outer Form's `Resources.XObject` repointed at the redacted inner copy; other pages that share the original Forms are left untouched.
-- Redaction of documents whose catalog has `/OCProperties` with any layer off in the default configuration, or with `/BaseState /OFF`/`/Unchanged` — the engine rejects these up front because hidden-layer content would otherwise survive the redaction. Callers can opt in to an opt-in sanitization pass (`sanitizeHiddenOcgs: true`) which strips `BDC /OC /<name> ... EMC` content gated by hidden OCGs from every page before redaction runs, and clears the catalog's hidden-layer state on save. OCG markers inside nested Form XObjects are not yet rewritten — a warning is emitted when a page with sanitizable content also has XObjects.
+- Documents whose catalog has `/OCProperties` with any layer off in the default configuration or with `/BaseState /OFF` / `/Unchanged` are rejected up front unless the caller opts in via `sanitizeHiddenOcgs: true`. The opt-in pass strips `BDC /OC /<name> ... EMC` content gated by hidden OCGs and clears the catalog's hidden-layer state on save, but OCG markers inside nested Form XObjects are not yet rewritten — a warning is emitted when a page with sanitizable content also has XObjects
 - Type3 fonts
-- broad CID font support beyond the current `Identity-H` path
-- partial image rewriting
-- optional-content group sanitization
-- overlay text stamping
+- Composite (Type0) fonts with encodings other than `Identity-H`
+- Partial image rewriting when a redaction target covers only part of an Image XObject — whole-invocation neutralization is used instead
+- Stream filters outside the `FlateDecode` / `ASCII85Decode` / `ASCIIHexDecode` set (notably `LZWDecode`, `DCTDecode`, `JBIG2Decode`, `JPXDecode`, `CCITTFaxDecode`, `RunLengthDecode`)
 
 ## Failure model
 
