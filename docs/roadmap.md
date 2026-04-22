@@ -9,7 +9,7 @@ title: Roadmap
 - Classic xref parsing with incremental update chain support (follows `Prev` pointers)
 - Standard Security Handler decryption (V = 1/2 RC4; V = 4 R = 4 with the `/StdCF` crypt filter in `/CFM /V2` or `/CFM /AESV2` mode; V = 5 R = 5 or R = 6 with `/CFM /AESV3`, i.e. AES-256-CBC) under either the user password (including empty) or the owner password — the trailer's `/Encrypt` is consumed at parse time and downstream stages see a plaintext document. R = 6 runs the ISO 32000-2 iterative Algorithm 2.B hash; `/EncryptMetadata false` is honoured on V=4 (Algorithm 2 step-5 `0xFFFFFFFF` suffix and `/Type /Metadata` streams left in plaintext).
 - PDF 1.5+ cross-reference streams, object streams, and the hybrid `XRefStm` form
-- `FlateDecode` with the TIFF predictor (`/Predictor 2`) and PNG predictors (10–15) via `DecodeParms`
+- `FlateDecode` and `LZWDecode` with the TIFF predictor (`/Predictor 2`) and PNG predictors (10–15) via `DecodeParms`, plus `ASCII85Decode` and `ASCIIHexDecode` for text-oriented filter chains (`LZWDecode` honours `DecodeParms /EarlyChange`)
 - Page tree traversal with inherited resources, media boxes, crop boxes, and rotation
 - Content parsing for common text, path, image, clipping, color, graphics-state, and marked-content operators (including inline images and dictionary operands)
 - Simple-font text extraction and search geometry (including fonts set via ExtGState `gs` operator), with `ToUnicode` CMap decoding, `WinAnsiEncoding` for non-ASCII bytes, and `/Encoding /Differences` arrays resolved through an Adobe Glyph List subset
