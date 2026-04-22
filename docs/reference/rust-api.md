@@ -22,9 +22,9 @@ Methods:
 - `PdfDocument::open_with_password(bytes: &[u8], password: &[u8]) -> PdfResult<PdfDocument>` — opens an encrypted PDF using the supplied password. The password is tried first as the user password, then as the owner password. Returns `PdfError::InvalidPassword` if neither authenticates.
 - `PdfDocument::page_count(&self) -> usize`
 - `PdfDocument::page_size(&self, page_index: usize) -> PdfResult<PageSize>`
-- `PdfDocument::extract_text(&self, page_index: usize) -> PdfResult<PageText>`
-- `PdfDocument::search_text(&self, page_index: usize, query: &str) -> PdfResult<Vec<TextMatch>>`
-- `PdfDocument::apply_redactions(&mut self, plan: RedactionPlan) -> PdfResult<ApplyReport>`
+- `PdfDocument::extract_text(&self, page_index: usize) -> PdfResult<PageText>` — results are cached per-page; repeated calls on the same page skip the content-stream walk
+- `PdfDocument::search_text(&self, page_index: usize, query: &str) -> PdfResult<Vec<TextMatch>>` — reuses the same per-page cache as `extract_text`
+- `PdfDocument::apply_redactions(&mut self, plan: RedactionPlan) -> PdfResult<ApplyReport>` — clears the per-page text cache before returning so later extractions reflect the rewritten content streams
 - `PdfDocument::save(&self) -> PdfResult<Vec<u8>>`
 
 ### `PageSize`
