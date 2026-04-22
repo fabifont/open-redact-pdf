@@ -231,6 +231,32 @@ writeFixture("simple-text.pdf", {
   trailer: { Root: { ref: [1, 0] } },
 });
 
+// Content stream that uses a BX/EX compatibility section to wrap an
+// unrecognized operator (`sh`). Without BX/EX support the engine would
+// refuse to redact the page; with it, the unknown op is passed through
+// and the surrounding recognized operators are still rewritten normally.
+writeFixture("bx-ex-compat.pdf", {
+  objects: [
+    { id: 1, value: { Type: "/Catalog", Pages: { ref: [2, 0] } } },
+    { id: 2, value: { Type: "/Pages", Count: 1, Kids: [{ ref: [3, 0] }] } },
+    basePageObjects({
+      pageId: 3,
+      pagesId: 2,
+      contentId: 4,
+      resources: { Font: { F1: { ref: [5, 0] } } },
+    }),
+    {
+      id: 4,
+      stream: {
+        dict: {},
+        data: "BT\n/F1 24 Tf\n72 700 Td\n(Redact compat sample) Tj\n0 -32 Td\n(Keep alpha) Tj\nET\nBX\n/Pattern1 sh\nEX\n",
+      },
+    },
+    fontObject,
+  ],
+  trailer: { Root: { ref: [1, 0] } },
+});
+
 // Content stream compressed with the RunLengthDecode filter. Exercises
 // the parser/decoder path for `/Filter /RunLengthDecode` end-to-end.
 const runLengthContentStream =

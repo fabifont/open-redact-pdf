@@ -990,6 +990,49 @@ fn nested_cm_operators_produce_page_space_quads() {
 }
 
 #[test]
+fn bx_ex_compat_section_lets_redaction_proceed() {
+    let mut document =
+        PdfDocument::open(&fixture("bx-ex-compat.pdf")).expect("fixture should open");
+    let extracted = document.extract_text(0).expect("extraction should succeed");
+    assert!(extracted.text.contains("Redact compat sample"));
+    assert!(extracted.text.contains("Keep alpha"));
+
+    // The fixture's content stream carries an unrecognized `sh` operator
+    // inside a BX/EX section. Without the compatibility-section pass-through
+    // the engine would refuse to redact; with it, the redaction succeeds and
+    // the recognized text glyphs are still removed cleanly.
+    let matches = document
+        .search_text(0, "compat")
+        .expect("search should succeed");
+    let quads = matches[0]
+        .quads
+        .iter()
+        .map(|quad| quad.points)
+        .collect::<Vec<_>>();
+    document
+        .apply_redactions(RedactionPlan {
+            targets: vec![RedactionTarget::QuadGroup {
+                page_index: 0,
+                quads,
+            }],
+            mode: None,
+            fill_color: None,
+            overlay_text: None,
+            remove_intersecting_annotations: Some(false),
+            strip_metadata: Some(false),
+            strip_attachments: Some(false),
+            sanitize_hidden_ocgs: None,
+        })
+        .expect("redaction should succeed inside BX/EX fixture");
+
+    let saved = document.save().expect("save should succeed");
+    let reopened = PdfDocument::open(&saved).expect("saved pdf should reopen");
+    let after = reopened.extract_text(0).expect("reopen extraction");
+    assert!(!after.text.contains("compat"));
+    assert!(after.text.contains("Keep alpha"));
+}
+
+#[test]
 fn apply_redactions_invalidates_cached_page_text() {
     let mut document =
         PdfDocument::open(&fixture("simple-text.pdf")).expect("fixture should open");
