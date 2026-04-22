@@ -22,11 +22,25 @@ pub fn flate_encode(data: &[u8]) -> PdfResult<Vec<u8>> {
 
 pub fn decode_stream(stream: &PdfStream) -> PdfResult<Vec<u8>> {
     let filter_names = normalize_filter_list(stream.dict.get("Filter"))?;
+    let decode_parms = stream.dict.get("DecodeParms");
     let mut decoded = stream.data.clone();
-    for filter_name in &filter_names {
-        decoded = apply_filter(filter_name, &decoded)?;
+    for (index, filter_name) in filter_names.iter().enumerate() {
+        let is_last = index + 1 == filter_names.len();
+        decoded = match filter_name.as_str() {
+            // LZW needs `DecodeParms /EarlyChange`; every other filter ignores
+            // DecodeParms here because predictors are applied after the chain.
+            "LZWDecode" | "LZW" => {
+                let early_change = if is_last {
+                    lzw_early_change(decode_parms)?
+                } else {
+                    true
+                };
+                lzw_decode(&decoded, early_change)?
+            }
+            _ => apply_filter(filter_name, &decoded)?,
+        };
     }
-    apply_predictor(&decoded, stream.dict.get("DecodeParms"))
+    apply_predictor(&decoded, decode_parms)
 }
 
 /// Return the /Filter entry as an ordered list of filter names, whether
@@ -62,8 +76,42 @@ fn apply_filter(filter: &str, data: &[u8]) -> PdfResult<Vec<u8>> {
         "FlateDecode" | "Fl" => inflate(data),
         "ASCII85Decode" | "A85" => ascii85_decode(data),
         "ASCIIHexDecode" | "AHx" => ascii_hex_decode(data),
+        "LZWDecode" | "LZW" => lzw_decode(data, true),
         other => Err(PdfError::Unsupported(format!(
             "stream filter /{other} is not supported"
+        ))),
+    }
+}
+
+/// Read the `DecodeParms /EarlyChange` flag for an LZW stream. PDF
+/// defaults to `1` when the entry is missing; `0` disables the
+/// one-code-early width switch that TIFF-flavoured LZW implementations
+/// use. Any other value is rejected as corrupt so we never silently
+/// misalign on an unknown flag.
+fn lzw_early_change(decode_parms: Option<&PdfValue>) -> PdfResult<bool> {
+    let Some(value) = decode_parms else {
+        return Ok(true);
+    };
+    let dict = match value {
+        PdfValue::Dictionary(dict) => dict,
+        PdfValue::Null => return Ok(true),
+        PdfValue::Array(_) => {
+            return Err(PdfError::Unsupported(
+                "per-filter DecodeParms arrays are not supported".to_string(),
+            ));
+        }
+        _ => {
+            return Err(PdfError::Corrupt(
+                "DecodeParms is not a dictionary".to_string(),
+            ));
+        }
+    };
+    match dict.get("EarlyChange").and_then(PdfValue::as_integer) {
+        None => Ok(true),
+        Some(1) => Ok(true),
+        Some(0) => Ok(false),
+        Some(other) => Err(PdfError::Corrupt(format!(
+            "unsupported LZW EarlyChange value {other}"
         ))),
     }
 }
@@ -85,6 +133,157 @@ fn inflate(data: &[u8]) -> PdfResult<Vec<u8>> {
         ));
     }
     Ok(output)
+}
+
+/// Decode an LZW-encoded byte run (PDF § 7.4.4). Uses the TIFF-compatible
+/// variable-width code flavour: 9–12-bit codes, 256 = CLEAR, 257 = EOD,
+/// the literal dictionary seeds indices 0–255, and growth starts at 258.
+/// `early_change` mirrors `DecodeParms /EarlyChange` — `true` (the PDF
+/// default) switches to a wider code one entry before the dictionary is
+/// fully populated at the current width.
+fn lzw_decode(data: &[u8], early_change: bool) -> PdfResult<Vec<u8>> {
+    const CLEAR: u32 = 256;
+    const EOD: u32 = 257;
+    const MAX_WIDTH: u32 = 12;
+    let width_threshold = |width: u32| {
+        if early_change {
+            (1u32 << width) - 1
+        } else {
+            1u32 << width
+        }
+    };
+
+    let mut reader = BitReader::new(data);
+    let mut dict: Vec<Vec<u8>> = Vec::with_capacity(1 << MAX_WIDTH);
+    let reset_dict = |dict: &mut Vec<Vec<u8>>| {
+        dict.clear();
+        for byte in 0u32..256 {
+            dict.push(vec![byte as u8]);
+        }
+        dict.push(Vec::new()); // 256 — placeholder for CLEAR
+        dict.push(Vec::new()); // 257 — placeholder for EOD
+    };
+    reset_dict(&mut dict);
+
+    let mut output: Vec<u8> = Vec::new();
+    let mut code_width: u32 = 9;
+    let mut previous: Option<Vec<u8>> = None;
+    loop {
+        let Some(code) = reader.read_bits(code_width) else {
+            break;
+        };
+        if code == EOD {
+            break;
+        }
+        if code == CLEAR {
+            reset_dict(&mut dict);
+            code_width = 9;
+            previous = None;
+            continue;
+        }
+        let entry = if (code as usize) < dict.len() {
+            let entry = dict[code as usize].clone();
+            if entry.is_empty() {
+                return Err(PdfError::Corrupt(format!(
+                    "LZW code {code} references placeholder entry"
+                )));
+            }
+            entry
+        } else if code as usize == dict.len() {
+            // Standard LZW K+K[0] special case: the code points at the
+            // entry we are about to add, so reconstruct it from the
+            // previous entry plus its own first byte.
+            let prev = previous.clone().ok_or_else(|| {
+                PdfError::Corrupt("LZW code out of sequence".to_string())
+            })?;
+            let first = *prev.first().ok_or_else(|| {
+                PdfError::Corrupt("LZW previous entry was empty".to_string())
+            })?;
+            let mut entry = prev;
+            entry.push(first);
+            entry
+        } else {
+            return Err(PdfError::Corrupt(format!(
+                "LZW code {code} outside dictionary"
+            )));
+        };
+        if output.len() + entry.len() > MAX_DECOMPRESSED_SIZE as usize {
+            return Err(PdfError::Corrupt(
+                "decompressed stream exceeds maximum allowed size".to_string(),
+            ));
+        }
+        output.extend_from_slice(&entry);
+        if let Some(prev_entry) = previous.take() {
+            let mut new_entry = prev_entry;
+            new_entry.push(entry[0]);
+            if dict.len() < (1 << MAX_WIDTH) {
+                dict.push(new_entry);
+            }
+            // The encoder bumps width against `next_code` (the index of the
+            // slot just filled, i.e. `dict.len()` here) AFTER the insert.
+            // The decoder trails the encoder by one dictionary entry — the
+            // push for code N happens while processing code N+1 — so the
+            // decoder has to compare against `dict.len() + 1` to bump width
+            // at the same boundary the encoder did.
+            if (dict.len() as u32).saturating_add(1) >= width_threshold(code_width)
+                && code_width < MAX_WIDTH
+            {
+                code_width += 1;
+            }
+        }
+        previous = Some(entry);
+    }
+    Ok(output)
+}
+
+/// MSB-first bit reader used by the LZW decoder. The PDF spec § 7.4.4.2
+/// states codes are packed "with the high-order bit of each code
+/// appearing first", so bytes are consumed from the front of the stream
+/// and codes are shifted out from the top of an accumulating buffer.
+/// When the backing data runs out mid-code, the remaining bits are
+/// zero-padded — matching the encoder contract in § 7.4.4.3.
+struct BitReader<'a> {
+    data: &'a [u8],
+    byte_index: usize,
+    bit_buffer: u32,
+    bit_count: u32,
+}
+
+impl<'a> BitReader<'a> {
+    fn new(data: &'a [u8]) -> Self {
+        BitReader {
+            data,
+            byte_index: 0,
+            bit_buffer: 0,
+            bit_count: 0,
+        }
+    }
+
+    fn read_bits(&mut self, width: u32) -> Option<u32> {
+        while self.bit_count < width {
+            if self.byte_index >= self.data.len() {
+                if self.bit_count == 0 {
+                    return None;
+                }
+                // Pad with zero bits to flush the final partial code.
+                let pad = width - self.bit_count;
+                self.bit_buffer <<= pad;
+                let mask = (1u32 << width) - 1;
+                let code = self.bit_buffer & mask;
+                self.bit_count = 0;
+                self.bit_buffer = 0;
+                return Some(code);
+            }
+            self.bit_buffer = (self.bit_buffer << 8) | u32::from(self.data[self.byte_index]);
+            self.byte_index += 1;
+            self.bit_count += 8;
+        }
+        self.bit_count -= width;
+        let mask = (1u32 << width) - 1;
+        let code = (self.bit_buffer >> self.bit_count) & mask;
+        self.bit_buffer &= (1u32 << self.bit_count) - 1;
+        Some(code)
+    }
 }
 
 /// Decode an ASCII85-encoded byte run (PDF § 7.4.3). Whitespace is
@@ -575,5 +774,154 @@ mod tests {
             }
             other => panic!("expected Unsupported, got: {other:?}"),
         }
+    }
+
+    /// Encode `input` with the TIFF-compatible LZW variant used by PDF
+    /// (9–12-bit codes, 256 = CLEAR, 257 = EOD). `early_change` mirrors
+    /// `DecodeParms /EarlyChange`: `true` switches width one code earlier.
+    fn encode_lzw(input: &[u8], early_change: bool) -> Vec<u8> {
+        use std::collections::HashMap;
+
+        let mut out: Vec<u8> = Vec::new();
+        let mut bit_buffer: u64 = 0;
+        let mut bit_count: u32 = 0;
+        let flush_code = |code: u32,
+                          width: u32,
+                          bit_buffer: &mut u64,
+                          bit_count: &mut u32,
+                          out: &mut Vec<u8>| {
+            *bit_buffer = (*bit_buffer << width) | u64::from(code);
+            *bit_count += width;
+            while *bit_count >= 8 {
+                *bit_count -= 8;
+                out.push(((*bit_buffer >> *bit_count) & 0xFF) as u8);
+                *bit_buffer &= (1u64 << *bit_count) - 1;
+            }
+        };
+
+        // Start every stream with CLEAR.
+        flush_code(256, 9, &mut bit_buffer, &mut bit_count, &mut out);
+
+        let mut dict: HashMap<Vec<u8>, u32> = HashMap::new();
+        for b in 0u32..256 {
+            dict.insert(vec![b as u8], b);
+        }
+        let mut next_code: u32 = 258;
+        let mut code_width: u32 = 9;
+
+        let mut buffer: Vec<u8> = Vec::new();
+        for &byte in input {
+            let mut extended = buffer.clone();
+            extended.push(byte);
+            if dict.contains_key(&extended) {
+                buffer = extended;
+            } else {
+                let code = dict[&buffer];
+                flush_code(code, code_width, &mut bit_buffer, &mut bit_count, &mut out);
+                dict.insert(extended, next_code);
+                next_code += 1;
+                let threshold = if early_change {
+                    (1u32 << code_width) - 1
+                } else {
+                    1u32 << code_width
+                };
+                if next_code >= threshold && code_width < 12 {
+                    code_width += 1;
+                }
+                buffer = vec![byte];
+            }
+        }
+        if !buffer.is_empty() {
+            let code = dict[&buffer];
+            flush_code(code, code_width, &mut bit_buffer, &mut bit_count, &mut out);
+        }
+        flush_code(257, code_width, &mut bit_buffer, &mut bit_count, &mut out);
+        if bit_count > 0 {
+            out.push(((bit_buffer << (8 - bit_count)) & 0xFF) as u8);
+        }
+        out
+    }
+
+    #[test]
+    fn decodes_lzw_spec_example() {
+        // PDF 1.7 spec § 7.4.4.3, Annex A.3: "-----A---B" encodes to the
+        // 8 nine-bit codes 256, 45, 258, 258, 65, 259, 66, 257, which pack
+        // MSB-first into these nine bytes.
+        let data = vec![0x80, 0x0B, 0x60, 0x50, 0x22, 0x0C, 0x0C, 0x85, 0x01];
+        let mut dict = PdfDictionary::new();
+        dict.insert("Filter".to_string(), PdfValue::Name("LZWDecode".into()));
+        let stream = make_stream(dict, data);
+        assert_eq!(decode_stream(&stream).unwrap(), b"-----A---B".to_vec());
+    }
+
+    #[test]
+    fn decodes_lzw_roundtrip_default_early_change() {
+        let plaintext = b"the quick brown fox jumps over the lazy dog".to_vec();
+        let encoded = encode_lzw(&plaintext, true);
+        let mut dict = PdfDictionary::new();
+        dict.insert("Filter".to_string(), PdfValue::Name("LZWDecode".into()));
+        let stream = make_stream(dict, encoded);
+        assert_eq!(decode_stream(&stream).unwrap(), plaintext);
+    }
+
+    #[test]
+    fn decodes_lzw_roundtrip_early_change_zero() {
+        let plaintext = b"the quick brown fox jumps over the lazy dog".to_vec();
+        let encoded = encode_lzw(&plaintext, false);
+        let mut dict = PdfDictionary::new();
+        dict.insert("Filter".to_string(), PdfValue::Name("LZWDecode".into()));
+        let mut parms = PdfDictionary::new();
+        parms.insert("EarlyChange".to_string(), PdfValue::Integer(0));
+        dict.insert("DecodeParms".to_string(), PdfValue::Dictionary(parms));
+        let stream = make_stream(dict, encoded);
+        assert_eq!(decode_stream(&stream).unwrap(), plaintext);
+    }
+
+    #[test]
+    fn decodes_lzw_exercises_code_width_transitions() {
+        // Build an input long enough to force the dictionary past 511
+        // entries so the decoder exercises the 9→10 and 10→11 bit width
+        // transitions. ~1200 unique trigrams from a pangram-ish repeat
+        // suffices.
+        let mut plaintext = Vec::new();
+        for i in 0u16..1200 {
+            plaintext.push(b'a' + (i % 26) as u8);
+            plaintext.push(b'A' + (i % 26) as u8);
+            plaintext.push(b'0' + (i % 10) as u8);
+        }
+        let encoded = encode_lzw(&plaintext, true);
+        let mut dict = PdfDictionary::new();
+        dict.insert("Filter".to_string(), PdfValue::Name("LZWDecode".into()));
+        let stream = make_stream(dict, encoded);
+        assert_eq!(decode_stream(&stream).unwrap(), plaintext);
+    }
+
+    #[test]
+    fn rejects_lzw_out_of_range_code() {
+        // Single 9-bit code 0x1FF (= 511) after a CLEAR is outside the
+        // still-256-entry dictionary and not equal to `next_code` yet,
+        // so the decoder must refuse rather than silently emit.
+        let mut out: Vec<u8> = Vec::new();
+        let mut bit_buffer: u64 = 0;
+        let mut bit_count: u32 = 0;
+        let mut push = |code: u32, width: u32| {
+            bit_buffer = (bit_buffer << width) | u64::from(code);
+            bit_count += width;
+            while bit_count >= 8 {
+                bit_count -= 8;
+                out.push(((bit_buffer >> bit_count) & 0xFF) as u8);
+                bit_buffer &= (1u64 << bit_count) - 1;
+            }
+        };
+        push(256, 9); // CLEAR
+        push(511, 9); // invalid
+        if bit_count > 0 {
+            out.push(((bit_buffer << (8 - bit_count)) & 0xFF) as u8);
+        }
+        let mut dict = PdfDictionary::new();
+        dict.insert("Filter".to_string(), PdfValue::Name("LZWDecode".into()));
+        let stream = make_stream(dict, out);
+        let err = decode_stream(&stream).unwrap_err();
+        assert!(matches!(err, PdfError::Corrupt(_)), "got: {err:?}");
     }
 }
