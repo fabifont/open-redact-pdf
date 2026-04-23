@@ -54,6 +54,7 @@ The corpus under `tests/fixtures/` exercises every supported path of the engine.
 - **run-length-content.pdf** — `/Filter /RunLengthDecode` content stream
 - **bx-ex-compat.pdf** — BX/EX compatibility section enclosing an unrecognized operator
 - **dense-layout.pdf** — dense tabular layout (4 rows, 2pt apart) to guard visual-line grouping
+- **ultra-dense-layout.pdf** — pathological tabular layout (3 rows, 1pt apart) that regressed before the float-epsilon fix to line grouping
 
 ## Fixture generation
 
