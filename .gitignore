@@ -19,3 +19,4 @@ apps/demo-web/tsconfig.tsbuildinfo
 # Local sample PDFs with sensitive data, kept out of VCS. Scoped to the
 # repo root so that committed fixtures under tests/fixtures/ are unaffected.
 /*.pdf
+docs/pdf-specs/
