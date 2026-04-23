@@ -1006,6 +1006,41 @@ fn mac_roman_encoded_simple_font_decodes_mac_specific_bytes() {
         "MacRoman bytes 0xD2/0xD3 should decode to curly double quotes: got {:?}",
         extracted.text
     );
+
+    // Also verify redaction: search for "World" and confirm the match
+    // covers only the World glyphs (not the curly quotes or "Hello"),
+    // then redact and reopen.
+    let mut document =
+        PdfDocument::open(&fixture("mac-roman-encoding.pdf")).expect("fixture should open");
+    let matches = document
+        .search_text(0, "World")
+        .expect("search should succeed");
+    assert_eq!(matches.len(), 1);
+    let quads = matches[0]
+        .quads
+        .iter()
+        .map(|quad| quad.points)
+        .collect::<Vec<_>>();
+    document
+        .apply_redactions(RedactionPlan {
+            targets: vec![RedactionTarget::QuadGroup {
+                page_index: 0,
+                quads,
+            }],
+            mode: None,
+            fill_color: None,
+            overlay_text: None,
+            remove_intersecting_annotations: Some(false),
+            strip_metadata: Some(false),
+            strip_attachments: Some(false),
+            sanitize_hidden_ocgs: None,
+        })
+        .expect("MacRoman redaction should succeed");
+    let saved = document.save().expect("save should succeed");
+    let reopened = PdfDocument::open(&saved).expect("saved pdf should reopen");
+    let after = reopened.extract_text(0).expect("reopen extraction");
+    assert!(!after.text.contains("World"));
+    assert!(after.text.contains("Hello"));
 }
 
 #[test]
