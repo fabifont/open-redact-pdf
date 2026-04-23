@@ -104,8 +104,7 @@ export function App() {
       setHandle(null);
     }
     const input = Uint8Array.from(bytes);
-    const nextHandle =
-      password === null ? openPdf(input) : openPdfWithPassword(input, password);
+    const nextHandle = password === null ? openPdf(input) : openPdfWithPassword(input, password);
     const pageCount = getPageCount(nextHandle);
     const sizes = Array.from({ length: pageCount }, (_, pageIndex) =>
       getPageSize(nextHandle, pageIndex)
@@ -331,11 +330,7 @@ export function App() {
           <button type="submit" className="password-prompt-submit">
             Open
           </button>
-          <button
-            type="button"
-            className="password-prompt-cancel"
-            onClick={cancelPasswordPrompt}
-          >
+          <button type="button" className="password-prompt-cancel" onClick={cancelPasswordPrompt}>
             Cancel
           </button>
         </form>

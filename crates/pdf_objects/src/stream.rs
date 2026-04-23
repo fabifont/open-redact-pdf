@@ -194,12 +194,12 @@ fn lzw_decode(data: &[u8], early_change: bool) -> PdfResult<Vec<u8>> {
             // Standard LZW K+K[0] special case: the code points at the
             // entry we are about to add, so reconstruct it from the
             // previous entry plus its own first byte.
-            let prev = previous.clone().ok_or_else(|| {
-                PdfError::Corrupt("LZW code out of sequence".to_string())
-            })?;
-            let first = *prev.first().ok_or_else(|| {
-                PdfError::Corrupt("LZW previous entry was empty".to_string())
-            })?;
+            let prev = previous
+                .clone()
+                .ok_or_else(|| PdfError::Corrupt("LZW code out of sequence".to_string()))?;
+            let first = *prev
+                .first()
+                .ok_or_else(|| PdfError::Corrupt("LZW previous entry was empty".to_string()))?;
             let mut entry = prev;
             entry.push(first);
             entry

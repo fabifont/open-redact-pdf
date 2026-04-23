@@ -1,4 +1,9 @@
-import type { ApplyReport, QuadGroupTarget, RectTarget, RedactionMode } from "@fabifont/open-redact-pdf";
+import type {
+  ApplyReport,
+  QuadGroupTarget,
+  RectTarget,
+  RedactionMode,
+} from "@fabifont/open-redact-pdf";
 
 type UiTextMatch = {
   text: string;

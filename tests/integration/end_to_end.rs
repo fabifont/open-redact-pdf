@@ -1071,9 +1071,7 @@ fn ultra_dense_rows_one_pt_apart_are_probed() {
     // boundary keeps exactly-1pt-apart rows on their own lines.
     let document =
         PdfDocument::open(&fixture("ultra-dense-layout.pdf")).expect("fixture should open");
-    let extracted = document
-        .extract_text(0)
-        .expect("extraction should succeed");
+    let extracted = document.extract_text(0).expect("extraction should succeed");
     assert!(extracted.text.contains("Row Alpha 1000"));
     assert!(extracted.text.contains("Row Beta 2000"));
     assert!(extracted.text.contains("Row Gamma 3000"));
@@ -1099,11 +1097,8 @@ fn dense_layout_rows_are_not_merged_into_one_line() {
     // for "Account" and each account number's surrounding row text should
     // stay on its own visual line so search and quad derivation don't
     // confuse adjacent rows.
-    let document =
-        PdfDocument::open(&fixture("dense-layout.pdf")).expect("fixture should open");
-    let extracted = document
-        .extract_text(0)
-        .expect("extraction should succeed");
+    let document = PdfDocument::open(&fixture("dense-layout.pdf")).expect("fixture should open");
+    let extracted = document.extract_text(0).expect("extraction should succeed");
     assert!(extracted.text.contains("Account A 1111"));
     assert!(extracted.text.contains("Account B 2222"));
     assert!(extracted.text.contains("Account C 3333"));
@@ -1185,13 +1180,10 @@ fn bx_ex_compat_section_lets_redaction_proceed() {
 
 #[test]
 fn apply_redactions_invalidates_cached_page_text() {
-    let mut document =
-        PdfDocument::open(&fixture("simple-text.pdf")).expect("fixture should open");
+    let mut document = PdfDocument::open(&fixture("simple-text.pdf")).expect("fixture should open");
 
     // Warm the per-page text cache.
-    let before = document
-        .extract_text(0)
-        .expect("extraction should succeed");
+    let before = document.extract_text(0).expect("extraction should succeed");
     assert!(before.text.contains("Secret Alpha"));
 
     // Redact the "Secret" glyph run in place.
@@ -1289,8 +1281,7 @@ fn run_length_compressed_content_stream_is_readable_and_redactable() {
 
 #[test]
 fn lzw_compressed_content_stream_is_readable_and_redactable() {
-    let document =
-        PdfDocument::open(&fixture("lzw-content.pdf")).expect("fixture should open");
+    let document = PdfDocument::open(&fixture("lzw-content.pdf")).expect("fixture should open");
     let extracted = document
         .extract_text(0)
         .expect("text extraction should succeed");
@@ -1301,8 +1292,7 @@ fn lzw_compressed_content_stream_is_readable_and_redactable() {
     );
     assert!(extracted.text.contains("Keep alpha"));
 
-    let mut document =
-        PdfDocument::open(&fixture("lzw-content.pdf")).expect("fixture should open");
+    let mut document = PdfDocument::open(&fixture("lzw-content.pdf")).expect("fixture should open");
     let matches = document
         .search_text(0, "LZW")
         .expect("search should succeed");
