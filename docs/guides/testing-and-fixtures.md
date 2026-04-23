@@ -42,6 +42,8 @@ The corpus under `tests/fixtures/` exercises every supported path of the engine.
 - **type0-search.pdf** — `Type0` + `Identity-H` + `ToUnicode` search coverage
 - **winansi-font.pdf** — Windows-1252 repertoire beyond ASCII
 - **encoding-differences.pdf** — `/Encoding /Differences` + Adobe Glyph List subset
+- **mac-roman-encoding.pdf** — `/Encoding /MacRomanEncoding` with Mac-specific bytes (`0xD2`/`0xD3` curly quotes)
+- **standard-encoding.pdf** — `/Encoding /StandardEncoding` with the `0x27`/`0x60` = `quoteright`/`quoteleft` quirk
 - **extgstate-font.pdf** — font installed via an ExtGState `gs` operator
 - **form-xobject-text.pdf** / **form-xobject-nested.pdf** — Form XObject copy-on-write redaction (single + nested)
 - **nested-cm.pdf** — nested `q`/`cm`/`Q` blocks

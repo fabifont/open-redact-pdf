@@ -231,6 +231,44 @@ writeFixture("simple-text.pdf", {
   trailer: { Root: { ref: [1, 0] } },
 });
 
+// StandardEncoding fixture: Helvetica simple font with `/Encoding
+// /StandardEncoding`. Adobe Standard Encoding maps 0x27 to `quoteright`
+// (U+2019) and 0x60 to `quoteleft` (U+2018) rather than the ASCII
+// apostrophe and grave accent. This fixture encodes "Don't" + grave + "e"
+// so that a correct StandardEncoding path yields "Don\u{2019}t\u{2018}e".
+writeFixture("standard-encoding.pdf", {
+  objects: [
+    { id: 1, value: { Type: "/Catalog", Pages: { ref: [2, 0] } } },
+    { id: 2, value: { Type: "/Pages", Count: 1, Kids: [{ ref: [3, 0] }] } },
+    basePageObjects({
+      pageId: 3,
+      pagesId: 2,
+      contentId: 4,
+      resources: { Font: { F1: { ref: [6, 0] } } },
+    }),
+    {
+      id: 4,
+      stream: {
+        dict: {},
+        // Hex bytes: 446F6E = "Don", 27 = quoteright, 74 = "t",
+        // 60 = quoteleft, 65 = "e".
+        data: "BT\n/F1 24 Tf\n72 700 Td\n<446F6E27746065> Tj\nET\n",
+      },
+    },
+    fontObject,
+    {
+      id: 6,
+      value: {
+        Type: "/Font",
+        Subtype: "/Type1",
+        BaseFont: "/Helvetica",
+        Encoding: "/StandardEncoding",
+      },
+    },
+  ],
+  trailer: { Root: { ref: [1, 0] } },
+});
+
 // MacRomanEncoding fixture: Helvetica simple font with `/Encoding
 // /MacRomanEncoding`. The content stream uses a PDF hex string to
 // embed bytes that only make sense under Mac Roman — e.g. 0xD2/0xD3

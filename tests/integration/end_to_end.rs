@@ -990,6 +990,25 @@ fn nested_cm_operators_produce_page_space_quads() {
 }
 
 #[test]
+fn standard_encoded_simple_font_decodes_quoteright_and_quoteleft() {
+    // The fixture encodes the byte sequence `D o n 0x27 t 0x60 e`. Under
+    // Adobe StandardEncoding 0x27 is `quoteright` = U+2019 and 0x60 is
+    // `quoteleft` = U+2018, so the extracted text should be
+    // "Don\u{2019}t\u{2018}e" rather than "Don't`e" that Identity /
+    // WinAnsi decoders would produce.
+    let document =
+        PdfDocument::open(&fixture("standard-encoding.pdf")).expect("fixture should open");
+    let extracted = document
+        .extract_text(0)
+        .expect("text extraction should succeed");
+    assert!(
+        extracted.text.contains("Don\u{2019}t\u{2018}e"),
+        "StandardEncoding 0x27/0x60 should decode to curly quotes: got {:?}",
+        extracted.text
+    );
+}
+
+#[test]
 fn mac_roman_encoded_simple_font_decodes_mac_specific_bytes() {
     // The fixture encodes `Hello "World"` where the outer quotes are
     // Mac Roman bytes 0xD2 (U+201C) and 0xD3 (U+201D). Under WinAnsi

@@ -66,7 +66,7 @@ Deep technical documentation covering PDF spec concepts, implementation decision
 - Unfiltered or `FlateDecode` streams, including PNG and TIFF `DecodeParms` predictors
 - Deterministic full-document rewrites with FlateDecode-compressed content streams
 - Form XObjects traversed for text extraction, search, and copy-on-write redaction (text, vector paint, and Image `Do` invocations inside the Form), with nested Forms handled recursively
-- `Type1`, `TrueType`, and `Type0` / `Identity-H` text with `ToUnicode`, `WinAnsiEncoding`, `MacRomanEncoding`, and `/Encoding /Differences` decoding
+- `Type1`, `TrueType`, and `Type0` / `Identity-H` text with `ToUnicode`, `WinAnsiEncoding`, `MacRomanEncoding`, `StandardEncoding`, and `/Encoding /Differences` decoding
 - Rectangle, quad, and quad-group redaction targets in canonical page space
 - Three redaction modes: `strip`, `redact` (default), and `erase`, with optional `overlayText` labels in `redact` mode
 - Conservative image redaction at invocation level

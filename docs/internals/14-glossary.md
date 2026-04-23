@@ -40,7 +40,7 @@ The final output coordinate system — pixels on a screen or dots on a printer. 
 A file attached to a PDF document via the `Names/EmbeddedFiles` name tree. Embedded files exist outside the **content stream** and are invisible to content-stream redaction. The engine always removes them when `strip_attachments` is enabled.
 
 ### Encoding (font)
-The mapping from byte values in a string operand to glyph codes. Simple fonts use a single-byte encoding; this engine supports `WinAnsiEncoding` and `MacRomanEncoding` fully, plus `/Encoding` dictionaries with a `/Differences` array resolved through an Adobe Glyph List subset. Composite fonts use multi-byte encodings; this engine supports `Identity-H` only.
+The mapping from byte values in a string operand to glyph codes. Simple fonts use a single-byte encoding; this engine supports `WinAnsiEncoding`, `MacRomanEncoding`, and `StandardEncoding` fully, plus `/Encoding` dictionaries with a `/Differences` array resolved through an Adobe Glyph List subset. Composite fonts use multi-byte encodings; this engine supports `Identity-H` only.
 
 ### ExtGState
 A named graphics state parameter dictionary stored in the page's `/Resources/ExtGState` subdictionary. Applied with the `gs` operator. Can carry a `Font` array that sets the current font and size; the engine pre-loads these fonts at page initialization. See `06-text-system.md §1`.

@@ -833,6 +833,12 @@ enum SimpleEncodingBase {
     /// Codes `0x20..=0x7E` are ASCII; `0x80..=0xFF` carry the Mac Roman
     /// punctuation and accented-letter repertoire (e.g. `0xD2` = U+201C).
     MacRoman,
+    /// PDF `StandardEncoding` — Adobe's original 8-bit PostScript encoding.
+    /// Matches ASCII through `0x7E` except for a couple of historical
+    /// punctuation choices (`0x27` = `quoteright` = U+2019, `0x60` =
+    /// `quoteleft` = U+2018) and continues with a sparse high-bit table of
+    /// Latin-1 supplement and ligature glyphs.
+    Standard,
 }
 
 #[derive(Debug, Clone)]
@@ -1131,6 +1137,7 @@ fn decode_simple_byte(font: &SimpleFont, byte: u8) -> String {
     let character = match font.encoding.base {
         SimpleEncodingBase::WinAnsi => winansi_byte_to_char(byte),
         SimpleEncodingBase::MacRoman => mac_roman_byte_to_char(byte),
+        SimpleEncodingBase::Standard => standard_byte_to_char(byte),
         SimpleEncodingBase::Identity => identity_byte_to_char(byte),
     };
     character
@@ -1385,6 +1392,75 @@ fn winansi_byte_to_char(byte: u8) -> Option<char> {
     }
 }
 
+/// Decode a single byte under the PDF `StandardEncoding` table (PDF Annex D,
+/// table E.5 — "Adobe Standard Encoding"). ASCII codes pass through
+/// except for `0x27` (`quoteright` = U+2019) and `0x60` (`quoteleft` =
+/// U+2018), which are Adobe's historical typographic-quote choice. The
+/// high-bit range is sparse and carries Latin-1 supplement glyphs,
+/// currency, ligatures, and accented-letter bases. Codes not defined in
+/// the encoding return `None`.
+fn standard_byte_to_char(byte: u8) -> Option<char> {
+    match byte {
+        0x27 => Some('\u{2019}'),
+        0x60 => Some('\u{2018}'),
+        0x20..=0x7E => Some(byte as char),
+        0xA1 => Some('\u{00A1}'),
+        0xA2 => Some('\u{00A2}'),
+        0xA3 => Some('\u{00A3}'),
+        0xA4 => Some('\u{2044}'),
+        0xA5 => Some('\u{00A5}'),
+        0xA6 => Some('\u{0192}'),
+        0xA7 => Some('\u{00A7}'),
+        0xA8 => Some('\u{00A4}'),
+        0xA9 => Some('\u{0027}'),
+        0xAA => Some('\u{201C}'),
+        0xAB => Some('\u{00AB}'),
+        0xAC => Some('\u{2039}'),
+        0xAD => Some('\u{203A}'),
+        0xAE => Some('\u{FB01}'),
+        0xAF => Some('\u{FB02}'),
+        0xB1 => Some('\u{2013}'),
+        0xB2 => Some('\u{2020}'),
+        0xB3 => Some('\u{2021}'),
+        0xB4 => Some('\u{00B7}'),
+        0xB6 => Some('\u{00B6}'),
+        0xB7 => Some('\u{2022}'),
+        0xB8 => Some('\u{201A}'),
+        0xB9 => Some('\u{201E}'),
+        0xBA => Some('\u{201D}'),
+        0xBB => Some('\u{00BB}'),
+        0xBC => Some('\u{2026}'),
+        0xBD => Some('\u{2030}'),
+        0xBF => Some('\u{00BF}'),
+        0xC1 => Some('\u{0060}'),
+        0xC2 => Some('\u{00B4}'),
+        0xC3 => Some('\u{02C6}'),
+        0xC4 => Some('\u{02DC}'),
+        0xC5 => Some('\u{00AF}'),
+        0xC6 => Some('\u{02D8}'),
+        0xC7 => Some('\u{02D9}'),
+        0xC8 => Some('\u{00A8}'),
+        0xCA => Some('\u{02DA}'),
+        0xCB => Some('\u{00B8}'),
+        0xCD => Some('\u{02DD}'),
+        0xCE => Some('\u{02DB}'),
+        0xCF => Some('\u{02C7}'),
+        0xE1 => Some('\u{00C6}'),
+        0xE3 => Some('\u{00AA}'),
+        0xE8 => Some('\u{0141}'),
+        0xE9 => Some('\u{00D8}'),
+        0xEA => Some('\u{0152}'),
+        0xEB => Some('\u{00BA}'),
+        0xF1 => Some('\u{00E6}'),
+        0xF5 => Some('\u{0131}'),
+        0xF8 => Some('\u{0142}'),
+        0xF9 => Some('\u{00F8}'),
+        0xFA => Some('\u{0153}'),
+        0xFB => Some('\u{00DF}'),
+        _ => None,
+    }
+}
+
 /// Decode a single byte under the PDF `MacRomanEncoding` table (PDF Annex D).
 ///
 /// Codes `0x20..=0x7E` are plain ASCII. Codes `0x80..=0xFF` carry the Mac
@@ -1559,6 +1635,7 @@ fn simple_encoding_base_from_name(name: &str) -> SimpleEncodingBase {
     match name {
         "WinAnsiEncoding" => SimpleEncodingBase::WinAnsi,
         "MacRomanEncoding" => SimpleEncodingBase::MacRoman,
+        "StandardEncoding" => SimpleEncodingBase::Standard,
         _ => SimpleEncodingBase::Identity,
     }
 }

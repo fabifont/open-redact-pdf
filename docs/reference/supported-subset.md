@@ -30,7 +30,7 @@ This project intentionally targets a narrow, explicit MVP.
 - Compatibility sections (`BX` / `EX`) — recognized operators inside the section are processed normally, and unrecognized operators are passed through per PDF § 7.8.2 instead of rejecting the page
 - ExtGState font entries (fonts set via `gs` operator)
 - Image XObject invocation detection
-- `Type1` and `TrueType` fonts in the current text path, including `ToUnicode` CMap decoding, `/Encoding /WinAnsiEncoding` (full Windows-1252 repertoire) and `/Encoding /MacRomanEncoding` (full Mac Roman repertoire) for non-ASCII bytes, and `/Encoding` dictionaries with a `/Differences` array resolved through an Adobe Glyph List subset
+- `Type1` and `TrueType` fonts in the current text path, including `ToUnicode` CMap decoding, `/Encoding /WinAnsiEncoding` (full Windows-1252 repertoire), `/Encoding /MacRomanEncoding` (full Mac Roman repertoire), `/Encoding /StandardEncoding` (Adobe Standard PostScript encoding, including its `quoteright` / `quoteleft` treatment of `0x27` and `0x60`), and `/Encoding` dictionaries with a `/Differences` array resolved through an Adobe Glyph List subset
 - Form XObjects (`/Subtype /Form`) traversed during text extraction and search, including the Form's `Matrix`, its own `Resources.Font` and `Resources.ExtGState`, and cycle-protected recursion
 - `Type0` with `Identity-H`, two-byte CIDs, and `ToUnicode` maps
 - Rectangle, quad, and quad-group redaction targets
