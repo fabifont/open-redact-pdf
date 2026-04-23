@@ -1,6 +1,6 @@
 {
   "name": "@fabifont/open-redact-pdf",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": false,
   "description": "Browser-first PDF redaction SDK for open-redact-pdf.",
   "keywords": ["pdf", "redaction", "wasm", "typescript", "browser", "privacy"],
