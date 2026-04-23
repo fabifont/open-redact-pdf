@@ -307,6 +307,36 @@ writeFixture("mac-roman-encoding.pdf", {
   trailer: { Root: { ref: [1, 0] } },
 });
 
+// Pathologically dense layout: 8pt font with rows only 1pt apart. Sits
+// right at the boundary of the absolute 1pt y-tolerance cap; regression
+// guard against future tolerance tweaks that would collapse such rows.
+writeFixture("ultra-dense-layout.pdf", {
+  objects: [
+    { id: 1, value: { Type: "/Catalog", Pages: { ref: [2, 0] } } },
+    { id: 2, value: { Type: "/Pages", Count: 1, Kids: [{ ref: [3, 0] }] } },
+    basePageObjects({
+      pageId: 3,
+      pagesId: 2,
+      contentId: 4,
+      resources: { Font: { F1: { ref: [5, 0] } } },
+    }),
+    {
+      id: 4,
+      stream: {
+        dict: {},
+        data:
+          "BT\n/F1 8 Tf\n" +
+          "72 700 Td (Row Alpha 1000) Tj\n" +
+          "0 -1 Td (Row Beta 2000) Tj\n" +
+          "0 -1 Td (Row Gamma 3000) Tj\n" +
+          "ET\n",
+      },
+    },
+    fontObject,
+  ],
+  trailer: { Root: { ref: [1, 0] } },
+});
+
 // Dense layout: small font, very tight leading between rows so adjacent
 // baselines sit ~2pt apart. Exercises the visual-line grouping heuristic
 // under conditions where a naive y-tolerance could merge rows.

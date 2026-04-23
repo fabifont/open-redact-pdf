@@ -1063,6 +1063,35 @@ fn mac_roman_encoded_simple_font_decodes_mac_specific_bytes() {
 }
 
 #[test]
+fn ultra_dense_rows_one_pt_apart_are_probed() {
+    // Rows sit only 1pt apart at 8pt Helvetica. Previously the line
+    // grouper's y-tolerance used `> 1.0pt` so a 1pt gap merged — the
+    // later row's trailing glyphs drifted into the earlier row once
+    // their x passed the earlier row's last-glyph watermark. The `>=`
+    // boundary keeps exactly-1pt-apart rows on their own lines.
+    let document =
+        PdfDocument::open(&fixture("ultra-dense-layout.pdf")).expect("fixture should open");
+    let extracted = document
+        .extract_text(0)
+        .expect("extraction should succeed");
+    assert!(extracted.text.contains("Row Alpha 1000"));
+    assert!(extracted.text.contains("Row Beta 2000"));
+    assert!(extracted.text.contains("Row Gamma 3000"));
+
+    for needle in ["1000", "2000", "3000"] {
+        let matches = document
+            .search_text(0, needle)
+            .expect("search should succeed");
+        assert_eq!(
+            matches.len(),
+            1,
+            "expected exactly one match for {needle}, got {:?}",
+            matches
+        );
+    }
+}
+
+#[test]
 fn dense_layout_rows_are_not_merged_into_one_line() {
     // The fixture stacks four rows only 2pt apart in y at 6pt Helvetica,
     // the kind of layout that previously tripped up `line_height × 0.3`

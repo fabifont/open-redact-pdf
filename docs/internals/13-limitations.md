@@ -57,7 +57,7 @@ The following improvements are listed in priority order, weighted by coverage im
 1. **Broader composite font encodings** — documents using Adobe's predefined CMaps (`UniJIS-UTF16-H`, `UniGB-UCS2-H`, `UniCNS-UTF16-H`, `UniKS-UCS2-H`) still error out; wiring these in would unlock CJK PDFs.
 2. **Object stream re-emission on save** — the writer currently flattens the input xref stream and any object streams into a classic xref table with inline indirect objects, which can double the saved size of modern PDFs. Re-emitting as an xref stream + object streams would match the input shape.
 3. **Broaden encrypted PDF support** — RC4 (V = 1/2), AES-128 (V = 4 R = 4), and AES-256 (V = 5 R = 5 / R = 6) under the user or owner password are in. The remaining gap is the public-key security handler (`/Filter /Adobe.PubSec`), which wraps the file key in a PKCS#7 recipient envelope rather than deriving it from a password. Adding it would allow opening PDFs sent to a specific certificate.
-4. **Smarter line grouping** — the current visual line-detection heuristic groups glyphs whose y-centres are within `min(line_height × 0.3, 1.0)` user-space units; dense layouts (e.g., bank statements with several short lines a unit or two apart) still stress it, so adaptive thresholds or second-pass x-monotonic splitting remain future work.
+4. **Smarter line grouping** — the current visual line-detection heuristic groups glyphs whose y-centres are within `min(line_height × 0.3, 1.0)` user-space units, with a float-epsilon slack so exactly-1pt-apart rows still split. Even denser layouts (sub-1pt row spacing) would still over-merge; an adaptive threshold or a second-pass variance-based splitter remains future work.
 
 ---
 

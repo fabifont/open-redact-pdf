@@ -105,6 +105,7 @@ pub fn search_page_text(page: &ExtractedPageText, query: &str) -> Vec<TextMatch>
 
     let mut matches = Vec::new();
     let mut search_offset = 0usize;
+    eprintln!("DBG normtext={:?}", index.normalized_text);
     while let Some(position) = index.normalized_text[search_offset..].find(&normalized_query) {
         let normalized_start = search_offset + position;
         let normalized_end = normalized_start + normalized_query.len();
@@ -356,9 +357,15 @@ fn glyph_belongs_to_line(page: &ExtractedPageText, glyph_index: usize, line: &[u
     // estimate, so a purely ratio-based tolerance over-merges adjacent
     // rows. Capping the tolerance at 1 pt in user space lets typical
     // per-line jitter through while keeping 1-2 pt baseline steps on
-    // separate lines.
+    // separate lines. The `>=` boundary matters: rows exactly `1.0` pt
+    // apart at the cap would otherwise merge, because the later row's
+    // trailing glyphs can pass the x-monotonicity check once they sit
+    // to the right of the earlier row's last glyph.
     let y_tolerance = (line_height * 0.3).min(1.0);
-    if (glyph_center - line_center).abs() > y_tolerance {
+    // Float epsilon slack so exactly-1pt-apart rows (which produce
+    // `0.9999...` after subtraction) still reject instead of merging
+    // once a later-row glyph drifts past the earlier row's x watermark.
+    if (glyph_center - line_center).abs() + 1e-6 >= y_tolerance {
         return false;
     }
 
