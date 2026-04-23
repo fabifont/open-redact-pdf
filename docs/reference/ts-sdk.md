@@ -38,17 +38,17 @@ Returns the normalized page-space size.
 
 ### `extractText(handle: PdfHandle, pageIndex: number): PageText`
 
-Returns extracted text and geometry for the requested page.
+Returns extracted text and geometry for the requested page. Results are cached per-page on the document handle, so repeated `extractText` / `searchText` calls on the same page skip the content-stream walk.
 
 ### `searchText(handle: PdfHandle, pageIndex: number, query: string): TextMatch[]`
 
-Searches text in visual glyph order and returns match geometry as quad arrays.
+Searches text in visual glyph order and returns match geometry as quad arrays. Reuses the same per-page cache as `extractText`.
 
 ## Redaction
 
 ### `applyRedactions(handle: PdfHandle, plan: RedactionPlan): ApplyReport`
 
-Applies redactions in place to the opened handle.
+Applies redactions in place to the opened handle. The per-page text cache is cleared before the call returns so later `extractText` / `searchText` calls reflect the rewritten content streams.
 
 ### `savePdf(handle: PdfHandle): Uint8Array`
 
