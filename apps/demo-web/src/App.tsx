@@ -47,6 +47,7 @@ export function App() {
   const [status, setStatus] = useState("Load a PDF to start.");
   const [error, setError] = useState<string | null>(null);
   const [pdfBytes, setPdfBytes] = useState<Uint8Array | null>(null);
+  const [pdfPassword, setPdfPassword] = useState<string | null>(null);
   const [handle, setHandle] = useState<PdfHandle | null>(null);
   const [pageSizes, setPageSizes] = useState<Array<{ width: number; height: number }>>([]);
   const [manualTargets, setManualTargets] = useState<RectTarget[]>([]);
@@ -75,7 +76,10 @@ export function App() {
     let cancelled = false;
     let documentRef: PDFDocumentProxy | null = null;
     setRenderErrors({});
-    getDocument({ data: Uint8Array.from(pdfBytes) })
+    getDocument({
+      data: Uint8Array.from(pdfBytes),
+      password: pdfPassword ?? undefined,
+    })
       .promise.then((document) => {
         documentRef = document;
         if (!cancelled) setPreviewDocument(document);
@@ -93,7 +97,7 @@ export function App() {
       setPreviewDocument((current) => (current === documentRef ? null : current));
       void documentRef?.destroy();
     };
-  }, [pdfBytes]);
+  }, [pdfBytes, pdfPassword]);
 
   async function loadPdfBytes(bytes: Uint8Array, password: string | null = null) {
     setError(null);
@@ -111,6 +115,7 @@ export function App() {
     );
     setHandle(nextHandle);
     setPdfBytes(Uint8Array.from(bytes));
+    setPdfPassword(password);
     setPageSizes(sizes);
     setRenderErrors({});
     setManualTargets([]);
