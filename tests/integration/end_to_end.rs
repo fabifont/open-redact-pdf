@@ -1029,13 +1029,83 @@ fn xref_stream_and_object_stream_fixture_is_parseable_and_redactable() {
     assert!(!extracted_after.text.contains("OBJSTM Secret"));
     assert!(extracted_after.text.contains("Beta Gamma"));
 
-    // The saved output is a flat classic-xref rewrite; the raw bytes must not
-    // contain the original targeted text.
+    // The saved output mirrors the input shape: xref stream + ObjStm
+    // compression of eligible structural objects, NOT a classic xref
+    // table. The redacted content stream must not survive in the raw
+    // bytes (the writer rebuilds ObjStms from the post-redaction object
+    // map; the original ObjStm container is dropped at parse time).
     let raw = String::from_utf8_lossy(&saved);
     assert!(
         !raw.contains("OBJSTM Secret"),
         "original content stream survived in saved PDF"
     );
+    assert!(
+        contains_subslice(&saved, b"/Type /XRef"),
+        "modern-input PDF must round-trip with an xref stream"
+    );
+    assert!(
+        contains_subslice(&saved, b"/Type /ObjStm"),
+        "modern-input PDF should pack eligible objects into a fresh ObjStm"
+    );
+    assert!(
+        !contains_subslice(&saved, b"\nxref\n"),
+        "saved bytes should not contain a classic xref keyword"
+    );
+}
+
+fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack.windows(needle.len()).any(|w| w == needle)
+}
+
+#[test]
+fn xref_stream_input_without_objstm_round_trips_as_xref_stream() {
+    // Input is xref-stream-shaped but has no compressed (ObjStm) members.
+    // The writer must mirror the input's xref-stream shape on save.
+    // Because every object is compressible (gen=0, non-stream values),
+    // the writer is also expected to pack them into a fresh ObjStm.
+    let document = PdfDocument::open(&fixture("xref-stream-no-objstm.pdf"))
+        .expect("xref-stream fixture should open");
+    let extracted = document.extract_text(0).expect("extraction should succeed");
+    assert!(extracted.text.contains("Plain XRef Stream"));
+
+    let saved = document.save().expect("save should succeed");
+    assert!(
+        contains_subslice(&saved, b"/Type /XRef"),
+        "xref-stream-shaped input must save as xref stream"
+    );
+    assert!(
+        !contains_subslice(&saved, b"\nxref\n"),
+        "saved bytes should not contain a classic xref keyword"
+    );
+
+    let reopened = PdfDocument::open(&saved).expect("saved xref-stream PDF should reopen");
+    let extracted_after = reopened
+        .extract_text(0)
+        .expect("reopened extraction should succeed");
+    assert!(extracted_after.text.contains("Plain XRef Stream"));
+}
+
+#[test]
+fn classic_xref_input_saves_as_classic_xref() {
+    // Round-trip a classic-xref fixture and confirm the writer keeps
+    // emitting a classic xref table (no regression introduced by the
+    // new modern-shape path).
+    let document = PdfDocument::open(&fixture("simple-text.pdf"))
+        .expect("classic fixture should open");
+    let saved = document.save().expect("save should succeed");
+    assert!(
+        contains_subslice(&saved, b"\nxref\n"),
+        "classic-input PDF must continue saving as a classic xref table"
+    );
+    assert!(
+        !contains_subslice(&saved, b"/Type /XRef"),
+        "classic-input PDF must not emit an xref stream"
+    );
+    let reopened = PdfDocument::open(&saved).expect("saved classic PDF should reopen");
+    let extracted_after = reopened
+        .extract_text(0)
+        .expect("reopened extraction should succeed");
+    assert!(extracted_after.text.contains("Secret Alpha"));
 }
 
 #[test]

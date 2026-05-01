@@ -114,12 +114,23 @@ pub enum XrefEntry {
     },
 }
 
+/// Cross-reference table form recorded at parse time. The serializer
+/// mirrors this on save: classic-input PDFs round-trip as classic-xref,
+/// xref-stream-shaped inputs round-trip as `Type /XRef` streams with
+/// eligible objects packed into `Type /ObjStm` containers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum XrefForm {
+    Classic,
+    Stream,
+}
+
 #[derive(Debug, Clone)]
 pub struct PdfFile {
     pub version: String,
     pub objects: BTreeMap<ObjectRef, PdfObject>,
     pub trailer: PdfDictionary,
     pub max_object_number: u32,
+    pub xref_form: XrefForm,
 }
 
 impl PdfFile {

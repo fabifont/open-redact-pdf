@@ -6,6 +6,7 @@ use crate::error::{PdfError, PdfResult};
 use crate::stream::decode_stream;
 use crate::types::{
     ObjectRef, PdfDictionary, PdfFile, PdfObject, PdfStream, PdfString, PdfValue, XrefEntry,
+    XrefForm,
 };
 
 /// Parses an unencrypted PDF, or an encrypted PDF whose user password is
@@ -26,7 +27,7 @@ pub fn parse_pdf_with_password(
 ) -> PdfResult<crate::document::ParsedDocument> {
     let version = parse_header(bytes)?;
     let startxref = find_startxref(bytes)?;
-    let (xref, mut trailer) = parse_xref_table(bytes, startxref)?;
+    let (xref, mut trailer, xref_form) = parse_xref_table(bytes, startxref)?;
 
     let mut objects = BTreeMap::new();
     let mut max_object_number = 0;
@@ -66,6 +67,7 @@ pub fn parse_pdf_with_password(
         objects,
         trailer,
         max_object_number,
+        xref_form,
     };
     build_document(file)
 }
@@ -136,6 +138,10 @@ fn decrypt_document_if_encrypted(
     }
 
     trailer.remove("Encrypt");
+    // Remove the Encrypt dictionary object itself so the writer never
+    // emits its now-decrypted /O, /U, /OE, /UE, /Perms fields as
+    // dangling unreferenced bytes (would leak the password verifiers).
+    objects.remove(&encrypt_ref);
     Ok(())
 }
 
@@ -214,9 +220,14 @@ fn find_startxref(bytes: &[u8]) -> PdfResult<usize> {
 fn parse_xref_table(
     bytes: &[u8],
     start_offset: usize,
-) -> PdfResult<(BTreeMap<ObjectRef, XrefEntry>, PdfDictionary)> {
+) -> PdfResult<(BTreeMap<ObjectRef, XrefEntry>, PdfDictionary, XrefForm)> {
     let mut merged_entries: BTreeMap<ObjectRef, XrefEntry> = BTreeMap::new();
     let mut newest_trailer: Option<PdfDictionary> = None;
+    // The form of the very first section we visit (the one at startxref)
+    // determines the output shape. Older sections reached via /Prev or
+    // /XRefStm may use the opposite form, but the writer mirrors the
+    // newest section's shape only.
+    let mut top_form: Option<XrefForm> = None;
     let mut visited = BTreeSet::new();
     let mut pending: Vec<usize> = vec![start_offset];
 
@@ -233,6 +244,7 @@ fn parse_xref_table(
 
         if newest_trailer.is_none() {
             newest_trailer = Some(section.trailer.clone());
+            top_form = Some(section.form);
         }
 
         if let Some(stm_offset) = section
@@ -249,12 +261,14 @@ fn parse_xref_table(
 
     let trailer = newest_trailer
         .ok_or_else(|| PdfError::Parse("xref chain produced no trailer".to_string()))?;
-    Ok((merged_entries, trailer))
+    let form = top_form.unwrap_or(XrefForm::Classic);
+    Ok((merged_entries, trailer, form))
 }
 
 struct XrefSection {
     entries: BTreeMap<ObjectRef, XrefEntry>,
     trailer: PdfDictionary,
+    form: XrefForm,
 }
 
 fn parse_xref_section_at(bytes: &[u8], offset: usize) -> PdfResult<XrefSection> {
@@ -319,7 +333,11 @@ fn parse_classic_xref_section(bytes: &[u8], offset: usize) -> PdfResult<XrefSect
         PdfValue::Dictionary(dictionary) => dictionary,
         _ => return Err(PdfError::Parse("trailer is not a dictionary".to_string())),
     };
-    Ok(XrefSection { entries, trailer })
+    Ok(XrefSection {
+        entries,
+        trailer,
+        form: XrefForm::Classic,
+    })
 }
 
 fn parse_xref_stream_section(bytes: &[u8], offset: usize) -> PdfResult<XrefSection> {
@@ -449,6 +467,7 @@ fn parse_xref_stream_section(bytes: &[u8], offset: usize) -> PdfResult<XrefSecti
     Ok(XrefSection {
         entries,
         trailer: stream.dict,
+        form: XrefForm::Stream,
     })
 }
 
@@ -569,6 +588,12 @@ fn materialize_object_streams(
             *max_object_number = (*max_object_number).max(member_ref.object_number);
             objects.insert(member_ref, PdfObject::Value(value));
         }
+        // Drop the ObjStm container after its members are materialised.
+        // The container's compressed bytes mirror the pre-redaction state
+        // of every member dictionary that was packed into it; leaving it
+        // in `objects` would make the writer emit the original bytes
+        // even after the materialised members were modified by redaction.
+        objects.remove(&stream_ref);
     }
 
     Ok(())
@@ -1036,7 +1061,7 @@ fn is_delimiter(byte: u8) -> bool {
 mod tests {
     use super::{parse_pdf, parse_pdf_with_password};
     use crate::error::PdfError;
-    use crate::types::PdfObject;
+    use crate::types::{PdfObject, PdfValue};
 
     #[test]
     fn parses_simple_pdf_fixture() {
@@ -1860,5 +1885,51 @@ mod tests {
         let document =
             parse_pdf(&pdf).expect("empty-password AES-128 PDF should decrypt with metadata off");
         assert_decrypts_content_stream(&document, plain);
+    }
+
+    #[test]
+    fn decryption_drops_original_encrypt_dictionary_object() {
+        // After successful decryption the parser strips the trailer's
+        // /Encrypt reference. The Encrypt dictionary object itself must
+        // also be removed from `objects` so the writer never re-emits its
+        // /O, /U, /OE, /UE, /Perms fields as dangling unreferenced bytes.
+        let (pdf, _) = build_aes_128_encrypted_pdf(b"", b"ownerpw", true);
+        let document = parse_pdf(&pdf).expect("encrypted PDF should decrypt");
+        for (object_ref, object) in &document.file.objects {
+            if let PdfObject::Value(PdfValue::Dictionary(dict)) = object {
+                let has_o = dict.contains_key("O");
+                let has_u = dict.contains_key("U");
+                let has_filter_standard = dict.get("Filter").and_then(PdfValue::as_name)
+                    == Some("Standard");
+                assert!(
+                    !(has_o && has_u && has_filter_standard),
+                    "Encrypt dictionary at {} {} survived parse",
+                    object_ref.object_number,
+                    object_ref.generation
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn materialize_drops_objstm_containers() {
+        // After ObjStm members are materialised into top-level objects the
+        // container itself must be dropped from `objects`. Otherwise the
+        // writer would re-emit the container's compressed bytes, leaking
+        // the pre-redaction state of every member dictionary.
+        let bytes = include_bytes!("../../../tests/fixtures/xref-object-stream.pdf");
+        let document = parse_pdf(bytes).expect("xref+ObjStm fixture should parse");
+        for (object_ref, object) in &document.file.objects {
+            if let PdfObject::Stream(stream) = object {
+                let type_name = stream.dict.get("Type").and_then(PdfValue::as_name);
+                assert_ne!(
+                    type_name,
+                    Some("ObjStm"),
+                    "ObjStm container at {} {} survived parse",
+                    object_ref.object_number,
+                    object_ref.generation
+                );
+            }
+        }
     }
 }

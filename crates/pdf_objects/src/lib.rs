@@ -13,4 +13,5 @@ pub use serializer::{serialize_dictionary, serialize_pdf, serialize_string, seri
 pub use stream::{decode_stream, flate_encode};
 pub use types::{
     ObjectRef, PdfDictionary, PdfFile, PdfObject, PdfStream, PdfString, PdfValue, XrefEntry,
+    XrefForm,
 };

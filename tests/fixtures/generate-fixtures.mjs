@@ -1385,6 +1385,82 @@ fs.writeFileSync(
   buildXrefObjectStreamPdf(),
 );
 
+// xref-stream form WITHOUT object streams: every indirect object stays
+// uncompressed but the cross-reference is encoded as a `/Type /XRef`
+// stream rather than a classic xref table. Used by the writer round-trip
+// test to confirm that input shape is mirrored on save even when no
+// ObjStm packing is involved.
+function buildXrefStreamNoObjstmPdf() {
+  // Indirect object ids:
+  //   1: Catalog
+  //   2: Pages
+  //   3: Page
+  //   4: content stream
+  //   5: Font
+  //   6: XRef stream
+
+  const catalogBody = "<< /Type /Catalog /Pages 2 0 R >>";
+  const pagesBody = "<< /Type /Pages /Count 1 /Kids [3 0 R] >>";
+  const pageBody =
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] " +
+    "/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>";
+  const contentData =
+    "BT\n/F1 24 Tf\n72 700 Td\n(Plain XRef Stream) Tj\nET\n";
+  const fontBody = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>";
+
+  let body = "%PDF-1.5\n%\xFF\xFF\xFF\xFF\n";
+
+  const obj1Offset = Buffer.byteLength(body, "binary");
+  body += `1 0 obj\n${catalogBody}\nendobj\n`;
+  const obj2Offset = Buffer.byteLength(body, "binary");
+  body += `2 0 obj\n${pagesBody}\nendobj\n`;
+  const obj3Offset = Buffer.byteLength(body, "binary");
+  body += `3 0 obj\n${pageBody}\nendobj\n`;
+  const obj4Offset = Buffer.byteLength(body, "binary");
+  body +=
+    `4 0 obj\n<< /Length ${Buffer.byteLength(contentData, "binary")} >>\nstream\n${contentData}endstream\nendobj\n`;
+  const obj5Offset = Buffer.byteLength(body, "binary");
+  body += `5 0 obj\n${fontBody}\nendobj\n`;
+
+  // Build xref stream entries with W = [1 3 1].
+  // Object 0 is the head of the free list; objects 1..5 are uncompressed.
+  const row = (t, a, b) =>
+    Buffer.from([t, (a >> 16) & 0xff, (a >> 8) & 0xff, a & 0xff, b & 0xff]);
+  const entries = Buffer.concat([
+    row(0, 0, 0),
+    row(1, obj1Offset, 0),
+    row(1, obj2Offset, 0),
+    row(1, obj3Offset, 0),
+    row(1, obj4Offset, 0),
+    row(1, obj5Offset, 0),
+    row(1, 0, 0), // placeholder, replaced after we know obj6Offset
+  ]);
+
+  const obj6Offset = Buffer.byteLength(body, "binary");
+  // Patch the entry for object 6 (the xref stream itself) with its own
+  // offset now that we know it. Per ISO 32000-1, the xref stream's own
+  // entry uses Type 1 with the stream's offset.
+  const last = row(1, obj6Offset, 0);
+  last.copy(entries, 6 * 5);
+
+  const xrefStreamDict =
+    `<< /Type /XRef /Size 7 /W [1 3 1] /Root 1 0 R /Length ${entries.length} >>`;
+  const xrefStreamObj = Buffer.concat([
+    Buffer.from(`6 0 obj\n${xrefStreamDict}\nstream\n`, "binary"),
+    entries,
+    Buffer.from("\nendstream\nendobj\n", "binary"),
+  ]);
+
+  const trailer = Buffer.from(`startxref\n${obj6Offset}\n%%EOF\n`, "binary");
+
+  return Buffer.concat([Buffer.from(body, "binary"), xrefStreamObj, trailer]);
+}
+
+fs.writeFileSync(
+  path.join(fixturesDir, "xref-stream-no-objstm.pdf"),
+  buildXrefStreamNoObjstmPdf(),
+);
+
 // Nested cm operators: outer cm scales content space (like many real-world PDFs),
 // inner cm inside q/Q scales back up. Tests correct CTM pre-multiplication order.
 writeFixture("nested-cm.pdf", {

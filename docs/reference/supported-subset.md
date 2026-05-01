@@ -16,7 +16,7 @@ This project intentionally targets a narrow, explicit MVP.
 - Classic xref tables, including incremental update chains (multiple xref sections linked via `Prev`)
 - PDF 1.5+ cross-reference streams (`/Type /XRef`) and the hybrid form where a legacy trailer carries an `XRefStm` pointer
 - Object streams (`/Type /ObjStm`) — compressed objects are materialized into the regular object store during parsing
-- Full-document rewrites on save (incremental updates and xref streams are flattened into a single classic-xref revision on output)
+- Full-document rewrites on save with input-shape mirroring: classic-input PDFs save as classic xref + trailer; xref-stream-shaped inputs save as a `Type /XRef` stream with eligible objects (gen=0, non-stream values) packed into freshly-built `Type /ObjStm` containers. Incremental-update chains are always collapsed into a single revision on output (`/Prev` and `/XRefStm` are stripped) so pre-redaction bytes cannot leak via revision walking. The parser drops the Encrypt dictionary after decryption and the original ObjStm containers after materialisation so neither survives in saved bytes.
 - Unfiltered, `FlateDecode`, `ASCII85Decode`, `ASCIIHexDecode`, `LZWDecode`, and `RunLengthDecode` stream filters — including filter chains (e.g. `[/ASCII85Decode /FlateDecode]`) — with the TIFF predictor (`/Predictor 2`) and PNG predictors 10–15 (via `DecodeParms /Predictor`) applied to the final stage. `LZWDecode` honours `DecodeParms /EarlyChange` (0 or 1, defaulting to 1).
 - Page tree traversal with inherited resources, media boxes, crop boxes, and page rotation
 - Inline images (`BI`/`ID`/`EI`) are safely skipped during content stream parsing
