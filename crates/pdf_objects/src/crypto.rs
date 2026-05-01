@@ -49,7 +49,7 @@ pub enum SecurityRevision {
 /// an AESV2 filter (AES-128-CBC).
 /// V=5 documents name the `/AESV3` filter (AES-256-CBC).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CryptMethod {
+pub enum CryptMethod {
     Identity,
     V2,
     AesV2,
@@ -215,6 +215,25 @@ impl StandardSecurityHandler {
         }
 
         Ok(None)
+    }
+
+    /// Builds a handler from an externally-derived file key and the
+    /// pre-resolved crypt methods. Used by credential paths that derive
+    /// the file key out-of-band — the public-key handler unwraps the
+    /// file key from a CMS recipient envelope and then constructs the
+    /// handler via this entry point rather than `open`.
+    pub fn from_file_key(
+        file_key: Vec<u8>,
+        string_method: CryptMethod,
+        stream_method: CryptMethod,
+        encrypt_metadata: bool,
+    ) -> Self {
+        Self {
+            file_key,
+            string_method,
+            stream_method,
+            encrypt_metadata,
+        }
     }
 
     /// Returns true when this handler was configured with
@@ -440,7 +459,9 @@ fn resolve_v5_crypt_filters(encrypt_dict: &PdfDictionary) -> PdfResult<(CryptMet
     ))
 }
 
-fn resolve_v4_crypt_filters(encrypt_dict: &PdfDictionary) -> PdfResult<(CryptMethod, CryptMethod)> {
+pub(crate) fn resolve_v4_crypt_filters(
+    encrypt_dict: &PdfDictionary,
+) -> PdfResult<(CryptMethod, CryptMethod)> {
     let strf = encrypt_dict
         .get("StrF")
         .and_then(PdfValue::as_name)

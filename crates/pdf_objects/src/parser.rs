@@ -3,17 +3,33 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::crypto::{BytesKind, StandardSecurityHandler};
 use crate::document::build_document;
 use crate::error::{PdfError, PdfResult};
+use crate::pubsec::{PubSecCredential, open_pubsec};
 use crate::stream::decode_stream;
 use crate::types::{
     ObjectRef, PdfDictionary, PdfFile, PdfObject, PdfStream, PdfString, PdfValue, XrefEntry,
     XrefForm,
 };
 
+/// Caller-supplied credential for opening an encrypted PDF. Standard
+/// security handlers authenticate by password; the public-key handler
+/// (`/Filter /Adobe.PubSec`) authenticates by an X.509 certificate plus
+/// its RSA private key. For unencrypted PDFs the credential is ignored
+/// (the empty `Password(b"")` is the natural default).
+#[derive(Clone, Copy)]
+pub enum PdfCredential<'a> {
+    Password(&'a [u8]),
+    Certificate {
+        cert_der: &'a [u8],
+        private_key_der: &'a [u8],
+    },
+}
+
 /// Parses an unencrypted PDF, or an encrypted PDF whose user password is
 /// empty. For encrypted PDFs that require a user- or owner-supplied
-/// password, use [`parse_pdf_with_password`].
+/// password, use [`parse_pdf_with_password`]; for `/Filter /Adobe.PubSec`
+/// PDFs, use [`parse_pdf_with_certificate`].
 pub fn parse_pdf(bytes: &[u8]) -> PdfResult<crate::document::ParsedDocument> {
-    parse_pdf_with_password(bytes, b"")
+    parse_pdf_with_credential(bytes, PdfCredential::Password(b""))
 }
 
 /// Parses an encrypted PDF with a caller-supplied password. The password
@@ -24,6 +40,37 @@ pub fn parse_pdf(bytes: &[u8]) -> PdfResult<crate::document::ParsedDocument> {
 pub fn parse_pdf_with_password(
     bytes: &[u8],
     password: &[u8],
+) -> PdfResult<crate::document::ParsedDocument> {
+    parse_pdf_with_credential(bytes, PdfCredential::Password(password))
+}
+
+/// Parses an Adobe.PubSec-encrypted PDF using a recipient X.509
+/// certificate (DER) and its matching PKCS#8 private key (DER). Returns
+/// [`PdfError::InvalidPassword`] when no recipient blob in the PDF
+/// unwraps with the supplied private key. For password-encrypted or
+/// unencrypted documents this returns
+/// [`PdfError::Unsupported`] — use [`parse_pdf_with_password`] /
+/// [`parse_pdf`] respectively.
+pub fn parse_pdf_with_certificate(
+    bytes: &[u8],
+    cert_der: &[u8],
+    private_key_der: &[u8],
+) -> PdfResult<crate::document::ParsedDocument> {
+    parse_pdf_with_credential(
+        bytes,
+        PdfCredential::Certificate {
+            cert_der,
+            private_key_der,
+        },
+    )
+}
+
+/// Generic entry point that accepts either credential variant. The
+/// password and certificate wrappers above thread their arguments
+/// through this function.
+pub fn parse_pdf_with_credential(
+    bytes: &[u8],
+    credential: PdfCredential,
 ) -> PdfResult<crate::document::ParsedDocument> {
     let version = parse_header(bytes)?;
     let startxref = find_startxref(bytes)?;
@@ -58,7 +105,7 @@ pub fn parse_pdf_with_password(
     // members are plaintext and materialize_object_streams can proceed as
     // usual. Order matters — if we materialized first, each ObjStm's decoded
     // body would still be ciphertext and we'd parse garbage.
-    decrypt_document_if_encrypted(&mut objects, &mut trailer, password)?;
+    decrypt_document_if_encrypted(&mut objects, &mut trailer, credential)?;
 
     materialize_object_streams(&mut objects, &mut max_object_number, &compressed)?;
 
@@ -75,7 +122,7 @@ pub fn parse_pdf_with_password(
 fn decrypt_document_if_encrypted(
     objects: &mut BTreeMap<ObjectRef, PdfObject>,
     trailer: &mut PdfDictionary,
-    password: &[u8],
+    credential: PdfCredential,
 ) -> PdfResult<()> {
     let encrypt_ref = match trailer.get("Encrypt") {
         Some(PdfValue::Reference(object_ref)) => *object_ref,
@@ -101,10 +148,47 @@ fn decrypt_document_if_encrypted(
         }
     };
 
-    let id_first = extract_id_first(trailer)?;
+    let filter_name = encrypt_dict
+        .get("Filter")
+        .and_then(PdfValue::as_name)
+        .unwrap_or("");
 
-    let handler = StandardSecurityHandler::open(&encrypt_dict, &id_first, password)?
-        .ok_or(PdfError::InvalidPassword)?;
+    let handler = match filter_name {
+        "Standard" => match credential {
+            PdfCredential::Password(password) => {
+                let id_first = extract_id_first(trailer)?;
+                StandardSecurityHandler::open(&encrypt_dict, &id_first, password)?
+                    .ok_or(PdfError::InvalidPassword)?
+            }
+            PdfCredential::Certificate { .. } => {
+                return Err(PdfError::Unsupported(
+                    "/Filter /Standard requires a password, not a certificate".to_string(),
+                ));
+            }
+        },
+        "Adobe.PubSec" => match credential {
+            PdfCredential::Certificate {
+                cert_der,
+                private_key_der,
+            } => open_pubsec(
+                &encrypt_dict,
+                &PubSecCredential {
+                    certificate_der: cert_der,
+                    private_key_der,
+                },
+            )?,
+            PdfCredential::Password(_) => {
+                return Err(PdfError::Unsupported(
+                    "/Filter /Adobe.PubSec requires a certificate, not a password".to_string(),
+                ));
+            }
+        },
+        other => {
+            return Err(PdfError::Unsupported(format!(
+                "encryption filter /{other} is not supported"
+            )));
+        }
+    };
 
     let refs: Vec<ObjectRef> = objects.keys().copied().collect();
     for object_ref in refs {
@@ -1059,7 +1143,7 @@ fn is_delimiter(byte: u8) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_pdf, parse_pdf_with_password};
+    use super::{parse_pdf, parse_pdf_with_certificate, parse_pdf_with_password};
     use crate::error::PdfError;
     use crate::types::{PdfObject, PdfValue};
 
@@ -1930,6 +2014,401 @@ mod tests {
                     object_ref.generation
                 );
             }
+        }
+    }
+
+    /// Output of [`build_pubsec_encrypted_pdf`]: the encrypted PDF, the
+    /// recipient's DER-encoded certificate, the recipient's DER-encoded
+    /// PKCS#8 private key, and the plaintext content stream the test
+    /// asserts the parser recovers.
+    struct PubSecFixture {
+        pdf: Vec<u8>,
+        cert_der: Vec<u8>,
+        private_key_der: Vec<u8>,
+        plaintext: Vec<u8>,
+    }
+
+    /// Build a minimal Adobe.PubSec encrypted PDF for the requested
+    /// SubFilter (`adbe.pkcs7.s4` → V=4 / AES-128, or
+    /// `adbe.pkcs7.s5` → V=5 / AES-256). Generates a deterministic
+    /// RSA-2048 keypair and self-signed cert from a fixed PRNG seed so
+    /// the fixture bytes are reproducible across test runs without
+    /// committing any private key material.
+    fn build_pubsec_encrypted_pdf(sub_filter: &str) -> PubSecFixture {
+        use cms::builder::{
+            ContentEncryptionAlgorithm, EnvelopedDataBuilder, KeyEncryptionInfo,
+            KeyTransRecipientInfoBuilder,
+        };
+        use cms::cert::IssuerAndSerialNumber;
+        use cms::content_info::ContentInfo;
+        use cms::enveloped_data::RecipientIdentifier;
+        use const_oid::ObjectIdentifier;
+        use der::asn1::{Any, PrintableString, SetOfVec};
+        use der::{Decode, Encode};
+        use rand_chacha::ChaCha8Rng;
+        use rand_core::SeedableRng;
+        use rsa::pkcs1v15::SigningKey;
+        use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey};
+        use rsa::{RsaPrivateKey, RsaPublicKey};
+        use sha2::Sha256;
+        use spki::SubjectPublicKeyInfoOwned;
+        use x509_cert::Certificate;
+        use x509_cert::attr::AttributeTypeAndValue;
+        use x509_cert::builder::{Builder, CertificateBuilder, Profile};
+        use x509_cert::name::{Name, RdnSequence, RelativeDistinguishedName};
+        use x509_cert::serial_number::SerialNumber;
+        use x509_cert::time::Validity;
+        use std::time::Duration;
+
+        let mut rng = ChaCha8Rng::from_seed([0x42u8; 32]);
+        let private_key =
+            RsaPrivateKey::new(&mut rng, 2048).expect("RSA-2048 keygen must succeed");
+        let public_key = RsaPublicKey::from(&private_key);
+        let private_key_der = private_key
+            .to_pkcs8_der()
+            .expect("PKCS#8 encode")
+            .as_bytes()
+            .to_vec();
+
+        // Build a minimal self-signed X.509 certificate.
+        let serial_number = SerialNumber::from(0x01020304u32);
+        let validity = Validity::from_now(Duration::from_secs(3600 * 24 * 30))
+            .expect("validity computation must succeed");
+        let cn = AttributeTypeAndValue {
+            oid: const_oid::db::rfc4519::CN,
+            value: Any::from(
+                &PrintableString::new(b"open-redact-pdf-test-recipient")
+                    .expect("printable string"),
+            ),
+        };
+        let rdn_set =
+            SetOfVec::try_from(vec![cn]).expect("rdn set");
+        let mut subject = RdnSequence::default();
+        subject.0.push(RelativeDistinguishedName::from(rdn_set));
+        let subject_name = Name::from_der(
+            &subject.to_der().expect("subject encode"),
+        )
+        .expect("subject re-decode");
+
+        let signer: SigningKey<Sha256> = SigningKey::new(private_key.clone());
+        let pub_key_der = public_key
+            .to_public_key_der()
+            .expect("RSA public key DER");
+        let pub_key_info =
+            SubjectPublicKeyInfoOwned::try_from(pub_key_der.as_bytes()).expect("SPKI from DER");
+        let cert_builder = CertificateBuilder::new(
+            Profile::Root,
+            serial_number.clone(),
+            validity,
+            subject_name.clone(),
+            pub_key_info.clone(),
+            &signer,
+        )
+        .expect("CertificateBuilder::new");
+        let certificate: Certificate = cert_builder.build().expect("cert build");
+        let cert_der = certificate.to_der().expect("cert DER");
+
+        // Random 20-byte seed + 4-byte permissions (all 0xFF = full access).
+        let mut seed_and_perms = [0u8; 24];
+        rsa::rand_core::RngCore::fill_bytes(&mut rng, &mut seed_and_perms);
+        seed_and_perms[20..24].copy_from_slice(&[0xFFu8, 0xFF, 0xFF, 0xFF]);
+
+        // CMS EnvelopedData wrapping (seed || perms) for the recipient.
+        let recipient_identifier = RecipientIdentifier::IssuerAndSerialNumber(
+            IssuerAndSerialNumber {
+                issuer: certificate.tbs_certificate.issuer.clone(),
+                serial_number: certificate.tbs_certificate.serial_number.clone(),
+            },
+        );
+        let recipient_info_builder = KeyTransRecipientInfoBuilder::new(
+            recipient_identifier,
+            KeyEncryptionInfo::Rsa(public_key.clone()),
+            &mut rng,
+        )
+        .expect("KeyTransRecipientInfoBuilder::new");
+
+        let mut enveloped_builder = EnvelopedDataBuilder::new(
+            None,
+            &seed_and_perms,
+            ContentEncryptionAlgorithm::Aes128Cbc,
+            None,
+        )
+        .expect("EnvelopedDataBuilder::new");
+        // Separate RNG instance for the EnvelopedData build step: the
+        // KeyTransRecipientInfoBuilder still holds an exclusive borrow on
+        // the primary rng until it is consumed inside the final
+        // build_with_rng call below.
+        let mut envelope_rng = ChaCha8Rng::from_seed([0xA5u8; 32]);
+        let enveloped_data = enveloped_builder
+            .add_recipient_info(recipient_info_builder)
+            .expect("add_recipient_info")
+            .build_with_rng(&mut envelope_rng)
+            .expect("build_with_rng");
+
+        // Wrap in ContentInfo (the outer ASN.1 structure).
+        const ID_ENVELOPED: ObjectIdentifier =
+            ObjectIdentifier::new_unwrap("1.2.840.113549.1.7.3");
+        let enveloped_der = enveloped_data.to_der().expect("envelope DER");
+        let content_info = ContentInfo {
+            content_type: ID_ENVELOPED,
+            content: Any::from_der(&enveloped_der).expect("Any from envelope DER"),
+        };
+        let recipient_blob = content_info.to_der().expect("content_info DER");
+
+        // Derive file key per spec.
+        let plaintext_content: Vec<u8> =
+            b"BT\n/F1 24 Tf\n72 700 Td\n(PUBSEC SECRET) Tj\nET\n".to_vec();
+        let (file_key, content_cipher, sub_filter_str, v_value, r_value, length_bits, cfm_name) =
+            match sub_filter {
+                "adbe.pkcs7.s5" => {
+                    use crate::crypto::test_helpers::aes_256_cbc_encrypt;
+                    use sha2::Digest as _;
+                    let mut hasher = sha2::Sha256::new();
+                    hasher.update(&seed_and_perms[..20]);
+                    hasher.update(&recipient_blob);
+                    hasher.update(&seed_and_perms[20..24]);
+                    let file_key: [u8; 32] = hasher.finalize().into();
+                    let iv = [0x55u8; 16];
+                    let cipher = aes_256_cbc_encrypt(&file_key, &iv, &plaintext_content);
+                    (
+                        file_key.to_vec(),
+                        cipher,
+                        "adbe.pkcs7.s5",
+                        5i32,
+                        5i32,
+                        256i32,
+                        "AESV3",
+                    )
+                }
+                "adbe.pkcs7.s4" => {
+                    use crate::crypto::test_helpers::{aes_128_cbc_encrypt, object_key_aes};
+                    use sha1::{Digest as _, Sha1};
+                    let mut hasher = Sha1::new();
+                    hasher.update(&seed_and_perms[..20]);
+                    hasher.update(&recipient_blob);
+                    hasher.update(&seed_and_perms[20..24]);
+                    let hash = hasher.finalize();
+                    let file_key: [u8; 16] = hash[..16].try_into().expect("16 bytes");
+                    let object_key = object_key_aes(&file_key, 4, 0);
+                    let iv = [0x77u8; 16];
+                    let cipher = aes_128_cbc_encrypt(&object_key, &iv, &plaintext_content);
+                    (
+                        file_key.to_vec(),
+                        cipher,
+                        "adbe.pkcs7.s4",
+                        4i32,
+                        4i32,
+                        128i32,
+                        "AESV2",
+                    )
+                }
+                other => panic!("unsupported sub_filter for fixture builder: {other}"),
+            };
+        let _ = (file_key, length_bits); // silence unused warning paths
+
+        // Hex-encode the recipient blob for embedding as a PDF byte
+        // string inside the /Recipients array.
+        let blob_hex_string = {
+            let mut s = String::from("<");
+            for byte in &recipient_blob {
+                s.push_str(&format!("{byte:02X}"));
+            }
+            s.push('>');
+            s
+        };
+
+        let mut pdf: Vec<u8> = Vec::new();
+        pdf.extend_from_slice(b"%PDF-1.7\n");
+
+        let catalog_offset = pdf.len();
+        pdf.extend_from_slice(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+        let pages_offset = pdf.len();
+        pdf.extend_from_slice(b"2 0 obj\n<< /Type /Pages /Count 1 /Kids [3 0 R] >>\nendobj\n");
+        let page_offset = pdf.len();
+        pdf.extend_from_slice(
+            b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
+              /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>\nendobj\n",
+        );
+        let content_offset = pdf.len();
+        pdf.extend_from_slice(
+            format!("4 0 obj\n<< /Length {} >>\nstream\n", content_cipher.len())
+                .as_bytes(),
+        );
+        pdf.extend_from_slice(&content_cipher);
+        pdf.extend_from_slice(b"\nendstream\nendobj\n");
+        let font_offset = pdf.len();
+        pdf.extend_from_slice(
+            b"5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica \
+              /Encoding /WinAnsiEncoding >>\nendobj\n",
+        );
+
+        let encrypt_offset = pdf.len();
+        if v_value == 5 {
+            pdf.extend_from_slice(format!(
+                "6 0 obj\n<< /Filter /Adobe.PubSec /SubFilter /{sub_filter_str} \
+                 /V {v_value} /R {r_value} /Length {length_bits} \
+                 /CF << /DefaultCryptFilter << /CFM /{cfm_name} /Length 32 \
+                 /AuthEvent /DocOpen /Recipients [{blob_hex_string}] >> >> \
+                 /StmF /DefaultCryptFilter /StrF /DefaultCryptFilter \
+                 /EncryptMetadata true >>\nendobj\n"
+            ).as_bytes());
+        } else {
+            // V=4 stores /Recipients at the top level, not per-CF.
+            pdf.extend_from_slice(format!(
+                "6 0 obj\n<< /Filter /Adobe.PubSec /SubFilter /{sub_filter_str} \
+                 /V {v_value} /R {r_value} /Length {length_bits} \
+                 /CF << /DefaultCryptFilter << /CFM /{cfm_name} /Length 16 \
+                 /AuthEvent /DocOpen >> >> \
+                 /StmF /DefaultCryptFilter /StrF /DefaultCryptFilter \
+                 /Recipients [{blob_hex_string}] /EncryptMetadata true >>\nendobj\n"
+            ).as_bytes());
+        }
+
+        let xref_offset = pdf.len();
+        pdf.extend_from_slice(b"xref\n0 7\n");
+        pdf.extend_from_slice(b"0000000000 65535 f \n");
+        for offset in [
+            catalog_offset,
+            pages_offset,
+            page_offset,
+            content_offset,
+            font_offset,
+            encrypt_offset,
+        ] {
+            pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        pdf.extend_from_slice(
+            b"trailer\n<< /Size 7 /Root 1 0 R /Encrypt 6 0 R /ID [<00112233445566778899AABBCCDDEEFF><00112233445566778899AABBCCDDEEFF>] >>\n",
+        );
+        pdf.extend_from_slice(format!("startxref\n{xref_offset}\n%%EOF\n").as_bytes());
+
+        PubSecFixture {
+            pdf,
+            cert_der,
+            private_key_der,
+            plaintext: plaintext_content,
+        }
+    }
+
+    #[test]
+    fn parses_pubsec_s5_encrypted_pdf() {
+        let fixture = build_pubsec_encrypted_pdf("adbe.pkcs7.s5");
+        let document =
+            parse_pdf_with_certificate(&fixture.pdf, &fixture.cert_der, &fixture.private_key_der)
+                .expect("PubSec s5 PDF should decrypt with matching certificate");
+        assert_decrypts_content_stream(&document, &fixture.plaintext);
+    }
+
+    #[test]
+    fn parses_pubsec_s4_encrypted_pdf() {
+        let fixture = build_pubsec_encrypted_pdf("adbe.pkcs7.s4");
+        let document =
+            parse_pdf_with_certificate(&fixture.pdf, &fixture.cert_der, &fixture.private_key_der)
+                .expect("PubSec s4 PDF should decrypt with matching certificate");
+        assert_decrypts_content_stream(&document, &fixture.plaintext);
+    }
+
+    #[test]
+    fn pubsec_rejects_password_credential() {
+        let fixture = build_pubsec_encrypted_pdf("adbe.pkcs7.s5");
+        let err = parse_pdf_with_password(&fixture.pdf, b"any-password")
+            .expect_err("PubSec PDF must reject a password credential");
+        match err {
+            PdfError::Unsupported(message) => {
+                assert!(
+                    message.contains("certificate"),
+                    "error should mention certificate, got: {message}"
+                );
+            }
+            other => panic!("expected Unsupported, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pubsec_s5_rejects_unknown_certificate() {
+        // Build a fixture for one keypair, then attempt to open with a
+        // different keypair's cert. The right blob is present in the
+        // PDF but no recipient matches the supplied cert / key.
+        use rand_chacha::ChaCha8Rng;
+        use rand_core::SeedableRng;
+        use rsa::pkcs1v15::SigningKey;
+        use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey};
+        use rsa::RsaPrivateKey;
+        use sha2::Sha256;
+        use spki::SubjectPublicKeyInfoOwned;
+        use x509_cert::attr::AttributeTypeAndValue;
+        use x509_cert::builder::{Builder, CertificateBuilder, Profile};
+        use x509_cert::name::{Name, RdnSequence, RelativeDistinguishedName};
+        use x509_cert::serial_number::SerialNumber;
+        use x509_cert::time::Validity;
+        use der::asn1::{Any, PrintableString, SetOfVec};
+        use der::{Decode, Encode};
+        use std::time::Duration;
+
+        let fixture = build_pubsec_encrypted_pdf("adbe.pkcs7.s5");
+
+        // Different seed → different keypair.
+        let mut rng = ChaCha8Rng::from_seed([0x99u8; 32]);
+        let other_private =
+            RsaPrivateKey::new(&mut rng, 2048).expect("other RSA-2048 keygen");
+        let other_public = rsa::RsaPublicKey::from(&other_private);
+        let other_pkcs8 = other_private
+            .to_pkcs8_der()
+            .expect("PKCS#8 encode")
+            .as_bytes()
+            .to_vec();
+
+        let cn = AttributeTypeAndValue {
+            oid: const_oid::db::rfc4519::CN,
+            value: Any::from(
+                &PrintableString::new(b"unrelated-cert").expect("printable string"),
+            ),
+        };
+        let rdn_set = SetOfVec::try_from(vec![cn]).expect("rdn set");
+        let mut subject = RdnSequence::default();
+        subject.0.push(RelativeDistinguishedName::from(rdn_set));
+        let subject_name = Name::from_der(&subject.to_der().expect("subject encode"))
+            .expect("subject re-decode");
+        let signer: SigningKey<Sha256> = SigningKey::new(other_private.clone());
+        let other_pub_der = other_public
+            .to_public_key_der()
+            .expect("RSA public key DER");
+        let pub_key_info =
+            SubjectPublicKeyInfoOwned::try_from(other_pub_der.as_bytes())
+                .expect("SPKI from DER");
+        let cert_builder = CertificateBuilder::new(
+            Profile::Root,
+            SerialNumber::from(0x55u32),
+            Validity::from_now(Duration::from_secs(3600 * 24 * 30))
+                .expect("validity"),
+            subject_name,
+            pub_key_info,
+            &signer,
+        )
+        .expect("CertificateBuilder::new");
+        let other_cert: x509_cert::Certificate = cert_builder.build().expect("cert build");
+        let other_cert_der = other_cert.to_der().expect("cert DER");
+
+        let err = parse_pdf_with_certificate(&fixture.pdf, &other_cert_der, &other_pkcs8)
+            .expect_err("unrelated certificate must not unlock the PubSec PDF");
+        assert_eq!(err, PdfError::InvalidPassword);
+    }
+
+    #[test]
+    fn standard_pdf_rejects_certificate_credential() {
+        let (pdf, _) = build_aes_128_encrypted_pdf(b"", b"ownerpw", true);
+        // Any DER-shaped buffers will do: dispatcher rejects before the
+        // PubSec code ever inspects them.
+        let err = parse_pdf_with_certificate(&pdf, &[0x30, 0x00], &[0x30, 0x00])
+            .expect_err("Standard-encrypted PDF must reject a certificate credential");
+        match err {
+            PdfError::Unsupported(message) => {
+                assert!(
+                    message.contains("password"),
+                    "error should mention password, got: {message}"
+                );
+            }
+            other => panic!("expected Unsupported, got {other:?}"),
         }
     }
 }

@@ -2,7 +2,10 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use pdf_graphics::Size;
-use pdf_objects::{PageInfo, ParsedDocument, PdfResult, parse_pdf, parse_pdf_with_password};
+use pdf_objects::{
+    PageInfo, ParsedDocument, PdfResult, parse_pdf, parse_pdf_with_certificate,
+    parse_pdf_with_password,
+};
 use pdf_redact::{ApplyReport, apply_redactions};
 use pdf_targets::{NormalizedRedactionPlan, normalize_plan};
 use pdf_text::{ExtractedPageText, TextItem, analyze_page_text, search_page_text};
@@ -65,6 +68,28 @@ impl PdfDocument {
     /// documents the password is ignored.
     pub fn open_with_password(bytes: &[u8], password: &[u8]) -> PdfResult<Self> {
         Ok(Self::with_parsed(parse_pdf_with_password(bytes, password)?))
+    }
+
+    /// Opens an Adobe.PubSec-encrypted PDF using the recipient's X.509
+    /// certificate and matching RSA private key, both DER-encoded
+    /// (PKCS#8 for the private key, the standard form returned by most
+    /// browser key-management APIs). Returns
+    /// [`pdf_objects::PdfError::InvalidPassword`] when no recipient blob
+    /// in the PDF unwraps with the supplied private key. For
+    /// password-encrypted or unencrypted documents this returns
+    /// [`pdf_objects::PdfError::Unsupported`] — use
+    /// [`PdfDocument::open_with_password`] / [`PdfDocument::open`]
+    /// respectively.
+    pub fn open_with_certificate(
+        bytes: &[u8],
+        cert_der: &[u8],
+        private_key_der: &[u8],
+    ) -> PdfResult<Self> {
+        Ok(Self::with_parsed(parse_pdf_with_certificate(
+            bytes,
+            cert_der,
+            private_key_der,
+        )?))
     }
 
     fn with_parsed(parsed: ParsedDocument) -> Self {

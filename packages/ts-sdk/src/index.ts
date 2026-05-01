@@ -19,6 +19,11 @@ export type PdfHandle = {
 type WasmModule = {
   openPdf(input: Uint8Array): PdfHandle;
   openPdfWithPassword(input: Uint8Array, password: string): PdfHandle;
+  openPdfWithCertificate(
+    input: Uint8Array,
+    certDer: Uint8Array,
+    privateKeyDer: Uint8Array,
+  ): PdfHandle;
   getPageCount(handle: PdfHandle): number;
   getPageSize(handle: PdfHandle, pageIndex: number): PageSize;
   extractText(handle: PdfHandle, pageIndex: number): RawPageText;
@@ -96,6 +101,34 @@ export function openPdf(input: Uint8Array): PdfHandle {
  */
 export function openPdfWithPassword(input: Uint8Array, password: string): PdfHandle {
   return requireWasm().openPdfWithPassword(input, password);
+}
+
+/**
+ * Opens an Adobe.PubSec-encrypted PDF using a recipient certificate.
+ *
+ * Both buffers must be DER-encoded: `certDer` is a standard X.509 v3
+ * certificate; `privateKeyDer` is its matching RSA private key in PKCS#8
+ * `PrivateKeyInfo` form (the typical output of WebCrypto
+ * `subtle.exportKey("pkcs8", ...)` or OpenSSL `-outform DER`). PEM and
+ * PKCS#12 inputs must be converted by the caller before invocation.
+ *
+ * The SDK never stores, persists, or transmits either buffer — they are
+ * passed through to the WASM decryption path and dropped on completion.
+ *
+ * Throws when no recipient blob in the PDF unwraps with the supplied
+ * private key, or when the PDF is password-encrypted (use
+ * {@link openPdfWithPassword}) or unencrypted (use {@link openPdf}).
+ *
+ * @param input - Raw PDF bytes.
+ * @param certDer - DER-encoded X.509 certificate.
+ * @param privateKeyDer - DER-encoded PKCS#8 RSA private key.
+ */
+export function openPdfWithCertificate(
+  input: Uint8Array,
+  certDer: Uint8Array,
+  privateKeyDer: Uint8Array,
+): PdfHandle {
+  return requireWasm().openPdfWithCertificate(input, certDer, privateKeyDer);
 }
 
 /** Returns the number of pages in the opened PDF. */

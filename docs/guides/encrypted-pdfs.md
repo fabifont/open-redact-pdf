@@ -19,7 +19,16 @@ Open Redact PDF parses and decrypts the Standard Security Handler in place durin
 
 Either the user password or the owner password authenticates. The empty user password is accepted as a special case without any caller action.
 
-Unsupported configurations (public-key security handlers, `/CFM` methods outside this table) still fail up front with `PdfError::Unsupported`.
+The public-key handler (`/Filter /Adobe.PubSec`) is also supported for the modern SubFilters:
+
+| SubFilter | V | Inner cipher | Notes |
+|---|---|---|---|
+| `adbe.pkcs7.s4` | 4 | AES-128-CBC | RSA-PKCS1v15 or RSA-OAEP recipient unwrap |
+| `adbe.pkcs7.s5` | 5 | AES-256-CBC | RSA-PKCS1v15 or RSA-OAEP recipient unwrap |
+
+PubSec PDFs are decrypted by supplying a recipient X.509 certificate (DER) plus its matching RSA private key (DER, PKCS#8). Recipients are matched by `IssuerAndSerialNumber` (issuer + serial equality) or `SubjectKeyIdentifier`.
+
+Unsupported configurations (`adbe.pkcs7.s3` V=1 RC4-40, `KeyAgreeRecipientInfo` ECDH recipients, non-AES-CBC inner ciphers, `/CFM` methods outside the tables above) still fail up front with `PdfError::Unsupported`.
 
 ## API
 
@@ -33,14 +42,26 @@ let document = PdfDocument::open(&bytes)?;
 
 // Documents that need a non-empty user or owner password.
 let document = PdfDocument::open_with_password(&bytes, b"secret")?;
+
+// Public-key encrypted (Adobe.PubSec): supply DER-encoded cert and key.
+let document = PdfDocument::open_with_certificate(
+    &pdf_bytes,
+    &recipient_cert_der,
+    &recipient_private_key_der,
+)?;
 ```
 
-A wrong password surfaces `PdfError::InvalidPassword`; wrap with `Result::or_else` to prompt a retry.
+A wrong password or unrelated certificate surfaces `PdfError::InvalidPassword`; wrap with `Result::or_else` to prompt a retry.
 
 ### TypeScript / WebAssembly SDK
 
 ```ts
-import { initWasm, openPdf, openPdfWithPassword } from "@fabifont/open-redact-pdf";
+import {
+  initWasm,
+  openPdf,
+  openPdfWithPassword,
+  openPdfWithCertificate,
+} from "@fabifont/open-redact-pdf";
 
 await initWasm();
 
@@ -55,9 +76,16 @@ try {
     throw caught;
   }
 }
+
+// Public-key encrypted PDFs require a recipient certificate + private key,
+// both DER-encoded. Convert PEM / PKCS#12 to DER on the JS side first
+// (e.g. via `subtle.exportKey("pkcs8", key)` for the private key).
+const certDer = new Uint8Array(/* ...DER bytes of recipient cert... */);
+const keyDer = new Uint8Array(/* ...DER bytes of PKCS#8 private key... */);
+const pubsecHandle = openPdfWithCertificate(pdfBytes, certDer, keyDer);
 ```
 
-The password string is sent to the engine as UTF-8 bytes. Non-ASCII passwords round-trip as their UTF-8 byte representation.
+The password string is sent to the engine as UTF-8 bytes. Non-ASCII passwords round-trip as their UTF-8 byte representation. The certificate and private-key buffers are passed through to the WASM decryption path and dropped on completion — the SDK never persists or transmits them.
 
 ## Demo flow
 

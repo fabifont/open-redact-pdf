@@ -16,6 +16,7 @@ title: Roadmap
 - `Type0` composite font extraction, search, and redaction with `Identity-H` (CID + `ToUnicode`) and Adobe's predefined Unicode-keyed CJK CMaps `UniGB-UCS2-H`, `UniKS-UCS2-H`, `UniJIS-UTF16-H`, and `UniCNS-UTF16-H` — bytes are decoded directly to Unicode (UCS-2 BE or UTF-16 BE, including surrogate-pair SMP scalars); glyph widths fall back to the descendant font's `/DW` for the predefined CMaps
 - Anchor-based visual line grouping — each line's y-tolerance is `height_ref × 0.10` against a fixed first-glyph anchor (no running-mean drift, no 1pt absolute cap), so dense layouts down to sub-1pt row spacing split correctly while mixed-font same-baseline rows still merge
 - Cross-reference shape preserved on save — classic-input PDFs round-trip as classic xref + trailer; xref-stream-shaped inputs round-trip as `Type /XRef` streams with eligible objects packed into freshly-built `Type /ObjStm` containers. The parser also drops the Encrypt dictionary after decryption and the original ObjStm containers after materialisation so neither leaks into saved bytes.
+- Public-key security handler — `/Filter /Adobe.PubSec` PDFs decrypt via a recipient X.509 certificate plus its RSA private key (DER-encoded, supplied as separate buffers). SubFilters `adbe.pkcs7.s4` (V=4, AES-128) and `adbe.pkcs7.s5` (V=5, AES-256) are supported; key-transport (RSA-PKCS1v15 and RSA-OAEP) recipient infos are matched by `IssuerAndSerialNumber` or `SubjectKeyIdentifier`. Once authenticated the file is decrypted in place and saved without `/Encrypt` (matches the password-handler behaviour).
 - Form XObject text extraction and search (recursive, with cycle protection and a depth cap)
 - Form XObject redaction via per-page copy-on-write: text glyphs, vector paint, and Image XObject `Do` invocations inside the Form are all neutralized; nested Forms recurse up to depth 8
 - Redaction refuses documents whose default Optional Content configuration hides any layer (no silent leaks from off-by-default OCGs). Callers can opt in to sanitization via `sanitizeHiddenOcgs: true`, which strips `BDC /OC /<name> ... EMC` content gated by hidden OCGs and clears the catalog's hidden state on save.
@@ -32,7 +33,6 @@ title: Roadmap
 ## Next priorities
 
 - Partial image rewriting so redaction targets that overlap only part of an Image XObject mask the affected pixels instead of neutralizing the whole `Do`
-- Public-key security handler — Standard Security Handler V = 1/2/4/5 (RC4 + AES-128 + AES-256) under the user or owner password is in; the remaining gap is the public-key `/Filter /Adobe.PubSec` form, which wraps the file key in a PKCS#7 recipient envelope rather than deriving it from a password.
 
 ## Documentation policy
 

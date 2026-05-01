@@ -57,7 +57,39 @@ When a V=4 document sets `/EncryptMetadata false`:
 
 V=5 content decryption uses the 32-byte file key directly: there is no per-object key mixing, no `sAlT` suffix, and no `/ID[0]` input — the per-stream IV in the first 16 ciphertext bytes is the only randomness. Passwords are truncated to 127 bytes before hashing, matching the spec.
 
-Unsupported encryption configurations (public-key handlers, `/CFM` methods other than `/V2`, `/AESV2`, and `/AESV3`) fail explicitly with `PdfError::Unsupported`. Wrong passwords fail with `PdfError::InvalidPassword`.
+### Public-key handler (`/Filter /Adobe.PubSec`)
+
+Authenticates with a recipient X.509 certificate (DER) plus its matching RSA private key (DER, PKCS#8). The crate's `parse_pdf_with_certificate` and `PdfDocument::open_with_certificate` entry points (`openPdfWithCertificate` in the TS SDK) take both buffers as separate `&[u8]` / `Uint8Array` arguments.
+
+Supported configurations:
+
+| SubFilter | V | Inner cipher | Notes |
+|---|---|---|---|
+| `adbe.pkcs7.s4` | 4 | AES-128-CBC (per-object via `/StdCF /CFM /AESV2`) | File key = `SHA-1(seed ‖ all_recipient_blobs ‖ perms)[..16]` |
+| `adbe.pkcs7.s5` | 5 | AES-256-CBC via `/CFM /AESV3` | File key = `SHA-256(seed ‖ all_recipient_blobs ‖ perms)[..32]` |
+
+Unwrap procedure:
+
+1. Locate `/Recipients` — top-level array for V=4, inside the active `/CF` crypt filter (named by `/StmF`) for V=5.
+2. Each recipient blob is a CMS `ContentInfo` (`id-envelopedData`) wrapping an `EnvelopedData` whose `recipientInfos` are `KeyTransRecipientInfo` entries.
+3. Match the recipient by `RecipientIdentifier` against the caller's certificate: `IssuerAndSerialNumber` (issuer DN + serial number equality) or `SubjectKeyIdentifier` (octet-string equality against the cert's `subjectKeyIdentifier` extension, when present).
+4. RSA-decrypt the matched `encryptedKey` with the caller's private key. Algorithm OID `1.2.840.113549.1.1.1` selects PKCS1v15; `1.2.840.113549.1.1.7` selects OAEP.
+5. The recovered value is the CMS content-encryption key (CEK). Use the CEK to AES-CBC decrypt the inner `encryptedContent` (IV is embedded in the algorithm parameters, not prepended). Strip PKCS#7 padding.
+6. The plaintext is `seed (20 bytes) || perms (4 bytes)`.
+7. Concatenate every recipient blob's raw DER bytes, in array order, into `recipients_buffer`.
+8. Hash `seed || recipients_buffer || perms` with SHA-1 (s4) or SHA-256 (s5); truncate to 16 or 32 bytes for the file key.
+9. The rest of the per-object decryption pipeline is identical to the Standard handler with the same V/R combination.
+
+Unsupported PubSec features (rejected with `PdfError::Unsupported`):
+
+- `adbe.pkcs7.s3` (V=1 RC4-40)
+- `KeyAgreeRecipientInfo` (ECDH-based recipients)
+- Non-AES-CBC inner content ciphers
+- Non-RSA key-encryption algorithms
+
+The SDK never persists, stores, or transmits the certificate or private key buffers; they are passed through to the unwrap path and dropped on completion.
+
+Unsupported encryption configurations (`adbe.pkcs7.s3`, key-agreement recipients, `/CFM` methods other than `/V2`, `/AESV2`, and `/AESV3`) fail explicitly with `PdfError::Unsupported`. Wrong passwords or unrelated certificates fail with `PdfError::InvalidPassword`.
 
 Writing encrypted PDFs is out of scope: the save path always emits a plaintext, deterministic full-save rewrite.
 

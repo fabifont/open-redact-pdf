@@ -25,6 +25,19 @@ pub fn open_pdf_with_password(input: Vec<u8>, password: String) -> Result<PdfHan
     })
 }
 
+#[wasm_bindgen(js_name = openPdfWithCertificate)]
+pub fn open_pdf_with_certificate(
+    input: Vec<u8>,
+    cert_der: Vec<u8>,
+    private_key_der: Vec<u8>,
+) -> Result<PdfHandle, JsValue> {
+    let document = PdfDocument::open_with_certificate(&input, &cert_der, &private_key_der)
+        .map_err(to_js_error)?;
+    Ok(PdfHandle {
+        document: RefCell::new(document),
+    })
+}
+
 #[wasm_bindgen(js_name = getPageCount)]
 pub fn get_page_count(handle: &PdfHandle) -> usize {
     handle.document.borrow().page_count()

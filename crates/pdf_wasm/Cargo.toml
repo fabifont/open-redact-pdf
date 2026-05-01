@@ -12,6 +12,10 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+# Force the `js` feature on getrandom for wasm32-unknown-unknown
+# targets so the RSA / rand transitive deps can compile inside the
+# browser build. On native builds the `js` feature is a no-op.
+getrandom = { workspace = true, features = ["js"] }
 js-sys.workspace = true
 open_redact_pdf = { package = "open-redact-pdf", path = "../open_redact_pdf", version = "0.5.0" }
 serde.workspace = true
