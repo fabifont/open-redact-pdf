@@ -17,7 +17,7 @@ crate-type = ["cdylib", "rlib"]
 # browser build. On native builds the `js` feature is a no-op.
 getrandom = { workspace = true, features = ["js"] }
 js-sys.workspace = true
-open_redact_pdf = { package = "open-redact-pdf", path = "../open_redact_pdf", version = "0.5.0" }
+open_redact_pdf = { package = "open-redact-pdf", path = "../open_redact_pdf", version = "0.6.0" }
 serde.workspace = true
 serde-wasm-bindgen.workspace = true
 wasm-bindgen.workspace = true

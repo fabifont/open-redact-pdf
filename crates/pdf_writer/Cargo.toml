@@ -11,4 +11,4 @@ version.workspace = true
 name = "pdf_writer"
 
 [dependencies]
-pdf_objects = { package = "open-redact-pdf-objects", path = "../pdf_objects", version = "0.5.0" }
+pdf_objects = { package = "open-redact-pdf-objects", path = "../pdf_objects", version = "0.6.0" }

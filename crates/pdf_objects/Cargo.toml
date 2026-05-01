@@ -17,7 +17,7 @@ const-oid.workspace = true
 der.workspace = true
 flate2.workspace = true
 md-5.workspace = true
-pdf_graphics = { package = "open-redact-pdf-graphics", path = "../pdf_graphics", version = "0.5.0" }
+pdf_graphics = { package = "open-redact-pdf-graphics", path = "../pdf_graphics", version = "0.6.0" }
 pkcs8.workspace = true
 rsa.workspace = true
 serde.workspace = true

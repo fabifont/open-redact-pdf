@@ -13,9 +13,9 @@ name = "pdf_redact"
 [dependencies]
 jpeg-decoder.workspace = true
 jpeg-encoder.workspace = true
-pdf_content = { package = "open-redact-pdf-content", path = "../pdf_content", version = "0.5.0" }
-pdf_graphics = { package = "open-redact-pdf-graphics", path = "../pdf_graphics", version = "0.5.0" }
-pdf_objects = { package = "open-redact-pdf-objects", path = "../pdf_objects", version = "0.5.0" }
-pdf_targets = { package = "open-redact-pdf-targets", path = "../pdf_targets", version = "0.5.0" }
-pdf_text = { package = "open-redact-pdf-text", path = "../pdf_text", version = "0.5.0" }
+pdf_content = { package = "open-redact-pdf-content", path = "../pdf_content", version = "0.6.0" }
+pdf_graphics = { package = "open-redact-pdf-graphics", path = "../pdf_graphics", version = "0.6.0" }
+pdf_objects = { package = "open-redact-pdf-objects", path = "../pdf_objects", version = "0.6.0" }
+pdf_targets = { package = "open-redact-pdf-targets", path = "../pdf_targets", version = "0.6.0" }
+pdf_text = { package = "open-redact-pdf-text", path = "../pdf_text", version = "0.6.0" }
 serde.workspace = true
