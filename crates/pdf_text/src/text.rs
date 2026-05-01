@@ -105,7 +105,6 @@ pub fn search_page_text(page: &ExtractedPageText, query: &str) -> Vec<TextMatch>
 
     let mut matches = Vec::new();
     let mut search_offset = 0usize;
-    eprintln!("DBG normtext={:?}", index.normalized_text);
     while let Some(position) = index.normalized_text[search_offset..].find(&normalized_query) {
         let normalized_start = search_offset + position;
         let normalized_end = normalized_start + normalized_query.len();
@@ -299,6 +298,18 @@ fn build_visual_display(page: &ExtractedPageText) -> (Vec<char>, Vec<Option<usiz
     (display_chars, display_to_glyph)
 }
 
+/// Per-line aggregates maintained during the greedy grouping pass.
+/// `anchor_y` is the y-centre of the first glyph placed on the line
+/// and never changes — using a fixed reference instead of a running
+/// mean prevents accumulated drift letting near-boundary glyphs from
+/// adjacent rows creep in. `height_ref` is the maximum glyph bbox
+/// height seen so far; updates are O(1) on each join.
+struct LineCluster {
+    indices: Vec<usize>,
+    anchor_y: f64,
+    height_ref: f64,
+}
+
 fn build_visual_lines(page: &ExtractedPageText) -> Vec<Vec<usize>> {
     let mut indices = (0..page.glyphs.len())
         .filter(|i| page.glyphs[*i].visible)
@@ -308,8 +319,9 @@ fn build_visual_lines(page: &ExtractedPageText) -> Vec<Vec<usize>> {
     // produced an intransitive comparator — two close-but-distinct lines
     // would interleave in the sorted output, scrambling their characters
     // once per-line x-sorting ran. Line grouping itself is handled by
-    // `glyph_belongs_to_line`, which still tolerates intra-line y
-    // jitter from subscripts or baseline adjustments.
+    // the anchor-based check below, which tolerates intra-line y jitter
+    // from subscripts or baseline adjustments via the proportional
+    // `height_ref * 0.10` window.
     indices.sort_by(|left, right| {
         let left_center = glyph_center_y(&page.glyphs[*left]);
         let right_center = glyph_center_y(&page.glyphs[*right]);
@@ -325,46 +337,59 @@ fn build_visual_lines(page: &ExtractedPageText) -> Vec<Vec<usize>> {
             })
     });
 
-    let mut lines: Vec<Vec<usize>> = Vec::new();
+    let mut clusters: Vec<LineCluster> = Vec::new();
     for glyph_index in indices {
-        let Some(target_line) = lines
-            .iter_mut()
-            .find(|line| glyph_belongs_to_line(page, glyph_index, line))
-        else {
-            lines.push(vec![glyph_index]);
-            continue;
-        };
-        target_line.push(glyph_index);
+        let glyph = &page.glyphs[glyph_index];
+        let glyph_center = glyph_center_y(glyph);
+        let glyph_height = glyph.bbox.height;
+        let glyph_x = glyph.bbox.x;
+
+        let target = clusters.iter_mut().find(|cluster| {
+            let last_x = cluster
+                .indices
+                .last()
+                .map(|i| page.glyphs[*i].bbox.x);
+            glyph_fits_line(cluster, glyph_center, glyph_height, glyph_x, last_x)
+        });
+
+        match target {
+            Some(cluster) => {
+                cluster.indices.push(glyph_index);
+                if glyph_height > cluster.height_ref {
+                    cluster.height_ref = glyph_height;
+                }
+            }
+            None => clusters.push(LineCluster {
+                indices: vec![glyph_index],
+                anchor_y: glyph_center,
+                // Floor at 1pt to keep the tolerance non-degenerate when
+                // the first glyph happens to be zero-height (defensive
+                // only; real glyphs always have positive bbox height).
+                height_ref: glyph_height.max(1.0),
+            }),
+        }
     }
-    lines
+    clusters.into_iter().map(|c| c.indices).collect()
 }
 
-fn glyph_belongs_to_line(page: &ExtractedPageText, glyph_index: usize, line: &[usize]) -> bool {
-    let glyph = &page.glyphs[glyph_index];
-    let glyph_center = glyph_center_y(glyph);
-    let line_center = average_line_center_y(page, line);
-    let line_height = average_line_height(page, line)
-        .max(glyph.bbox.height)
-        .max(1.0);
-    // Y tolerance with an absolute cap. Glyph bbox heights fall back
-    // to ~80% of the font em-square when font-metrics parsing is not
-    // available; for dense layouts (bank statements, address blocks,
-    // tax forms) the actual inter-line spacing is a fraction of that
-    // estimate, so a purely ratio-based tolerance over-merges adjacent
-    // rows. Capping the tolerance at 1 pt in user space lets typical
-    // per-line jitter through while keeping 1-2 pt baseline steps on
-    // separate lines. The `>=` boundary matters: rows exactly `1.0` pt
-    // apart at the cap would otherwise merge, because the later row's
-    // trailing glyphs can pass the x-monotonicity check once they sit
-    // to the right of the earlier row's last glyph.
-    let y_tolerance = (line_height * 0.3).min(1.0);
-    // Float epsilon slack so exactly-1pt-apart rows (which produce
-    // `0.9999...` after subtraction) still reject instead of merging
-    // once a later-row glyph drifts past the earlier row's x watermark.
-    if (glyph_center - line_center).abs() + 1e-6 >= y_tolerance {
+/// Anchor-based line membership check. A glyph fits the line iff its
+/// y-centre is within `height_ref * 0.10` of the line's fixed anchor,
+/// AND its bbox.x does not fall meaningfully behind the most-recently
+/// placed glyph's bbox.x (the x-monotonicity guard, unchanged from the
+/// pre-existing logic). The `1e-6` epsilon keeps rows exactly at the
+/// boundary distance on the split side.
+fn glyph_fits_line(
+    cluster: &LineCluster,
+    glyph_center: f64,
+    glyph_height: f64,
+    glyph_bbox_x: f64,
+    last_bbox_x: Option<f64>,
+) -> bool {
+    let new_height_ref = cluster.height_ref.max(glyph_height);
+    let y_tolerance = new_height_ref * 0.10;
+    if (glyph_center - cluster.anchor_y).abs() + 1e-6 >= y_tolerance {
         return false;
     }
-
     // X-monotonicity guard. A row of text has glyphs whose starting
     // x coordinates ascend monotonically; a new glyph whose start x
     // sits meaningfully before the last-encountered glyph's start x
@@ -375,9 +400,9 @@ fn glyph_belongs_to_line(page: &ExtractedPageText, glyph_index: usize, line: &[u
     // heavily; the start-x of the most-recently appended glyph is a
     // reliable "line watermark" thanks to the (y-desc, x-asc) feeder
     // sort.
-    if let Some(last_on_line) = line.last().copied().map(|i| &page.glyphs[i]) {
+    if let Some(last_x) = last_bbox_x {
         let kerning_slack = 1.0;
-        if glyph.bbox.x + kerning_slack < last_on_line.bbox.x {
+        if glyph_bbox_x + kerning_slack < last_x {
             return false;
         }
     }
@@ -388,14 +413,6 @@ fn average_line_center_y(page: &ExtractedPageText, line: &[usize]) -> f64 {
     let total = line
         .iter()
         .map(|glyph_index| glyph_center_y(&page.glyphs[*glyph_index]))
-        .sum::<f64>();
-    total / line.len().max(1) as f64
-}
-
-fn average_line_height(page: &ExtractedPageText, line: &[usize]) -> f64 {
-    let total = line
-        .iter()
-        .map(|glyph_index| page.glyphs[*glyph_index].bbox.height)
         .sum::<f64>();
     total / line.len().max(1) as f64
 }
@@ -2436,11 +2453,15 @@ mod tests {
     }
 
     fn make_glyph(text: char, x: f64, y: f64) -> Glyph {
+        make_glyph_with_height(text, x, y, 12.0)
+    }
+
+    fn make_glyph_with_height(text: char, x: f64, y: f64, height: f64) -> Glyph {
         let rect = Rect {
             x,
             y,
             width: 8.0,
-            height: 12.0,
+            height,
         };
         Glyph {
             text,
@@ -2538,5 +2559,77 @@ mod tests {
         let first = merged[0].bounding_rect();
         assert_eq!(first.x, 10.0, "without padding, rect should start at exact glyph boundary");
         assert_eq!(first.max_x(), 18.5, "first two glyphs should be merged");
+    }
+
+    #[test]
+    fn sub_pt_rows_are_not_merged_by_line_grouper() {
+        // Three rows of 6pt Helvetica (bbox.height ≈ 4.8) sitting only
+        // 0.5pt apart in y. The previous heuristic capped y-tolerance at
+        // 1.0pt and merged all three into a single visual line. The
+        // anchor-based check (height_ref * 0.10 = 0.48pt for 6pt glyphs)
+        // keeps each row on its own line, so search for "AB" finds zero
+        // matches (no adjacency) but each single-letter search hits once.
+        let h = 4.8_f64;
+        // bbox.y = baseline - 6 * 0.12 = baseline - 0.72
+        let row_a_y = 700.0 - 0.72;
+        let row_b_y = 699.5 - 0.72;
+        let row_c_y = 699.0 - 0.72;
+        let glyphs = vec![
+            make_glyph_with_height('A', 72.0, row_a_y, h),
+            make_glyph_with_height('B', 72.0, row_b_y, h),
+            make_glyph_with_height('C', 72.0, row_c_y, h),
+        ];
+        let page = ExtractedPageText {
+            page_index: 0,
+            text: "ABC".to_string(),
+            items: Vec::new(),
+            glyphs,
+        };
+        let matches_ab = search_page_text(&page, "AB");
+        assert!(
+            matches_ab.is_empty(),
+            "rows A and B must be on separate lines (no 'AB' adjacency); got {:?}",
+            matches_ab
+        );
+        for needle in ["A", "B", "C"] {
+            let hits = search_page_text(&page, needle);
+            assert_eq!(
+                hits.len(),
+                1,
+                "row {needle} must yield exactly one match; got {hits:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn mixed_font_same_baseline_glyphs_merge_into_one_line() {
+        // 10pt 'H' and 8pt 'W' on the same baseline. Their y-centres
+        // differ by 0.56pt (10pt centre = baseline + 2.8, 8pt centre =
+        // baseline + 2.24). With height_ref = 8.0 (10pt bbox.height)
+        // the tolerance is 0.80pt, so the 8pt glyph merges into the
+        // 10pt-anchored line. The two letters appear consecutively in
+        // the visual display string so "HW" matches once.
+        let glyphs = vec![
+            // 10pt: bbox.y = baseline - 1.2 = -1.2, height = 8.0,
+            // centre = -1.2 + 4.0 = 2.8 (baseline = 0).
+            make_glyph_with_height('H', 10.0, -1.2, 8.0),
+            // 8pt: bbox.y = baseline - 0.96 = -0.96, height = 6.4,
+            // centre = -0.96 + 3.2 = 2.24. Place W flush against H's
+            // right edge (gap 0) so no synthetic space is injected
+            // between them in the display string.
+            make_glyph_with_height('W', 18.0, -0.96, 6.4),
+        ];
+        let page = ExtractedPageText {
+            page_index: 0,
+            text: "HW".to_string(),
+            items: Vec::new(),
+            glyphs,
+        };
+        let matches = search_page_text(&page, "HW");
+        assert_eq!(
+            matches.len(),
+            1,
+            "10pt + 8pt same-baseline glyphs must share a visual line; got {matches:?}"
+        );
     }
 }

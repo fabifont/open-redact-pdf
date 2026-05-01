@@ -12,13 +12,15 @@ The pipeline begins by converting the flat glyph list produced by the text extra
 
 ### `build_visual_lines`
 
-Groups visible glyphs into lines by Y proximity:
+Groups visible glyphs into lines using an anchor-based y-proximity check:
 
 1. Pre-sort all glyphs by `center_y` descending, then by `x` ascending (top-to-bottom, left-to-right within each approximate row).
-2. Walk the sorted list. A glyph joins the current line if either condition holds:
-   - `center_delta ≤ line_height * 0.55` (centers are close vertically), or
-   - `vertical_overlap ≥ line_height * 0.35` (bounding boxes overlap meaningfully).
-3. If neither condition holds, the glyph starts a new line.
+2. Walk the sorted list. For each glyph, scan existing lines in order. A glyph joins a line if both conditions hold:
+   - **Y-anchor check.** `|glyph_center_y − line.anchor_y| + 1e-6 < height_ref × 0.10`, where `line.anchor_y` is the y-centre of the first glyph placed on the line (fixed; never updated) and `height_ref` is the maximum `bbox.height` seen on the line so far (or the candidate glyph's height, whichever is larger). The anchor is fixed so the membership window cannot drift as glyphs accumulate.
+   - **X-monotonicity check.** The glyph's `bbox.x` is at most `1pt` behind the last-placed glyph's `bbox.x`. This prevents a left-margin glyph from a lower row from joining a higher row once it passes the earlier row's x-watermark, which the (y-desc, x-asc) feeder sort guarantees is in place.
+3. If no existing line accepts the glyph, a new line opens with that glyph as its anchor.
+
+The 10% proportional tolerance accommodates intra-line y-jitter from mixed-size fonts on the same baseline (e.g. a 10pt + 8pt combination produces a y-centre delta of ≈ 0.56pt, well within the 0.80pt tolerance under a 10pt anchor) while keeping rows separated by more than one glyph-height-tenth distinct, including sub-1pt leading at small font sizes (a 6pt row 0.5pt below another splits cleanly because `0.5pt > 4.8pt × 0.10 = 0.48pt`).
 
 ### Building the display string
 

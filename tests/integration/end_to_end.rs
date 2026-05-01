@@ -1245,6 +1245,42 @@ fn dense_layout_rows_are_not_merged_into_one_line() {
 }
 
 #[test]
+fn sub_pt_dense_rows_split_into_separate_lines() {
+    // Three rows of 6pt Helvetica only 0.5pt apart in y. The previous
+    // line grouper capped y-tolerance at 1.0pt and merged all three rows
+    // into a single visual line; the proportional `height_ref * 0.10`
+    // tolerance (0.48pt at 6pt) keeps each row separate.
+    let document =
+        PdfDocument::open(&fixture("sub-pt-dense-layout.pdf")).expect("fixture should open");
+    let extracted = document.extract_text(0).expect("extraction should succeed");
+    assert!(extracted.text.contains("Row A 111"));
+    assert!(extracted.text.contains("Row B 222"));
+    assert!(extracted.text.contains("Row C 333"));
+
+    for needle in ["111", "222", "333"] {
+        let matches = document
+            .search_text(0, needle)
+            .expect("search should succeed");
+        assert_eq!(
+            matches.len(),
+            1,
+            "expected exactly one match for {needle}, got {:?}",
+            matches
+        );
+        let rect = matches[0]
+            .quads
+            .first()
+            .expect("each match should have a quad")
+            .bounding_rect();
+        assert!(
+            rect.height < 6.0,
+            "match quad for {needle} must fit within one 6pt row, got height {}",
+            rect.height
+        );
+    }
+}
+
+#[test]
 fn bx_ex_compat_section_lets_redaction_proceed() {
     let mut document =
         PdfDocument::open(&fixture("bx-ex-compat.pdf")).expect("fixture should open");
