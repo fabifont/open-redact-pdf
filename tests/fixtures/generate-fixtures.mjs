@@ -589,6 +589,107 @@ writeFixture("type0-search.pdf", {
   trailer: { Root: { ref: [1, 0] } },
 });
 
+// Composite font using Adobe's predefined UCS-2 BE CMap (UniGB-UCS2-H).
+// The CMap's character codes ARE Unicode BMP scalars, so no ToUnicode
+// stream is required: the engine decodes bytes directly to Unicode.
+// Content stream renders "中文" as <4E2D6587>. DW=1000 is the standard
+// full-em width for CJK glyphs; W is omitted so every glyph falls back
+// to default_width.
+writeFixture("type0-ucs2-h.pdf", {
+  objects: [
+    { id: 1, value: { Type: "/Catalog", Pages: { ref: [2, 0] } } },
+    { id: 2, value: { Type: "/Pages", Count: 1, Kids: [{ ref: [3, 0] }] } },
+    basePageObjects({
+      pageId: 3,
+      pagesId: 2,
+      contentId: 4,
+      resources: { Font: { F1: { ref: [5, 0] } } },
+    }),
+    {
+      id: 4,
+      stream: {
+        dict: {},
+        data: "BT\n/F1 24 Tf\n72 700 Td\n<4E2D6587> Tj\nET\n",
+      },
+    },
+    {
+      id: 5,
+      value: {
+        Type: "/Font",
+        Subtype: "/Type0",
+        BaseFont: "/DemoCJKFont",
+        Encoding: "/UniGB-UCS2-H",
+        DescendantFonts: [{ ref: [6, 0] }],
+      },
+    },
+    {
+      id: 6,
+      value: {
+        Type: "/Font",
+        Subtype: "/CIDFontType2",
+        BaseFont: "/DemoCJKFont",
+        CIDSystemInfo: {
+          Registry: "Adobe",
+          Ordering: "GB1",
+          Supplement: 5,
+        },
+        DW: 1000,
+      },
+    },
+  ],
+  trailer: { Root: { ref: [1, 0] } },
+});
+
+// Composite font using Adobe's predefined UTF-16 BE CMap (UniJIS-UTF16-H).
+// Exercises the surrogate-pair decode path: the four bytes <D840DC00>
+// encode U+20000 (𠀀, an SMP CJK ideograph), followed by <4E2D> for "中"
+// in the BMP. No ToUnicode entry; the SMP scalar is composed from the
+// raw UTF-16 surrogate pair.
+writeFixture("type0-utf16-h.pdf", {
+  objects: [
+    { id: 1, value: { Type: "/Catalog", Pages: { ref: [2, 0] } } },
+    { id: 2, value: { Type: "/Pages", Count: 1, Kids: [{ ref: [3, 0] }] } },
+    basePageObjects({
+      pageId: 3,
+      pagesId: 2,
+      contentId: 4,
+      resources: { Font: { F1: { ref: [5, 0] } } },
+    }),
+    {
+      id: 4,
+      stream: {
+        dict: {},
+        data: "BT\n/F1 24 Tf\n72 700 Td\n<D840DC004E2D> Tj\nET\n",
+      },
+    },
+    {
+      id: 5,
+      value: {
+        Type: "/Font",
+        Subtype: "/Type0",
+        BaseFont: "/DemoCJKFont",
+        Encoding: "/UniJIS-UTF16-H",
+        DescendantFonts: [{ ref: [6, 0] }],
+      },
+    },
+    {
+      id: 6,
+      value: {
+        Type: "/Font",
+        Subtype: "/CIDFontType2",
+        BaseFont: "/DemoCJKFont",
+        CIDSystemInfo: {
+          Registry: "Adobe",
+          Ordering: "Japan1",
+          Supplement: 6,
+        },
+        DW: 1000,
+      },
+    },
+  ],
+  trailer: { Root: { ref: [1, 0] } },
+});
+
 // Vector path that uses the v and y Bezier curve operators (single-control
 // shorthand for c). The path traces a filled curved shape directly under the
 // text, so that a redaction target on the text forces the engine to

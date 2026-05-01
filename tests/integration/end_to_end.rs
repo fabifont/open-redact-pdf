@@ -1,4 +1,5 @@
 use open_redact_pdf::{PdfDocument, RedactionPlan, RedactionTarget};
+use pdf_graphics::Point;
 use pdf_objects::parse_pdf;
 
 fn fixture(name: &str) -> Vec<u8> {
@@ -137,6 +138,114 @@ fn type0_fonts_with_tounicode_are_searchable_and_redactable() {
         .expect("extraction should still succeed");
     assert!(extracted_after.text.contains("Secret"));
     assert!(!extracted_after.text.contains("CID"));
+}
+
+#[test]
+fn type0_ucs2_h_extracts_searches_redacts_cjk_text() {
+    let mut document =
+        PdfDocument::open(&fixture("type0-ucs2-h.pdf")).expect("fixture should open");
+    let extracted = document
+        .extract_text(0)
+        .expect("text extraction should succeed");
+    assert_eq!(
+        extracted.text, "中文",
+        "UniGB-UCS2-H bytes must decode directly to Unicode"
+    );
+
+    // Confirm search finds the single target glyph and use those quads
+    // directly for redaction now that padding is removed.
+    let matches = document
+        .search_text(0, "中")
+        .expect("search should succeed");
+    assert_eq!(matches.len(), 1, "exactly one match for '中'");
+    assert_eq!(matches[0].quads.len(), 1, "match should be a single quad");
+
+    let quads: Vec<[Point; 4]> = matches[0]
+        .quads
+        .iter()
+        .map(|q| q.points)
+        .collect();
+    let report = document
+        .apply_redactions(RedactionPlan {
+            targets: vec![RedactionTarget::QuadGroup {
+                page_index: 0,
+                quads,
+            }],
+            mode: None,
+            fill_color: None,
+            overlay_text: None,
+            remove_intersecting_annotations: Some(false),
+            strip_metadata: Some(false),
+            strip_attachments: Some(false),
+            sanitize_hidden_ocgs: None,
+        })
+        .expect("redaction should succeed");
+    assert!(report.text_glyphs_removed > 0);
+
+    let saved = document.save().expect("save should succeed");
+    let reopened = PdfDocument::open(&saved).expect("saved pdf should reopen");
+    let after = reopened
+        .extract_text(0)
+        .expect("extraction should still succeed");
+    assert!(!after.text.contains("中"), "redacted glyph must be gone");
+    assert!(after.text.contains("文"), "non-redacted glyph must remain");
+}
+
+#[test]
+fn type0_utf16_h_handles_surrogate_pair_redaction() {
+    let mut document =
+        PdfDocument::open(&fixture("type0-utf16-h.pdf")).expect("fixture should open");
+    let extracted = document
+        .extract_text(0)
+        .expect("text extraction should succeed");
+    assert_eq!(
+        extracted.text, "\u{20000}中",
+        "UTF-16 surrogate pair must compose a single SMP scalar"
+    );
+
+    // The SMP scalar must be searchable as a single match. Use the search
+    // quads directly for redaction.
+    let matches = document
+        .search_text(0, "\u{20000}")
+        .expect("search should succeed");
+    assert_eq!(matches.len(), 1, "exactly one match for the SMP scalar");
+    assert_eq!(matches[0].quads.len(), 1, "surrogate pair should be a single quad");
+
+    let quads: Vec<[Point; 4]> = matches[0]
+        .quads
+        .iter()
+        .map(|q| q.points)
+        .collect();
+    let report = document
+        .apply_redactions(RedactionPlan {
+            targets: vec![RedactionTarget::QuadGroup {
+                page_index: 0,
+                quads,
+            }],
+            mode: None,
+            fill_color: None,
+            overlay_text: None,
+            remove_intersecting_annotations: Some(false),
+            strip_metadata: Some(false),
+            strip_attachments: Some(false),
+            sanitize_hidden_ocgs: None,
+        })
+        .expect("redaction should succeed");
+    assert!(
+        report.text_glyphs_removed > 0,
+        "the surrogate-pair glyph must be removed"
+    );
+
+    let saved = document.save().expect("save should succeed");
+    let reopened = PdfDocument::open(&saved).expect("saved pdf should reopen");
+    let after = reopened
+        .extract_text(0)
+        .expect("extraction should still succeed");
+    assert!(
+        !after.text.contains('\u{20000}'),
+        "redacted SMP glyph must be gone"
+    );
+    assert!(after.text.contains('中'), "BMP glyph must remain");
 }
 
 #[test]

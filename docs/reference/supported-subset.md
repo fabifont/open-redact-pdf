@@ -32,7 +32,7 @@ This project intentionally targets a narrow, explicit MVP.
 - Image XObject invocation detection
 - `Type1` and `TrueType` fonts in the current text path, including `ToUnicode` CMap decoding, `/Encoding /WinAnsiEncoding` (full Windows-1252 repertoire), `/Encoding /MacRomanEncoding` (full Mac Roman repertoire), `/Encoding /StandardEncoding` (Adobe Standard PostScript encoding, including its `quoteright` / `quoteleft` treatment of `0x27` and `0x60`), and `/Encoding` dictionaries with a `/Differences` array resolved through an Adobe Glyph List subset
 - Form XObjects (`/Subtype /Form`) traversed during text extraction and search, including the Form's `Matrix`, its own `Resources.Font` and `Resources.ExtGState`, and cycle-protected recursion
-- `Type0` with `Identity-H`, two-byte CIDs, and `ToUnicode` maps
+- `Type0` with `Identity-H` (two-byte CIDs + `ToUnicode` maps) and Adobe's predefined Unicode-keyed CJK CMaps `UniGB-UCS2-H`, `UniKS-UCS2-H`, `UniJIS-UTF16-H`, and `UniCNS-UTF16-H` — for the predefined CMaps the byte stream is decoded directly to Unicode (UCS-2 BE for the `*-UCS2-H` pair, UTF-16 BE for the `*-UTF16-H` pair, including surrogate-pair SMP scalars); `ToUnicode` overrides are still consulted for BMP code units when present, and glyph widths fall back to the descendant font's `/DW`. To avoid silently mis-positioning glyphs, predefined-CMap fonts whose descendant `/W` array overrides any CID's width away from `/DW` are rejected explicitly; ToUnicode entries with 4-byte source codes (UTF-16 surrogate pairs) are silently skipped so a single SMP entry doesn't tank the parse.
 - Rectangle, quad, and quad-group redaction targets
 - Three redaction modes: `strip` (remove bytes), `redact` (blank space + overlay), `erase` (blank space, no overlay)
 - `overlayText` support for `redact` mode — labels are stamped inside each overlay rectangle using Helvetica sized to fit, with contrast-aware black or white text color against the fill
@@ -45,7 +45,7 @@ This project intentionally targets a narrow, explicit MVP.
 - Incremental update preservation (output is always a flat rewrite; xref streams are rewritten as a classic xref table)
 - Documents whose catalog has `/OCProperties` with any layer off in the default configuration or with `/BaseState /OFF` / `/Unchanged` are rejected up front unless the caller opts in via `sanitizeHiddenOcgs: true`. The opt-in pass strips `BDC /OC /<name> ... EMC` content gated by hidden OCGs and clears the catalog's hidden-layer state on save, but OCG markers inside nested Form XObjects are not yet rewritten — a warning is emitted when a page with sanitizable content also has XObjects
 - Type3 fonts
-- Composite (Type0) fonts with encodings other than `Identity-H`
+- Composite (Type0) fonts with encodings other than `Identity-H` and the four supported Unicode-keyed CMaps (`UniGB-UCS2-H`, `UniKS-UCS2-H`, `UniJIS-UTF16-H`, `UniCNS-UTF16-H`); vertical writing CMaps (`-V` variants) and registry-keyed CMaps such as `90ms-RKSJ-H` are rejected with an explicit error
 - Partial image rewriting when a redaction target covers only part of an Image XObject — whole-invocation neutralization is used instead
 - Stream filters outside the `FlateDecode` / `ASCII85Decode` / `ASCIIHexDecode` / `LZWDecode` / `RunLengthDecode` set (notably `DCTDecode`, `JBIG2Decode`, `JPXDecode`, `CCITTFaxDecode`)
 

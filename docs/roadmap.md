@@ -13,7 +13,7 @@ title: Roadmap
 - Page tree traversal with inherited resources, media boxes, crop boxes, and rotation
 - Content parsing for common text, path, image, clipping, color, graphics-state, and marked-content operators (including inline images and dictionary operands)
 - Simple-font text extraction and search geometry (including fonts set via ExtGState `gs` operator), with `ToUnicode` CMap decoding, `WinAnsiEncoding` + `MacRomanEncoding` + `StandardEncoding` for non-ASCII bytes, and `/Encoding /Differences` arrays resolved through an Adobe Glyph List subset
-- `Type0` / `Identity-H` composite font extraction, search, and redaction when `ToUnicode` is available
+- `Type0` composite font extraction, search, and redaction with `Identity-H` (CID + `ToUnicode`) and Adobe's predefined Unicode-keyed CJK CMaps `UniGB-UCS2-H`, `UniKS-UCS2-H`, `UniJIS-UTF16-H`, and `UniCNS-UTF16-H` — bytes are decoded directly to Unicode (UCS-2 BE or UTF-16 BE, including surrogate-pair SMP scalars); glyph widths fall back to the descendant font's `/DW` for the predefined CMaps
 - Form XObject text extraction and search (recursive, with cycle protection and a depth cap)
 - Form XObject redaction via per-page copy-on-write: text glyphs, vector paint, and Image XObject `Do` invocations inside the Form are all neutralized; nested Forms recurse up to depth 8
 - Redaction refuses documents whose default Optional Content configuration hides any layer (no silent leaks from off-by-default OCGs). Callers can opt in to sanitization via `sanitizeHiddenOcgs: true`, which strips `BDC /OC /<name> ... EMC` content gated by hidden OCGs and clears the catalog's hidden state on save.
@@ -29,7 +29,6 @@ title: Roadmap
 
 ## Next priorities
 
-- Broader composite font encodings beyond `Identity-H` + `ToUnicode` — required for CJK documents that use Adobe's predefined CMaps (`UniJIS-UTF16-H`, `UniGB-UCS2-H`, `UniCNS-UTF16-H`, `UniKS-UCS2-H`)
 - Partial image rewriting so redaction targets that overlap only part of an Image XObject mask the affected pixels instead of neutralizing the whole `Do`
 - Incremental-save preservation (reading is supported; output is always a flat rewrite that flattens xref streams and object streams into a classic xref table)
 - Public-key security handler — Standard Security Handler V = 1/2/4/5 (RC4 + AES-128 + AES-256) under the user or owner password is in; the remaining gap is the public-key `/Filter /Adobe.PubSec` form, which wraps the file key in a PKCS#7 recipient envelope rather than deriving it from a password.

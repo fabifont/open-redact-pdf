@@ -209,14 +209,10 @@ fn should_merge_match_rects(left: Rect, right: Rect) -> bool {
 }
 
 fn expand_match_rect(rect: Rect) -> Rect {
-    let padding_x = (rect.height * 0.08).max(0.6);
-    let padding_y = (rect.height * 0.12).max(0.8);
-    Rect {
-        x: rect.x - padding_x,
-        y: rect.y - padding_y,
-        width: rect.width + padding_x * 2.0,
-        height: rect.height + padding_y * 2.0,
-    }
+    // Return the rect as-is without padding. Padding for visual highlighting
+    // should be applied at the UI layer. Using padded geometry for redaction
+    // causes over-selection in densely-packed CJK text.
+    rect
 }
 
 fn build_search_index(page: &ExtractedPageText) -> PageSearchIndex {
@@ -848,9 +844,25 @@ enum SimpleEncodingBase {
     Standard,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CompositeEncoding {
+    /// `Identity-H`: the two raw bytes ARE the CID; Unicode comes from
+    /// the `ToUnicode` CMap (or a CID ≤ 0x7F ASCII fallback).
+    IdentityH,
+    /// Adobe predefined `*-UCS2-H` CMaps (`UniGB-UCS2-H`, `UniKS-UCS2-H`):
+    /// every two bytes encode a BMP Unicode scalar directly. Surrogate
+    /// halves are invalid in UCS-2 and decode to `U+FFFD`.
+    Ucs2H,
+    /// Adobe predefined `*-UTF16-H` CMaps (`UniJIS-UTF16-H`,
+    /// `UniCNS-UTF16-H`): the byte stream is UTF-16BE — two bytes per BMP
+    /// glyph, four bytes per surrogate pair. The `ToUnicode` map is keyed
+    /// by 16-bit codes, so it is consulted for BMP code units only.
+    Utf16H,
+}
+
 #[derive(Debug, Clone)]
 struct CompositeFont {
-    encoding: String,
+    encoding: CompositeEncoding,
     default_width: f64,
     widths: BTreeMap<u16, f64>,
     unicode_map: BTreeMap<u16, String>,
@@ -1709,20 +1721,55 @@ fn decode_font_glyphs(font: &LoadedFont, bytes: &[u8]) -> PdfResult<Vec<DecodedG
     }
 }
 
+/// Reject Type 0 fonts whose descendant `/W` array would silently change
+/// glyph geometry that we cannot resolve. For `Identity-H` the width
+/// table is keyed by the same two-byte code that decode_composite_glyphs
+/// already uses, so any `/W` is supported. For the predefined Unicode-
+/// keyed CMaps (`Ucs2H` / `Utf16H`) the engine decodes bytes directly to
+/// Unicode without computing real CIDs, so `/W` cannot be looked up during
+/// glyph decoding. Rejecting any non-empty `/W` is honest about this
+/// limitation and avoids silent geometry drift (AGENTS.md fail-explicit rule).
+fn reject_unsupported_widths(
+    encoding: CompositeEncoding,
+    widths: &BTreeMap<u16, f64>,
+) -> PdfResult<()> {
+    if matches!(encoding, CompositeEncoding::IdentityH) {
+        return Ok(());
+    }
+    if !widths.is_empty() {
+        return Err(PdfError::Unsupported(
+            "Type0 font with a predefined Unicode CMap and a /W width array is not supported \
+             (per-CID widths cannot be resolved without real CID computation)"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Resolve the `/Encoding` name on a Type 0 font dictionary into a
+/// `CompositeEncoding`. Vertical CMaps (`-V`), CMaps for registries we
+/// don't decode (e.g. `90ms-RKSJ-H`), and unknown names return
+/// `PdfError::Unsupported`.
+fn composite_encoding_from_name(name: &str) -> PdfResult<CompositeEncoding> {
+    match name {
+        "Identity-H" => Ok(CompositeEncoding::IdentityH),
+        "UniGB-UCS2-H" | "UniKS-UCS2-H" => Ok(CompositeEncoding::Ucs2H),
+        "UniJIS-UTF16-H" | "UniCNS-UTF16-H" => Ok(CompositeEncoding::Utf16H),
+        other => Err(PdfError::Unsupported(format!(
+            "Type0 font encoding {other} is not supported"
+        ))),
+    }
+}
+
 fn load_composite_font(
     file: &PdfFile,
     font_dict: &pdf_objects::PdfDictionary,
 ) -> PdfResult<CompositeFont> {
-    let encoding = font_dict
+    let encoding_name = font_dict
         .get("Encoding")
         .and_then(PdfValue::as_name)
-        .unwrap_or("Identity-H")
-        .to_string();
-    if encoding != "Identity-H" {
-        return Err(PdfError::Unsupported(format!(
-            "Type0 font encoding {encoding} is not supported"
-        )));
-    }
+        .unwrap_or("Identity-H");
+    let encoding = composite_encoding_from_name(encoding_name)?;
 
     let descendant = font_dict
         .get("DescendantFonts")
@@ -1749,6 +1796,7 @@ fn load_composite_font(
         .map(parse_cid_widths)
         .transpose()?
         .unwrap_or_default();
+    reject_unsupported_widths(encoding, &widths)?;
     let unicode_map = load_to_unicode_map(file, font_dict)?;
 
     Ok(CompositeFont {
@@ -1867,10 +1915,15 @@ fn parse_bfchar_line(line: &str, mapping: &mut BTreeMap<u16, String>) -> PdfResu
     if tokens.len() < 2 {
         return Ok(());
     }
-    mapping.insert(
-        parse_cid_token(&tokens[0])?,
-        decode_utf16be_lossy(&tokens[1]),
-    );
+    // Source codes longer than two bytes (e.g. UTF-16 surrogate pairs in
+    // `*-UTF16-H` ToUnicode maps) cannot be represented in our u16-keyed
+    // map. Skip the entry rather than failing the entire ToUnicode parse;
+    // the composite-font decoder falls back to direct UTF-16 decoding for
+    // those code points anyway.
+    let Ok(cid) = parse_cid_token(&tokens[0]) else {
+        return Ok(());
+    };
+    mapping.insert(cid, decode_utf16be_lossy(&tokens[1]));
     Ok(())
 }
 
@@ -1879,8 +1932,11 @@ fn parse_bfrange_line(line: &str, mapping: &mut BTreeMap<u16, String>) -> PdfRes
     if tokens.len() < 3 {
         return Ok(());
     }
-    let start = parse_cid_token(&tokens[0])?;
-    let end = parse_cid_token(&tokens[1])?;
+    // Mirror parse_bfchar_line's tolerance for source codes that exceed
+    // our u16 key space (4-byte UTF-16 surrogate pairs).
+    let (Ok(start), Ok(end)) = (parse_cid_token(&tokens[0]), parse_cid_token(&tokens[1])) else {
+        return Ok(());
+    };
     if line.contains('[') {
         for (offset, destination) in tokens.iter().skip(2).enumerate() {
             let cid = start.saturating_add(offset as u16);
@@ -1977,34 +2033,106 @@ fn decode_utf16be_lossy(bytes: &[u8]) -> String {
 }
 
 fn decode_composite_glyphs(font: &CompositeFont, bytes: &[u8]) -> PdfResult<Vec<DecodedGlyph>> {
-    if font.encoding != "Identity-H" {
-        return Err(PdfError::Unsupported(format!(
-            "Type0 font encoding {} is not supported",
-            font.encoding
-        )));
-    }
     if bytes.len() % 2 != 0 {
         return Err(PdfError::Corrupt(
-            "Identity-H strings must contain an even number of bytes".to_string(),
+            "composite font string must contain an even number of bytes".to_string(),
         ));
     }
     let mut glyphs = Vec::new();
     let mut byte_index = 0usize;
     while byte_index < bytes.len() {
-        let cid = u16::from_be_bytes([bytes[byte_index], bytes[byte_index + 1]]);
-        let text = font
-            .unicode_map
-            .get(&cid)
-            .cloned()
-            .unwrap_or_else(|| decode_fallback_cid(cid));
-        let width_units = font.widths.get(&cid).copied().unwrap_or(font.default_width);
-        glyphs.push(DecodedGlyph {
-            text,
-            width_units,
-            byte_start: byte_index,
-            byte_end: byte_index + 2,
-        });
-        byte_index += 2;
+        match font.encoding {
+            CompositeEncoding::IdentityH => {
+                let cid = u16::from_be_bytes([bytes[byte_index], bytes[byte_index + 1]]);
+                let text = font
+                    .unicode_map
+                    .get(&cid)
+                    .cloned()
+                    .unwrap_or_else(|| decode_fallback_cid(cid));
+                let width_units = font.widths.get(&cid).copied().unwrap_or(font.default_width);
+                glyphs.push(DecodedGlyph {
+                    text,
+                    width_units,
+                    byte_start: byte_index,
+                    byte_end: byte_index + 2,
+                });
+                byte_index += 2;
+            }
+            CompositeEncoding::Ucs2H => {
+                let code = u16::from_be_bytes([bytes[byte_index], bytes[byte_index + 1]]);
+                // ToUnicode override (PDF 9.10.2) takes precedence when present.
+                let text = font.unicode_map.get(&code).cloned().unwrap_or_else(|| {
+                    if (0xD800..=0xDFFF).contains(&code) {
+                        // Surrogate halves are not valid UCS-2 scalars.
+                        '\u{FFFD}'.to_string()
+                    } else {
+                        char::from_u32(u32::from(code))
+                            .unwrap_or('\u{FFFD}')
+                            .to_string()
+                    }
+                });
+                glyphs.push(DecodedGlyph {
+                    text,
+                    width_units: font.default_width,
+                    byte_start: byte_index,
+                    byte_end: byte_index + 2,
+                });
+                byte_index += 2;
+            }
+            CompositeEncoding::Utf16H => {
+                let code = u16::from_be_bytes([bytes[byte_index], bytes[byte_index + 1]]);
+                if (0xD800..=0xDBFF).contains(&code) {
+                    // High surrogate: must be followed by a low surrogate.
+                    if byte_index + 4 > bytes.len() {
+                        return Err(PdfError::Corrupt(
+                            "truncated UTF-16 surrogate pair in composite font string"
+                                .to_string(),
+                        ));
+                    }
+                    let low =
+                        u16::from_be_bytes([bytes[byte_index + 2], bytes[byte_index + 3]]);
+                    if !(0xDC00..=0xDFFF).contains(&low) {
+                        return Err(PdfError::Corrupt(
+                            "invalid UTF-16 surrogate pair in composite font string"
+                                .to_string(),
+                        ));
+                    }
+                    let scalar = 0x10000u32
+                        + ((u32::from(code) - 0xD800) << 10)
+                        + (u32::from(low) - 0xDC00);
+                    let text = char::from_u32(scalar).unwrap_or('\u{FFFD}').to_string();
+                    glyphs.push(DecodedGlyph {
+                        text,
+                        width_units: font.default_width,
+                        byte_start: byte_index,
+                        byte_end: byte_index + 4,
+                    });
+                    byte_index += 4;
+                } else if (0xDC00..=0xDFFF).contains(&code) {
+                    // Orphan low surrogate.
+                    glyphs.push(DecodedGlyph {
+                        text: '\u{FFFD}'.to_string(),
+                        width_units: font.default_width,
+                        byte_start: byte_index,
+                        byte_end: byte_index + 2,
+                    });
+                    byte_index += 2;
+                } else {
+                    let text = font.unicode_map.get(&code).cloned().unwrap_or_else(|| {
+                        char::from_u32(u32::from(code))
+                            .unwrap_or('\u{FFFD}')
+                            .to_string()
+                    });
+                    glyphs.push(DecodedGlyph {
+                        text,
+                        width_units: font.default_width,
+                        byte_start: byte_index,
+                        byte_end: byte_index + 2,
+                    });
+                    byte_index += 2;
+                }
+            }
+        }
     }
     Ok(glyphs)
 }
@@ -2075,9 +2203,237 @@ fn operand_string(operation: &Operation, index: usize) -> PdfResult<&pdf_objects
 #[cfg(test)]
 mod tests {
     use super::{
-        ExtractedPageText, Glyph, build_search_index, coalesce_match_quads, search_page_text,
+        CompositeEncoding, CompositeFont, DecodedGlyph, ExtractedPageText, Glyph,
+        build_search_index, coalesce_match_quads, decode_composite_glyphs, search_page_text,
     };
     use pdf_graphics::{Point, Quad, Rect};
+    use std::collections::BTreeMap;
+
+    fn empty_composite(encoding: CompositeEncoding) -> CompositeFont {
+        CompositeFont {
+            encoding,
+            default_width: 1000.0,
+            widths: BTreeMap::new(),
+            unicode_map: BTreeMap::new(),
+        }
+    }
+
+    fn glyph_text(g: &DecodedGlyph) -> &str {
+        g.text.as_str()
+    }
+
+    #[test]
+    fn ucs2_h_decodes_bmp_codes_directly_to_unicode() {
+        // "中文" as UCS-2 BE = [0x4E,0x2D, 0x65,0x87]. No ToUnicode map.
+        let font = empty_composite(CompositeEncoding::Ucs2H);
+        let bytes = [0x4E, 0x2D, 0x65, 0x87];
+        let glyphs = decode_composite_glyphs(&font, &bytes).expect("decode");
+        assert_eq!(glyphs.len(), 2, "two glyphs");
+        assert_eq!(glyph_text(&glyphs[0]), "中");
+        assert_eq!(glyph_text(&glyphs[1]), "文");
+        assert_eq!(glyphs[0].byte_start, 0);
+        assert_eq!(glyphs[0].byte_end, 2);
+        assert_eq!(glyphs[1].byte_start, 2);
+        assert_eq!(glyphs[1].byte_end, 4);
+        assert_eq!(glyphs[0].width_units, 1000.0);
+        assert_eq!(glyphs[1].width_units, 1000.0);
+    }
+
+    #[test]
+    fn ucs2_h_emits_replacement_for_surrogate_halves() {
+        // 0xD800 is a high-surrogate code unit; invalid in UCS-2.
+        let font = empty_composite(CompositeEncoding::Ucs2H);
+        let bytes = [0xD8, 0x00];
+        let glyphs = decode_composite_glyphs(&font, &bytes).expect("decode");
+        assert_eq!(glyphs.len(), 1);
+        assert_eq!(glyph_text(&glyphs[0]), "\u{FFFD}");
+    }
+
+    #[test]
+    fn ucs2_h_to_unicode_overrides_direct_decode() {
+        let mut font = empty_composite(CompositeEncoding::Ucs2H);
+        // Override the BMP code for U+4E2D ("中") with a Latin string from
+        // a ToUnicode CMap; this is rare but legal per PDF 9.10.2.
+        font.unicode_map.insert(0x4E2D, "Z".to_string());
+        let bytes = [0x4E, 0x2D];
+        let glyphs = decode_composite_glyphs(&font, &bytes).expect("decode");
+        assert_eq!(glyph_text(&glyphs[0]), "Z");
+    }
+
+    #[test]
+    fn utf16_h_decodes_surrogate_pair_then_bmp() {
+        // [0xD840 0xDC00] = U+20000 ("𠀀"); [0x4E 0x2D] = "中".
+        let font = empty_composite(CompositeEncoding::Utf16H);
+        let bytes = [0xD8, 0x40, 0xDC, 0x00, 0x4E, 0x2D];
+        let glyphs = decode_composite_glyphs(&font, &bytes).expect("decode");
+        assert_eq!(glyphs.len(), 2, "two glyphs");
+        assert_eq!(glyph_text(&glyphs[0]), "\u{20000}");
+        assert_eq!(glyphs[0].byte_start, 0);
+        assert_eq!(glyphs[0].byte_end, 4);
+        assert_eq!(glyph_text(&glyphs[1]), "中");
+        assert_eq!(glyphs[1].byte_start, 4);
+        assert_eq!(glyphs[1].byte_end, 6);
+        assert_eq!(glyphs[0].width_units, 1000.0);
+        assert_eq!(glyphs[1].width_units, 1000.0);
+    }
+
+    #[test]
+    fn utf16_h_orphan_low_surrogate_emits_replacement() {
+        let font = empty_composite(CompositeEncoding::Utf16H);
+        let bytes = [0xDC, 0x00];
+        let glyphs = decode_composite_glyphs(&font, &bytes).expect("decode");
+        assert_eq!(glyphs.len(), 1);
+        assert_eq!(glyph_text(&glyphs[0]), "\u{FFFD}");
+        assert_eq!(glyphs[0].byte_end - glyphs[0].byte_start, 2);
+    }
+
+    #[test]
+    fn utf16_h_truncated_surrogate_pair_is_corrupt() {
+        let font = empty_composite(CompositeEncoding::Utf16H);
+        // High surrogate at the very end with no low half to follow.
+        let bytes = [0xD8, 0x40];
+        let err = decode_composite_glyphs(&font, &bytes).expect_err("must fail");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("truncated UTF-16 surrogate pair"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn composite_encoding_from_name_accepts_known_cmaps() {
+        use super::composite_encoding_from_name;
+        assert_eq!(
+            composite_encoding_from_name("Identity-H").expect("identity-h"),
+            CompositeEncoding::IdentityH
+        );
+        assert_eq!(
+            composite_encoding_from_name("UniGB-UCS2-H").expect("gb"),
+            CompositeEncoding::Ucs2H
+        );
+        assert_eq!(
+            composite_encoding_from_name("UniKS-UCS2-H").expect("ks"),
+            CompositeEncoding::Ucs2H
+        );
+        assert_eq!(
+            composite_encoding_from_name("UniJIS-UTF16-H").expect("jis"),
+            CompositeEncoding::Utf16H
+        );
+        assert_eq!(
+            composite_encoding_from_name("UniCNS-UTF16-H").expect("cns"),
+            CompositeEncoding::Utf16H
+        );
+    }
+
+    #[test]
+    fn tounicode_skips_oversize_bfchar_keys_but_keeps_bmp_entries() {
+        use super::parse_to_unicode_cmap;
+        // The 4-byte source code <D840DC00> is the UTF-16 surrogate pair
+        // for U+20000. Our u16-keyed map cannot represent it, but a
+        // surrounding BMP entry MUST still survive the parse.
+        let cmap = b"/CIDInit /ProcSet findresource begin\n\
+            12 dict begin\n\
+            begincmap\n\
+            2 beginbfchar\n\
+            <D840DC00> <D840DC00>\n\
+            <4E2D> <4E2D>\n\
+            endbfchar\n\
+            endcmap\n";
+        let map = parse_to_unicode_cmap(cmap).expect("parse must succeed");
+        assert_eq!(map.get(&0x4E2D).map(String::as_str), Some("中"));
+        assert!(
+            !map.contains_key(&0xD840),
+            "surrogate-pair source must not leak into the BMP map"
+        );
+    }
+
+    #[test]
+    fn tounicode_skips_oversize_bfrange_keys_but_keeps_bmp_entries() {
+        use super::parse_to_unicode_cmap;
+        let cmap = b"begincmap\n\
+            2 beginbfrange\n\
+            <D840DC00> <D840DC02> <D840DC00>\n\
+            <4E2D> <4E2E> <4E2D>\n\
+            endbfrange\n\
+            endcmap\n";
+        let map = parse_to_unicode_cmap(cmap).expect("parse must succeed");
+        assert_eq!(map.get(&0x4E2D).map(String::as_str), Some("中"));
+        assert_eq!(map.get(&0x4E2E).map(String::as_str), Some("丮"));
+        assert!(!map.contains_key(&0xD840));
+    }
+
+    #[test]
+    fn predefined_cmap_without_widths_is_accepted() {
+        use super::reject_unsupported_widths;
+        // Identity-H always allowed: per-CID widths are looked up directly.
+        reject_unsupported_widths(CompositeEncoding::IdentityH, &{
+            let mut w = BTreeMap::new();
+            w.insert(1, 1000.0);
+            w.insert(2, 500.0);
+            w
+        }).expect("identity-h with /W is supported");
+        // Ucs2-H and Utf16H allowed only with empty /W: no way to look up
+        // widths for non-CID-keyed encodings.
+        reject_unsupported_widths(CompositeEncoding::Ucs2H, &BTreeMap::new())
+            .expect("ucs2-h without /W is supported");
+        reject_unsupported_widths(CompositeEncoding::Utf16H, &BTreeMap::new())
+            .expect("utf16-h without /W is supported");
+    }
+
+    #[test]
+    fn predefined_cmap_with_any_widths_is_rejected() {
+        use super::reject_unsupported_widths;
+        let mut widths = BTreeMap::new();
+        widths.insert(1, 1000.0);
+        for encoding in [CompositeEncoding::Ucs2H, CompositeEncoding::Utf16H] {
+            let err = reject_unsupported_widths(encoding, &widths)
+                .expect_err("any /W must be rejected for predefined CMaps");
+            let msg = format!("{err:?}");
+            assert!(
+                msg.contains("not supported"),
+                "expected unsupported error for {encoding:?}, got: {msg}"
+            );
+        }
+        // Identity-H still OK — it uses /W per CID.
+        reject_unsupported_widths(CompositeEncoding::IdentityH, &widths)
+            .expect("identity-h still uses /W per CID");
+    }
+
+    #[test]
+    fn composite_encoding_from_name_rejects_vertical_and_unknown() {
+        use super::composite_encoding_from_name;
+        for name in [
+            "Identity-V",
+            "UniJIS-UTF16-V",
+            "UniGB-UCS2-V",
+            "90ms-RKSJ-H",
+            "GBK-EUC-H",
+            "",
+        ] {
+            let err = composite_encoding_from_name(name)
+                .err()
+                .unwrap_or_else(|| panic!("expected error for {name}"));
+            let msg = format!("{err:?}");
+            assert!(
+                msg.contains("not supported"),
+                "expected unsupported error for {name}, got: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn utf16_h_to_unicode_consulted_for_bmp_only() {
+        let mut font = empty_composite(CompositeEncoding::Utf16H);
+        // ToUnicode entry for the BMP code "中" overrides direct decode.
+        font.unicode_map.insert(0x4E2D, "Z".to_string());
+        // ToUnicode entry for a high surrogate must NOT be consulted —
+        // the SMP scalar is composed from the four raw bytes instead.
+        font.unicode_map.insert(0xD840, "WRONG".to_string());
+        let bytes = [0xD8, 0x40, 0xDC, 0x00, 0x4E, 0x2D];
+        let glyphs = decode_composite_glyphs(&font, &bytes).expect("decode");
+        assert_eq!(glyph_text(&glyphs[0]), "\u{20000}", "SMP must skip ToUnicode");
+        assert_eq!(glyph_text(&glyphs[1]), "Z", "BMP must use ToUnicode");
+    }
 
     fn make_glyph(text: char, x: f64, y: f64) -> Glyph {
         let rect = Rect {
@@ -2180,7 +2536,7 @@ mod tests {
         let merged = coalesce_match_quads(&quads);
         assert_eq!(merged.len(), 2);
         let first = merged[0].bounding_rect();
-        assert!(first.x < 10.0);
-        assert!(first.max_x() > 18.5);
+        assert_eq!(first.x, 10.0, "without padding, rect should start at exact glyph boundary");
+        assert_eq!(first.max_x(), 18.5, "first two glyphs should be merged");
     }
 }
