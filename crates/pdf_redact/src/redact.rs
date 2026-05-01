@@ -66,6 +66,14 @@ pub fn apply_redactions(
     // pages.
     let mut deferred_xobject_removals: Vec<(PdfDictionary, Vec<String>)> = Vec::new();
     let mut deferred_content_removals: Vec<ObjectRef> = Vec::new();
+    // Set of original Image XObject refs whose stream was copy-on-write
+    // replaced by a masked variant on at least one page. After all
+    // per-page work finishes we re-check whether any live reference
+    // (page or Form XObject Resources) still points at each original
+    // and drop the unreachable ones from `file.objects`. This prevents
+    // the writer from emitting the original (unmasked) pixels as a
+    // dangling indirect object.
+    let mut cowed_image_originals: BTreeSet<ObjectRef> = BTreeSet::new();
 
     // Allocated lazily on the first page that actually needs to stamp an
     // overlay label. Shared across pages so the saved PDF contains a single
@@ -73,7 +81,7 @@ pub fn apply_redactions(
     let mut overlay_font_ref: Option<ObjectRef> = None;
 
     for (page_index, targets) in page_targets {
-        let page = pages
+        let mut page = pages
             .get(page_index)
             .cloned()
             .ok_or(PdfError::InvalidPageIndex(page_index))?;
@@ -117,7 +125,11 @@ pub fn apply_redactions(
         }
         report.form_xobjects_rewritten += form_redactions.len();
         if !form_redactions.is_empty() {
-            override_page_xobject_refs(file, page.page_ref, &page.resources, &form_redactions)?;
+            override_page_xobject_refs(file, &mut pages[page_index], &form_redactions)?;
+            // Refresh local snapshot so downstream code (annotation
+            // removal, overlay font registration, deferred removals)
+            // sees the post-override resources state.
+            page = pages[page_index].clone();
         }
 
         let glyph_removals = collect_glyph_removals(&page_glyphs, &targets);
@@ -153,19 +165,48 @@ pub fn apply_redactions(
 
         // Apply pending partial-mask rewrites via copy-on-write so any
         // other page that shares the same image stream is unaffected.
-        // On Unsupported (image format outside the supported subset) the
-        // mask falls back to whole-invocation neutralization: the Do is
-        // rewritten to `n` in place and the underlying stream removal
-        // is queued for later.
+        // Multiple `Do` invocations of the same Image XObject on a
+        // single page are grouped by `original_ref` so all of their
+        // pixel rectangles land in one masked COW copy — without
+        // grouping, the last `rewire_page_xobject` would clobber
+        // earlier masks. On Unsupported (image format outside the
+        // supported subset) every name in the group falls back to
+        // whole-invocation neutralization.
         let mut partial_mask_fallback_names: Vec<String> = Vec::new();
+        let mut grouped_masks: BTreeMap<
+            ObjectRef,
+            (
+                Vec<crate::image_mask::ImagePixelRect>,
+                BTreeSet<String>,
+            ),
+        > = BTreeMap::new();
         for mask in &outcome.partial_masks {
-            match apply_partial_mask(file, pages, page_index, mask, plan.fill_color) {
-                Ok(()) => {}
+            let entry = grouped_masks.entry(mask.original_ref).or_default();
+            entry.0.push(mask.pixel_rect);
+            entry.1.insert(mask.xobject_name.clone());
+        }
+        for (original_ref, (pixel_rects, names)) in &grouped_masks {
+            match apply_partial_masks_for_image(
+                file,
+                pages,
+                page_index,
+                *original_ref,
+                pixel_rects,
+                names,
+                plan.fill_color,
+            ) {
+                Ok(()) => {
+                    cowed_image_originals.insert(*original_ref);
+                }
                 Err(PdfError::Unsupported(_)) => {
-                    fallback_image_to_drop(&mut operations, &mask.xobject_name);
-                    report.image_draws_masked = report.image_draws_masked.saturating_sub(1);
-                    report.image_draws_removed += 1;
-                    partial_mask_fallback_names.push(mask.xobject_name.clone());
+                    for name in names {
+                        fallback_image_to_drop(&mut operations, name);
+                        partial_mask_fallback_names.push(name.clone());
+                    }
+                    let group_count = pixel_rects.len();
+                    report.image_draws_masked =
+                        report.image_draws_masked.saturating_sub(group_count);
+                    report.image_draws_removed += group_count;
                 }
                 Err(other) => return Err(other),
             }
@@ -230,7 +271,75 @@ pub fn apply_redactions(
         }
     }
 
+    // Drop original Image XObjects whose pixels were copy-on-write
+    // replaced and whose stream is no longer referenced from any live
+    // page or Form XObject. Without this the writer would emit the
+    // unmasked original alongside the masked COW copy, leaving the
+    // redacted pixels recoverable from the saved bytes.
+    if !cowed_image_originals.is_empty() {
+        prune_unreferenced_images(file, &cowed_image_originals);
+    }
+
     Ok(report)
+}
+
+/// Remove every entry of `candidates` from `file.objects` that no
+/// remaining live indirect object references. Reachability is computed
+/// over a single sweep of `file.objects` (excluding the candidate
+/// streams themselves) plus the trailer.
+fn prune_unreferenced_images(file: &mut PdfFile, candidates: &BTreeSet<ObjectRef>) {
+    let mut still_referenced: BTreeSet<ObjectRef> = BTreeSet::new();
+    for (object_ref, object) in &file.objects {
+        if candidates.contains(object_ref) {
+            // The object referencing itself does not count as a live
+            // reference — we are deciding whether anything else points
+            // at it.
+            continue;
+        }
+        match object {
+            PdfObject::Value(value) => {
+                collect_referenced_into(value, candidates, &mut still_referenced)
+            }
+            PdfObject::Stream(stream) => {
+                for value in stream.dict.values() {
+                    collect_referenced_into(value, candidates, &mut still_referenced);
+                }
+            }
+        }
+    }
+    for value in file.trailer.values() {
+        collect_referenced_into(value, candidates, &mut still_referenced);
+    }
+    for candidate in candidates {
+        if !still_referenced.contains(candidate) {
+            file.objects.remove(candidate);
+        }
+    }
+}
+
+fn collect_referenced_into(
+    value: &PdfValue,
+    candidates: &BTreeSet<ObjectRef>,
+    out: &mut BTreeSet<ObjectRef>,
+) {
+    match value {
+        PdfValue::Reference(target) => {
+            if candidates.contains(target) {
+                out.insert(*target);
+            }
+        }
+        PdfValue::Array(items) => {
+            for item in items {
+                collect_referenced_into(item, candidates, out);
+            }
+        }
+        PdfValue::Dictionary(dict) => {
+            for v in dict.values() {
+                collect_referenced_into(v, candidates, out);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn group_targets(plan: &NormalizedRedactionPlan) -> BTreeMap<usize, Vec<&NormalizedPageTarget>> {
@@ -357,26 +466,33 @@ fn collect_reachable_refs(
 }
 
 /// Removes the underlying stream objects for neutralized XObjects.
-/// Apply a single partial-mask rewrite. Returns
-/// [`PdfError::Unsupported`] when the image's format is outside the
-/// supported subset (caller falls back to whole-invocation drop).
-fn apply_partial_mask(
+/// Apply a group of partial-mask requests that all target the same
+/// underlying image stream. Decodes the original once, paints every
+/// pixel rectangle, re-encodes once, allocates one COW image, and
+/// repoints every involved XObject name on this page at the new ref.
+/// Returns [`PdfError::Unsupported`] when the image's format is
+/// outside the supported subset; the caller falls back to
+/// whole-invocation drop for every name in the group.
+fn apply_partial_masks_for_image(
     file: &mut PdfFile,
     pages: &mut [PageInfo],
     page_index: usize,
-    mask: &PendingImageMask,
+    original_ref: ObjectRef,
+    pixel_rects: &[crate::image_mask::ImagePixelRect],
+    xobject_names: &BTreeSet<String>,
     fill_color: Color,
 ) -> PdfResult<()> {
-    let stream = match file.get_object(mask.original_ref)? {
+    let stream = match file.get_object(original_ref)? {
         PdfObject::Stream(stream) => stream.clone(),
         _ => {
             return Err(PdfError::Corrupt(format!(
-                "Image XObject /{} did not resolve to a stream",
-                mask.xobject_name
+                "Image XObject {} {} did not resolve to a stream",
+                original_ref.object_number, original_ref.generation
             )));
         }
     };
-    let masked = crate::image_mask::mask_image_region(&stream, mask.pixel_rect, fill_color)?;
+    let masked =
+        crate::image_mask::mask_image_region_multi(&stream, pixel_rects, fill_color)?;
     let new_stream = PdfStream {
         dict: masked.new_dict,
         data: masked.new_data,
@@ -384,8 +500,11 @@ fn apply_partial_mask(
     let new_ref = file.allocate_object_ref();
     file.objects.insert(new_ref, PdfObject::Stream(new_stream));
 
-    // Repoint the page's Resources.XObject[name] entry to the COW copy.
-    rewire_page_xobject(file, pages, page_index, &mask.xobject_name, new_ref)?;
+    // Repoint every page-resource name that mapped to this original
+    // image at the single COW copy.
+    for name in xobject_names {
+        rewire_page_xobject(file, pages, page_index, name, new_ref)?;
+    }
     Ok(())
 }
 
@@ -1864,11 +1983,10 @@ fn redact_form_xobject(
 
 fn override_page_xobject_refs(
     file: &mut PdfFile,
-    page_ref: ObjectRef,
-    effective_resources: &PdfDictionary,
+    page: &mut PageInfo,
     redactions: &[FormRedaction],
 ) -> PdfResult<()> {
-    let existing_xobject: PdfDictionary = match effective_resources.get("XObject") {
+    let existing_xobject: PdfDictionary = match page.resources.get("XObject") {
         Some(value) => file.resolve_dict(value).cloned().unwrap_or_default(),
         None => PdfDictionary::new(),
     };
@@ -1879,9 +1997,18 @@ fn override_page_xobject_refs(
             PdfValue::Reference(redaction.new_ref),
         );
     }
-    let mut new_resources = effective_resources.clone();
-    new_resources.insert("XObject".to_string(), PdfValue::Dictionary(new_xobject));
+    let mut new_resources = page.resources.clone();
+    new_resources.insert(
+        "XObject".to_string(),
+        PdfValue::Dictionary(new_xobject.clone()),
+    );
 
+    // Keep the in-memory PageInfo.resources cache in sync with what we
+    // write to the page object so any later rewrite (e.g. partial image
+    // mask) reads the post-override state instead of a stale snapshot.
+    page.resources = new_resources.clone();
+
+    let page_ref = page.page_ref;
     match file.get_object_mut(page_ref)? {
         PdfObject::Value(PdfValue::Dictionary(page_dict)) => {
             page_dict.insert("Resources".to_string(), PdfValue::Dictionary(new_resources));

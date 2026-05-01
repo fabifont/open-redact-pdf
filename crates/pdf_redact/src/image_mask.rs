@@ -44,23 +44,44 @@ pub(crate) struct MaskedImage {
 }
 
 /// Mask the rectangular pixel region inside the image with the given
-/// fill colour. Returns [`PdfError::Unsupported`] when the image's
-/// format is outside the supported set; the caller falls back to
-/// whole-invocation drop in that case.
+/// fill colour. Convenience wrapper used only by unit tests; production
+/// callers (`apply_partial_masks_for_image`) always group multiple rects
+/// per image and use [`mask_image_region_multi`] directly.
+#[cfg(test)]
+#[allow(dead_code)]
 pub(crate) fn mask_image_region(
     stream: &PdfStream,
     pixel_rect: ImagePixelRect,
     fill_color: Color,
 ) -> PdfResult<MaskedImage> {
+    mask_image_region_multi(stream, std::slice::from_ref(&pixel_rect), fill_color)
+}
+
+/// Mask multiple rectangular pixel regions inside the same image with
+/// the given fill colour. Decode + encode each happen exactly once
+/// regardless of how many rectangles are supplied — used when one page
+/// invokes the same Image XObject multiple times via `Do` with
+/// different partial-overlap targets, so every targeted pixel is
+/// covered by a single COW copy.
+pub(crate) fn mask_image_region_multi(
+    stream: &PdfStream,
+    pixel_rects: &[ImagePixelRect],
+    fill_color: Color,
+) -> PdfResult<MaskedImage> {
+    if pixel_rects.is_empty() {
+        return Err(PdfError::Corrupt(
+            "mask_image_region_multi requires at least one pixel rect".to_string(),
+        ));
+    }
     let format = detect_format(&stream.dict)?;
     match format {
         ImageFormat::RawOrFlate {
             components,
             width,
             height,
-        } => mask_raw_or_flate(stream, components, width, height, pixel_rect, fill_color),
+        } => mask_raw_or_flate(stream, components, width, height, pixel_rects, fill_color),
         ImageFormat::Jpeg { width, height } => {
-            mask_jpeg(stream, width, height, pixel_rect, fill_color)
+            mask_jpeg(stream, width, height, pixel_rects, fill_color)
         }
     }
 }
@@ -175,7 +196,7 @@ fn mask_raw_or_flate(
     components: u8,
     width: u32,
     height: u32,
-    pixel_rect: ImagePixelRect,
+    pixel_rects: &[ImagePixelRect],
     fill_color: Color,
 ) -> PdfResult<MaskedImage> {
     let mut pixels = decode_stream(stream)?;
@@ -192,7 +213,9 @@ fn mask_raw_or_flate(
         )));
     }
     pixels.truncate(expected_len);
-    paint_mask_rect(&mut pixels, width, components, pixel_rect, fill_color);
+    for pixel_rect in pixel_rects {
+        paint_mask_rect(&mut pixels, width, components, *pixel_rect, fill_color);
+    }
     let encoded = flate_encode(&pixels)?;
     let mut new_dict = stream.dict.clone();
     new_dict.insert("Filter".to_string(), PdfValue::Name("FlateDecode".to_string()));
@@ -211,7 +234,7 @@ fn mask_jpeg(
     stream: &PdfStream,
     declared_width: u32,
     declared_height: u32,
-    pixel_rect: ImagePixelRect,
+    pixel_rects: &[ImagePixelRect],
     fill_color: Color,
 ) -> PdfResult<MaskedImage> {
     let mut decoder = JpegDecoder::new(stream.data.as_slice());
@@ -251,7 +274,9 @@ fn mask_jpeg(
         )));
     }
     pixels.truncate(expected_len);
-    paint_mask_rect(&mut pixels, width, components, pixel_rect, fill_color);
+    for pixel_rect in pixel_rects {
+        paint_mask_rect(&mut pixels, width, components, *pixel_rect, fill_color);
+    }
 
     let mut encoded: Vec<u8> = Vec::new();
     {

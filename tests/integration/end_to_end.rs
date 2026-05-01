@@ -1882,3 +1882,374 @@ fn full_cover_image_drops_to_n() {
     assert_eq!(report.image_draws_masked, 0);
     assert_eq!(report.image_draws_removed, 1, "image should be fully dropped");
 }
+
+#[test]
+fn partial_image_drops_original_ref_when_unreferenced() {
+    // Regression for the leak path: after a partial mask the original
+    // image stream must not survive in the saved PDF (no other live
+    // reference points at it). Otherwise a reader could recover the
+    // unmasked pixels from the orphan indirect object.
+    let pdf = build_partial_image_flate_pdf(32, 32);
+    let mut document = PdfDocument::open(&pdf).expect("fixture should open");
+
+    let report = document
+        .apply_redactions(RedactionPlan {
+            targets: vec![RedactionTarget::Rect {
+                page_index: 0,
+                x: 152.0,
+                y: 680.0,
+                width: 80.0,
+                height: 80.0,
+            }],
+            mode: None,
+            fill_color: None,
+            overlay_text: None,
+            remove_intersecting_annotations: Some(false),
+            strip_metadata: Some(false),
+            strip_attachments: Some(false),
+            sanitize_hidden_ocgs: None,
+        })
+        .expect("redaction should succeed");
+    assert_eq!(report.image_draws_masked, 1);
+
+    let saved = document.save().expect("save");
+    let reopened = parse_pdf(&saved).expect("saved PDF should reopen");
+
+    // The fixture's only Image XObject is at object 6; after a partial
+    // mask + COW the saved PDF should contain exactly one Image stream
+    // (the masked copy) and no orphan original.
+    use pdf_objects::PdfObject;
+    let mut image_refs: Vec<_> = reopened
+        .file
+        .objects
+        .iter()
+        .filter(|(_, object)| match object {
+            PdfObject::Stream(stream) => {
+                stream.dict.get("Subtype").and_then(|v| v.as_name()) == Some("Image")
+            }
+            _ => false,
+        })
+        .map(|(r, _)| *r)
+        .collect();
+    image_refs.sort_by_key(|r| r.object_number);
+    assert_eq!(
+        image_refs.len(),
+        1,
+        "exactly one Image XObject should survive in the saved PDF, got {image_refs:?}"
+    );
+}
+
+#[test]
+fn partial_image_two_invocations_mask_both_rects() {
+    // Regression for the repeated-name bug: when the same Image
+    // XObject is drawn twice on a page with two different partial
+    // overlap rectangles, BOTH rectangles must be masked in the
+    // saved file. Previously the second `apply_partial_mask` rewired
+    // /Im1 to a new copy that only had its own rect masked, losing
+    // the first invocation's mask.
+
+    use flate2::Compression;
+    use flate2::write::ZlibEncoder;
+    use std::io::Write as _;
+
+    // 32x32 RGB gradient.
+    let width = 32u32;
+    let height = 32u32;
+    let mut raw: Vec<u8> = Vec::with_capacity((width * height * 3) as usize);
+    for y in 0..height {
+        for x in 0..width {
+            raw.push((x * 8) as u8);
+            raw.push((y * 8) as u8);
+            raw.push((x as u8) ^ (y as u8));
+        }
+    }
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(&raw).unwrap();
+    let compressed = encoder.finish().unwrap();
+
+    // Two Do invocations of /Im1 at non-overlapping page-space rects:
+    //   first  at (72, 600)..(232, 760)  — image space x∈[0,32), y∈[0,32)
+    //   second at (300, 600)..(460, 760) — same image-space tile, drawn elsewhere
+    // The first redaction target hits ONLY the first invocation's
+    // top-right quadrant; the second target hits ONLY the second
+    // invocation's bottom-left quadrant.
+    let content = "q\n160 0 0 160 72 600 cm\n/Im1 Do\nQ\nq\n160 0 0 160 300 600 cm\n/Im1 Do\nQ\n";
+
+    let mut pdf: Vec<u8> = Vec::new();
+    pdf.extend_from_slice(b"%PDF-1.7\n");
+    let catalog_offset = pdf.len();
+    pdf.extend_from_slice(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+    let pages_offset = pdf.len();
+    pdf.extend_from_slice(b"2 0 obj\n<< /Type /Pages /Count 1 /Kids [3 0 R] >>\nendobj\n");
+    let page_offset = pdf.len();
+    pdf.extend_from_slice(
+        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
+          /Resources << /Font << /F1 5 0 R >> /XObject << /Im1 6 0 R >> >> /Contents 4 0 R >>\nendobj\n",
+    );
+    let content_offset = pdf.len();
+    pdf.extend_from_slice(format!("4 0 obj\n<< /Length {} >>\nstream\n", content.len()).as_bytes());
+    pdf.extend_from_slice(content.as_bytes());
+    pdf.extend_from_slice(b"\nendstream\nendobj\n");
+    let font_offset = pdf.len();
+    pdf.extend_from_slice(
+        b"5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>\nendobj\n",
+    );
+    let image_offset = pdf.len();
+    pdf.extend_from_slice(format!(
+        "6 0 obj\n<< /Type /XObject /Subtype /Image /Width {width} /Height {height} \
+         /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /Length {} >>\nstream\n",
+        compressed.len()
+    ).as_bytes());
+    pdf.extend_from_slice(&compressed);
+    pdf.extend_from_slice(b"\nendstream\nendobj\n");
+    let xref_offset = pdf.len();
+    pdf.extend_from_slice(b"xref\n0 7\n0000000000 65535 f \n");
+    for offset in [
+        catalog_offset, pages_offset, page_offset, content_offset, font_offset, image_offset,
+    ] {
+        pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(b"trailer\n<< /Size 7 /Root 1 0 R >>\n");
+    pdf.extend_from_slice(format!("startxref\n{xref_offset}\n%%EOF\n").as_bytes());
+
+    let mut document = PdfDocument::open(&pdf).expect("fixture should open");
+
+    let report = document
+        .apply_redactions(RedactionPlan {
+            targets: vec![
+                // First-invocation top-right 16x16 px → page rect (152, 680)..(232, 760)
+                RedactionTarget::Rect {
+                    page_index: 0,
+                    x: 152.0,
+                    y: 680.0,
+                    width: 80.0,
+                    height: 80.0,
+                },
+                // Second-invocation bottom-left 16x16 px → page rect (300, 600)..(380, 680)
+                RedactionTarget::Rect {
+                    page_index: 0,
+                    x: 300.0,
+                    y: 600.0,
+                    width: 80.0,
+                    height: 80.0,
+                },
+            ],
+            mode: None,
+            fill_color: None,
+            overlay_text: None,
+            remove_intersecting_annotations: Some(false),
+            strip_metadata: Some(false),
+            strip_attachments: Some(false),
+            sanitize_hidden_ocgs: None,
+        })
+        .expect("redaction should succeed");
+    assert_eq!(
+        report.image_draws_masked, 2,
+        "both Do invocations should be tracked"
+    );
+    assert_eq!(report.image_draws_removed, 0);
+
+    let saved = document.save().expect("save");
+    let (width, height, pixels) = decode_flate_image(&saved);
+    assert_eq!(width, 32);
+    assert_eq!(height, 32);
+
+    // Both rectangles must be black in the single COW masked copy.
+    // First-invocation top-right: x∈[16,32), y∈[0,16)
+    // Second-invocation bottom-left: x∈[0,16), y∈[16,32)
+    for y in 0..32u32 {
+        for x in 0..32u32 {
+            let off = ((y * 32 + x) * 3) as usize;
+            let in_first = (16..32).contains(&x) && (0..16).contains(&y);
+            let in_second = (0..16).contains(&x) && (16..32).contains(&y);
+            if in_first || in_second {
+                assert_eq!(pixels[off], 0, "pixel ({x},{y}) R should be 0");
+                assert_eq!(pixels[off + 1], 0, "pixel ({x},{y}) G should be 0");
+                assert_eq!(pixels[off + 2], 0, "pixel ({x},{y}) B should be 0");
+            } else {
+                let expected_r = (x * 8) as u8;
+                let expected_g = (y * 8) as u8;
+                let expected_b = (x as u8) ^ (y as u8);
+                assert_eq!(pixels[off], expected_r, "pixel ({x},{y}) R drift");
+                assert_eq!(pixels[off + 1], expected_g);
+                assert_eq!(pixels[off + 2], expected_b);
+            }
+        }
+    }
+}
+
+#[test]
+fn form_xobject_redaction_and_partial_image_mask_compose_on_one_page() {
+    // Regression for the resource-cache stale-write path: when a
+    // single page has both a Form XObject that gets redacted (COW
+    // with content rewrite, points the page's Resources.XObject[Fm1]
+    // at the new ref) AND an Image XObject that gets a partial mask
+    // (COW with pixel rewrite, points Resources.XObject[Im1] at the
+    // new ref), neither override may clobber the other. Previously
+    // the image pass wrote a stale snapshot of the page resources
+    // back into the page object, undoing the form override.
+    use flate2::Compression;
+    use flate2::write::ZlibEncoder;
+    use std::io::Write as _;
+
+    // 32x32 gradient image, FlateDecode-compressed.
+    let width = 32u32;
+    let height = 32u32;
+    let mut raw: Vec<u8> = Vec::with_capacity((width * height * 3) as usize);
+    for y in 0..height {
+        for x in 0..width {
+            raw.push((x * 8) as u8);
+            raw.push((y * 8) as u8);
+            raw.push((x as u8) ^ (y as u8));
+        }
+    }
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(&raw).unwrap();
+    let compressed = encoder.finish().unwrap();
+
+    // Form XObject content: draws "Form Inner Secret" at position
+    // (50, 50) inside the form, which is mapped via /Matrix [1 0 0 1
+    // 0 100] to roughly (50, 150) in page space.
+    let form_content = "BT\n/F2 14 Tf\n0 0 Td\n(Form Inner Secret) Tj\nET\n";
+
+    // Page content: header text outside both targets (y=400, well
+    // below the image at y∈[600,760] and far above the form at y≈150),
+    // Form Do, image Do.
+    let page_content =
+        "BT\n/F1 18 Tf\n72 400 Td\n(Page Header) Tj\nET\n\
+         q\n1 0 0 1 50 50 cm\n/Fm1 Do\nQ\n\
+         q\n160 0 0 160 72 600 cm\n/Im1 Do\nQ\n";
+
+    let mut pdf: Vec<u8> = Vec::new();
+    pdf.extend_from_slice(b"%PDF-1.7\n");
+    let catalog_offset = pdf.len();
+    pdf.extend_from_slice(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+    let pages_offset = pdf.len();
+    pdf.extend_from_slice(b"2 0 obj\n<< /Type /Pages /Count 1 /Kids [3 0 R] >>\nendobj\n");
+    let page_offset = pdf.len();
+    pdf.extend_from_slice(
+        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
+          /Resources << /Font << /F1 5 0 R >> /XObject << /Fm1 6 0 R /Im1 7 0 R >> >> \
+          /Contents 4 0 R >>\nendobj\n",
+    );
+    let content_offset = pdf.len();
+    pdf.extend_from_slice(
+        format!("4 0 obj\n<< /Length {} >>\nstream\n", page_content.len()).as_bytes(),
+    );
+    pdf.extend_from_slice(page_content.as_bytes());
+    pdf.extend_from_slice(b"\nendstream\nendobj\n");
+    let font_offset = pdf.len();
+    pdf.extend_from_slice(
+        b"5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>\nendobj\n",
+    );
+    let form_offset = pdf.len();
+    pdf.extend_from_slice(format!(
+        "6 0 obj\n<< /Type /XObject /Subtype /Form /FormType 1 /BBox [0 0 400 200] \
+         /Matrix [1 0 0 1 0 100] /Resources << /Font << /F2 8 0 R >> >> \
+         /Length {} >>\nstream\n",
+        form_content.len()
+    ).as_bytes());
+    pdf.extend_from_slice(form_content.as_bytes());
+    pdf.extend_from_slice(b"\nendstream\nendobj\n");
+    let image_offset = pdf.len();
+    pdf.extend_from_slice(format!(
+        "7 0 obj\n<< /Type /XObject /Subtype /Image /Width {width} /Height {height} \
+         /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /Length {} >>\nstream\n",
+        compressed.len()
+    ).as_bytes());
+    pdf.extend_from_slice(&compressed);
+    pdf.extend_from_slice(b"\nendstream\nendobj\n");
+    let form_font_offset = pdf.len();
+    pdf.extend_from_slice(
+        b"8 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>\nendobj\n",
+    );
+
+    let xref_offset = pdf.len();
+    pdf.extend_from_slice(b"xref\n0 9\n0000000000 65535 f \n");
+    for offset in [
+        catalog_offset, pages_offset, page_offset, content_offset, font_offset,
+        form_offset, image_offset, form_font_offset,
+    ] {
+        pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(b"trailer\n<< /Size 9 /Root 1 0 R >>\n");
+    pdf.extend_from_slice(format!("startxref\n{xref_offset}\n%%EOF\n").as_bytes());
+
+    let mut document = PdfDocument::open(&pdf).expect("fixture should open");
+
+    // Sanity: extraction sees both the Form text and the page header.
+    let extracted_before = document
+        .extract_text(0)
+        .expect("text extraction should succeed");
+    assert!(extracted_before.text.contains("Form Inner Secret"));
+    assert!(extracted_before.text.contains("Page Header"));
+
+    // Two redaction targets:
+    //  - The Form's "Form Inner Secret" sits around y=150 in page space.
+    //  - The image's top-right 16×16 pixels at page-space (152, 680)..(232, 760).
+    let report = document
+        .apply_redactions(RedactionPlan {
+            targets: vec![
+                RedactionTarget::Rect {
+                    page_index: 0,
+                    x: 40.0,
+                    y: 140.0,
+                    width: 220.0,
+                    height: 40.0,
+                },
+                RedactionTarget::Rect {
+                    page_index: 0,
+                    x: 152.0,
+                    y: 680.0,
+                    width: 80.0,
+                    height: 80.0,
+                },
+            ],
+            mode: None,
+            fill_color: None,
+            overlay_text: None,
+            remove_intersecting_annotations: Some(false),
+            strip_metadata: Some(false),
+            strip_attachments: Some(false),
+            sanitize_hidden_ocgs: None,
+        })
+        .expect("redaction should succeed");
+    assert!(
+        report.form_xobjects_rewritten >= 1,
+        "Form XObject should be COW-rewritten"
+    );
+    assert_eq!(
+        report.image_draws_masked, 1,
+        "image should be partial-masked"
+    );
+
+    let saved = document.save().expect("save");
+    let reopened = PdfDocument::open(&saved).expect("saved PDF should reopen");
+    let extracted_after = reopened
+        .extract_text(0)
+        .expect("reopened extraction should succeed");
+
+    // Form text gone, page header survives.
+    assert!(
+        !extracted_after.text.contains("Form Inner Secret"),
+        "Form override must persist through the image-mask rewire (text should be redacted): {:?}",
+        extracted_after.text,
+    );
+    assert!(
+        extracted_after.text.contains("Page Header"),
+        "untouched page text should remain"
+    );
+
+    // Image still present and partially masked. Verify via the saved
+    // page's Resources.XObject pointing at a fresh image stream.
+    let document = parse_pdf(&saved).expect("saved PDF should reopen");
+    let stream = page_image_stream(&document);
+    assert_eq!(
+        stream
+            .dict
+            .get("Subtype")
+            .and_then(|v| v.as_name()),
+        Some("Image"),
+        "Im1 should still be an Image XObject in the saved PDF"
+    );
+}
