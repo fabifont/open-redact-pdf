@@ -2253,3 +2253,117 @@ fn form_xobject_redaction_and_partial_image_mask_compose_on_one_page() {
         "Im1 should still be an Image XObject in the saved PDF"
     );
 }
+
+#[test]
+fn overlay_isolated_from_unbalanced_clipping_path() {
+    // Regression for the overlay-clipped-by-image bug. A page whose
+    // content stream sets a rounded clipping path before drawing an
+    // image (the typical "rounded image" pattern) and ends without a
+    // matching `Q` would propagate that clip into the redaction
+    // overlay — every overlay rectangle silently gets clipped to the
+    // image's rounded shape. Wrapping the rewritten page content in
+    // `q` / `Q` so the overlay starts from the initial graphics state
+    // is the fix; this test shows that even a deliberately-malformed
+    // page (no closing `Q`, clip still active at end) renders the
+    // overlay rectangle in full.
+
+    use open_redact_pdf::{FillColor, RedactionMode};
+
+    // Page content with an unbalanced clipping path:
+    //
+    //   q                       <- save state
+    //   100 100 50 50 re        <- 50x50 rect path at (100,100)
+    //   W n                     <- intersect clipping path
+    //   BT /F1 12 Tf 100 130 Td (Inside clip) Tj ET
+    //   <- NO matching Q: clip leaks past end
+    let content = "q\n100 100 50 50 re\nW n\nBT\n/F1 12 Tf\n100 130 Td\n(Inside clip) Tj\nET\n";
+
+    let mut pdf: Vec<u8> = Vec::new();
+    pdf.extend_from_slice(b"%PDF-1.7\n");
+    let catalog_offset = pdf.len();
+    pdf.extend_from_slice(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+    let pages_offset = pdf.len();
+    pdf.extend_from_slice(b"2 0 obj\n<< /Type /Pages /Count 1 /Kids [3 0 R] >>\nendobj\n");
+    let page_offset = pdf.len();
+    pdf.extend_from_slice(
+        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
+          /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>\nendobj\n",
+    );
+    let content_offset = pdf.len();
+    pdf.extend_from_slice(format!("4 0 obj\n<< /Length {} >>\nstream\n", content.len()).as_bytes());
+    pdf.extend_from_slice(content.as_bytes());
+    pdf.extend_from_slice(b"\nendstream\nendobj\n");
+    let font_offset = pdf.len();
+    pdf.extend_from_slice(
+        b"5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>\nendobj\n",
+    );
+    let xref_offset = pdf.len();
+    pdf.extend_from_slice(b"xref\n0 6\n0000000000 65535 f \n");
+    for offset in [catalog_offset, pages_offset, page_offset, content_offset, font_offset] {
+        pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(b"trailer\n<< /Size 6 /Root 1 0 R >>\n");
+    pdf.extend_from_slice(format!("startxref\n{xref_offset}\n%%EOF\n").as_bytes());
+
+    let mut document = PdfDocument::open(&pdf).expect("fixture should open");
+
+    // Redaction target far outside the [100,100,150,150] clip rect:
+    // (200, 200)..(300, 250). With the leftover clip active, the
+    // overlay rectangle would be entirely outside the clip and would
+    // not paint at all. After the fix the overlay starts from the
+    // initial graphics state and the rectangle paints fully.
+    let report = document
+        .apply_redactions(RedactionPlan {
+            targets: vec![RedactionTarget::Rect {
+                page_index: 0,
+                x: 200.0,
+                y: 200.0,
+                width: 100.0,
+                height: 50.0,
+            }],
+            mode: Some(RedactionMode::Redact),
+            fill_color: Some(FillColor { r: 255, g: 0, b: 0 }),
+            overlay_text: None,
+            remove_intersecting_annotations: Some(false),
+            strip_metadata: Some(false),
+            strip_attachments: Some(false),
+            sanitize_hidden_ocgs: None,
+        })
+        .expect("redaction should succeed");
+    let _ = report;
+
+    let saved = document.save().expect("save");
+    // Decode the saved content stream so we can inspect the post-fix
+    // shape: the rewritten page content must be wrapped in q...Q so
+    // the appended overlay paints starting from the initial graphics
+    // state, not the leftover clip.
+    use pdf_objects::{PdfObject, decode_stream};
+    let document = parse_pdf(&saved).expect("saved PDF should reopen");
+    let page = &document.pages[0];
+    let content_ref = page.content_refs.first().expect("content stream present");
+    let stream = match document.file.get_object(*content_ref).expect("content obj") {
+        PdfObject::Stream(s) => s,
+        _ => panic!("Contents should be a stream"),
+    };
+    let decoded = decode_stream(stream).expect("decode content");
+    let text = String::from_utf8_lossy(&decoded);
+    // Sanity: the content starts with q (wrapping the original) and
+    // contains a Q before the overlay's own q...Q block.
+    assert!(
+        text.starts_with("q\n"),
+        "rewritten content must begin with `q` to isolate the overlay; got: {:?}",
+        &text[..text.len().min(40)]
+    );
+    // Two `q\n` markers expected (outer wrap + overlay's own block).
+    let q_count = text.matches("q\n").count();
+    assert!(
+        q_count >= 2,
+        "expected outer `q` + overlay `q`, got {q_count} in: {text}"
+    );
+    // Two `Q\n` markers expected (one closes the wrap, one closes the overlay).
+    let big_q_count = text.matches("Q\n").count();
+    assert!(
+        big_q_count >= 2,
+        "expected outer `Q` + overlay `Q`, got {big_q_count} in: {text}"
+    );
+}

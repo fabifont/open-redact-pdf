@@ -227,7 +227,8 @@ pub fn apply_redactions(
         };
         report.annotations_removed += annotation_removed;
 
-        let mut content_bytes = serialize_operations(&operations);
+        let serialized_ops = serialize_operations(&operations);
+        let mut content_bytes: Vec<u8> = Vec::with_capacity(serialized_ops.len() + 16);
         if plan.mode == RedactionMode::Redact {
             let overlay_spec = plan
                 .overlay_text
@@ -243,14 +244,31 @@ pub fn apply_redactions(
                         .expect("overlay font must be allocated when overlay_spec is some"),
                 )?;
             }
+            // Wrap the rewritten page content in `q` / `Q` so any state
+            // it leaves behind — clipping path, CTM, colour — is
+            // discarded before the overlay paints. Without this wrap a
+            // rounded clipping path active at the end of the content
+            // (common when an Image XObject was placed inside a
+            // `... W n /Im1 Do ...` block whose `Q` was malformed or
+            // missing) silently re-clips every overlay rectangle to the
+            // image's shape, defeating the redaction visual.
+            content_bytes.extend_from_slice(b"q\n");
+            content_bytes.extend_from_slice(&serialized_ops);
+            content_bytes.extend_from_slice(b"\nQ\n");
+            // The wrap restores the initial graphics state (identity
+            // CTM, no clip), so the overlay can draw in mediabox space
+            // directly — no need to compensate for whatever CTM the
+            // original content left active.
             let overlay = overlay_stream_bytes(
                 &targets,
                 plan.fill_color,
                 page.page_box.normalized_transform(),
-                final_page_ctm(&operations)?,
+                Matrix::identity(),
                 overlay_spec,
             )?;
             content_bytes.extend_from_slice(&overlay);
+        } else {
+            content_bytes.extend_from_slice(&serialized_ops);
         }
 
         // Defer old content stream removal; write new content immediately
@@ -2478,20 +2496,6 @@ fn matrix_from_operands(operands: &[PdfValue]) -> PdfResult<Matrix> {
             .as_number()
             .ok_or_else(|| PdfError::Corrupt("cm operand is not numeric".to_string()))?,
     })
-}
-
-fn final_page_ctm(operations: &[Operation]) -> PdfResult<Matrix> {
-    let mut ctm = Matrix::identity();
-    let mut stack = Vec::new();
-    for operation in operations {
-        match operation.operator.as_str() {
-            "q" => stack.push(ctm),
-            "Q" => ctm = stack.pop().unwrap_or(Matrix::identity()),
-            "cm" => ctm = matrix_from_operands(&operation.operands)?.multiply(ctm),
-            _ => {}
-        }
-    }
-    Ok(ctm)
 }
 
 fn operand_number(operation: &Operation, index: usize) -> PdfResult<f64> {
