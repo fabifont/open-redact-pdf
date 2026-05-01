@@ -47,7 +47,7 @@ This project intentionally targets a narrow, explicit MVP.
 - Documents whose catalog has `/OCProperties` with any layer off in the default configuration or with `/BaseState /OFF` / `/Unchanged` are rejected up front unless the caller opts in via `sanitizeHiddenOcgs: true`. The opt-in pass strips `BDC /OC /<name> ... EMC` content gated by hidden OCGs and clears the catalog's hidden-layer state on save, but OCG markers inside nested Form XObjects are not yet rewritten — a warning is emitted when a page with sanitizable content also has XObjects
 - Type3 fonts
 - Composite (Type0) fonts with encodings other than `Identity-H` and the four supported Unicode-keyed CMaps (`UniGB-UCS2-H`, `UniKS-UCS2-H`, `UniJIS-UTF16-H`, `UniCNS-UTF16-H`); vertical writing CMaps (`-V` variants) and registry-keyed CMaps such as `90ms-RKSJ-H` are rejected with an explicit error
-- Partial image rewriting when a redaction target covers only part of an Image XObject — whole-invocation neutralization is used instead
+- Partial Image XObject rewriting for `Indexed`, `ICCBased`, `JBIG2Decode`, `JPXDecode`, `CCITTFaxDecode`, or `BitsPerComponent` other than 8 — these images fall back to whole-invocation neutralization (the `Do` is replaced with `n`). Supported partial-mask formats are raw / `FlateDecode` / `DCTDecode` over `DeviceGray` / `DeviceRGB` / `DeviceCMYK` at 8 bpc; the engine masks the affected pixel region with the plan's `fill_color` and copy-on-writes the image stream so multi-page-shared images are unaffected.
 - Stream filters outside the `FlateDecode` / `ASCII85Decode` / `ASCIIHexDecode` / `LZWDecode` / `RunLengthDecode` set (notably `DCTDecode`, `JBIG2Decode`, `JPXDecode`, `CCITTFaxDecode`)
 
 ## Failure model

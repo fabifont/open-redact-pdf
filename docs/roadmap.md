@@ -17,6 +17,7 @@ title: Roadmap
 - Anchor-based visual line grouping — each line's y-tolerance is `height_ref × 0.10` against a fixed first-glyph anchor (no running-mean drift, no 1pt absolute cap), so dense layouts down to sub-1pt row spacing split correctly while mixed-font same-baseline rows still merge
 - Cross-reference shape preserved on save — classic-input PDFs round-trip as classic xref + trailer; xref-stream-shaped inputs round-trip as `Type /XRef` streams with eligible objects packed into freshly-built `Type /ObjStm` containers. The parser also drops the Encrypt dictionary after decryption and the original ObjStm containers after materialisation so neither leaks into saved bytes.
 - Public-key security handler — `/Filter /Adobe.PubSec` PDFs decrypt via a recipient X.509 certificate plus its RSA private key (DER-encoded, supplied as separate buffers). SubFilters `adbe.pkcs7.s4` (V=4, AES-128) and `adbe.pkcs7.s5` (V=5, AES-256) are supported; key-transport (RSA-PKCS1v15 and RSA-OAEP) recipient infos are matched by `IssuerAndSerialNumber` or `SubjectKeyIdentifier`. Once authenticated the file is decrypted in place and saved without `/Encrypt` (matches the password-handler behaviour).
+- Partial Image XObject rewriting — when a redaction target overlaps only part of an Image XObject, the underlying raster is rewritten in place (copy-on-write so multi-page-shared images are unaffected) so the targeted pixel region is replaced with the plan's `fill_color` while the rest of the image survives. Supported formats: raw and `FlateDecode` for `DeviceGray` / `DeviceRGB` / `DeviceCMYK` at 8 bits per component (with optional TIFF/PNG predictors), plus `DCTDecode` (JPEG) for the same colour spaces. Other formats (`Indexed`, `ICCBased`, `JBIG2Decode`, `JPXDecode`, `CCITTFaxDecode`, non-8-bpc) and any decode error fall back to the existing whole-invocation `Do → n` neutralization.
 - Form XObject text extraction and search (recursive, with cycle protection and a depth cap)
 - Form XObject redaction via per-page copy-on-write: text glyphs, vector paint, and Image XObject `Do` invocations inside the Form are all neutralized; nested Forms recurse up to depth 8
 - Redaction refuses documents whose default Optional Content configuration hides any layer (no silent leaks from off-by-default OCGs). Callers can opt in to sanitization via `sanitizeHiddenOcgs: true`, which strips `BDC /OC /<name> ... EMC` content gated by hidden OCGs and clears the catalog's hidden state on save.
@@ -32,7 +33,14 @@ title: Roadmap
 
 ## Next priorities
 
-- Partial image rewriting so redaction targets that overlap only part of an Image XObject mask the affected pixels instead of neutralizing the whole `Do`
+The original MVP roadmap is complete. Future improvements that would broaden coverage beyond the MVP scope:
+
+- Vertical writing-mode CMaps (`-V` variants) and registry-keyed predefined CMaps (e.g. `90ms-RKSJ-H`) for Type0 fonts that don't decode directly to Unicode.
+- ECDH key-agreement recipients (`KeyAgreeRecipientInfo`) under `/Filter /Adobe.PubSec`, and `/SubFilter /adbe.pkcs7.s3` (V=1 RC4-40, deprecated).
+- Partial image rewriting for `Indexed`, `ICCBased`, `JBIG2Decode`, `JPXDecode`, and `CCITTFaxDecode` formats and for `BitsPerComponent` other than 8 (these currently fall back to whole-invocation drop).
+- Object renumbering / dead-object garbage collection on save (the writer leaves unreferenced indirect objects in place today).
+- Writing encrypted PDFs (the save path always emits a plaintext rewrite).
+- Linearized output ("fast web view").
 
 ## Documentation policy
 

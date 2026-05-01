@@ -18,6 +18,13 @@ pub struct ApplyReport {
     pub text_glyphs_removed: usize,
     pub path_paints_removed: usize,
     pub image_draws_removed: usize,
+    /// Count of Image XObject `Do` invocations whose underlying stream
+    /// was rewritten in place to mask only the targeted pixel region
+    /// (partial overlap), instead of being replaced with `n` (full
+    /// drop). Each masked image produces one fresh indirect object via
+    /// copy-on-write so multi-page-shared images are not affected.
+    #[serde(default)]
+    pub image_draws_masked: usize,
     pub annotations_removed: usize,
     /// Count of Form XObject copies produced by copy-on-write redaction, each
     /// of which carries the rewrite of a Form whose `BBox × Matrix × CTM`
@@ -128,23 +135,48 @@ pub fn apply_redactions(
             neutralize_vector_operations(&mut operations, &targets, page_transform)?;
         report.path_paints_removed += vector_removed;
 
-        let (image_removed, neutralized_xobjects) = neutralize_image_operations(
+        let outcome = neutralize_image_operations(
             &mut operations,
             &targets,
             page_transform,
             &xobjects,
             &redacted_form_names,
+            plan.fill_color,
         )?;
-        report.image_draws_removed += image_removed;
-        if image_removed > 0 {
+        report.image_draws_removed += outcome.removed_count;
+        report.image_draws_masked += outcome.masked_count;
+        if outcome.removed_count > 0 {
             report.warnings.push(format!(
                 "page {page_index}: intersecting images were removed at invocation level"
             ));
         }
 
+        // Apply pending partial-mask rewrites via copy-on-write so any
+        // other page that shares the same image stream is unaffected.
+        // On Unsupported (image format outside the supported subset) the
+        // mask falls back to whole-invocation neutralization: the Do is
+        // rewritten to `n` in place and the underlying stream removal
+        // is queued for later.
+        let mut partial_mask_fallback_names: Vec<String> = Vec::new();
+        for mask in &outcome.partial_masks {
+            match apply_partial_mask(file, pages, page_index, mask, plan.fill_color) {
+                Ok(()) => {}
+                Err(PdfError::Unsupported(_)) => {
+                    fallback_image_to_drop(&mut operations, &mask.xobject_name);
+                    report.image_draws_masked = report.image_draws_masked.saturating_sub(1);
+                    report.image_draws_removed += 1;
+                    partial_mask_fallback_names.push(mask.xobject_name.clone());
+                }
+                Err(other) => return Err(other),
+            }
+        }
+
         // Defer XObject removal so shared objects stay available for other pages
-        if !neutralized_xobjects.is_empty() {
-            deferred_xobject_removals.push((page.resources.clone(), neutralized_xobjects));
+        let mut neutralized_names = outcome.neutralized_names;
+        neutralized_names.extend(partial_mask_fallback_names);
+        if !neutralized_names.is_empty() {
+            deferred_xobject_removals
+                .push((page.resources.clone(), neutralized_names));
         }
 
         let annotation_removed = if plan.remove_intersecting_annotations {
@@ -325,6 +357,131 @@ fn collect_reachable_refs(
 }
 
 /// Removes the underlying stream objects for neutralized XObjects.
+/// Apply a single partial-mask rewrite. Returns
+/// [`PdfError::Unsupported`] when the image's format is outside the
+/// supported subset (caller falls back to whole-invocation drop).
+fn apply_partial_mask(
+    file: &mut PdfFile,
+    pages: &mut [PageInfo],
+    page_index: usize,
+    mask: &PendingImageMask,
+    fill_color: Color,
+) -> PdfResult<()> {
+    let stream = match file.get_object(mask.original_ref)? {
+        PdfObject::Stream(stream) => stream.clone(),
+        _ => {
+            return Err(PdfError::Corrupt(format!(
+                "Image XObject /{} did not resolve to a stream",
+                mask.xobject_name
+            )));
+        }
+    };
+    let masked = crate::image_mask::mask_image_region(&stream, mask.pixel_rect, fill_color)?;
+    let new_stream = PdfStream {
+        dict: masked.new_dict,
+        data: masked.new_data,
+    };
+    let new_ref = file.allocate_object_ref();
+    file.objects.insert(new_ref, PdfObject::Stream(new_stream));
+
+    // Repoint the page's Resources.XObject[name] entry to the COW copy.
+    rewire_page_xobject(file, pages, page_index, &mask.xobject_name, new_ref)?;
+    Ok(())
+}
+
+/// Replace the page's `Resources.XObject[name]` with a fresh reference,
+/// cloning intermediate dictionaries so other pages that share the same
+/// resources stay pointing at the original image. Updates both the
+/// in-memory `PageInfo.resources` cache AND the page object in
+/// `file.objects` so the writer picks up the new reference.
+fn rewire_page_xobject(
+    file: &mut PdfFile,
+    pages: &mut [PageInfo],
+    page_index: usize,
+    name: &str,
+    new_ref: ObjectRef,
+) -> PdfResult<()> {
+    let resources_value = pages[page_index]
+        .resources
+        .get("XObject")
+        .cloned()
+        .ok_or_else(|| {
+            PdfError::Corrupt(
+                "page resources missing /XObject when applying partial image mask"
+                    .to_string(),
+            )
+        })?;
+    let xobjects_ref = match resources_value {
+        PdfValue::Reference(reference) => Some(reference),
+        PdfValue::Dictionary(_) => None,
+        _ => {
+            return Err(PdfError::Corrupt(
+                "page Resources.XObject is not a dict or reference".to_string(),
+            ));
+        }
+    };
+
+    if let Some(xobjects_ref) = xobjects_ref {
+        // Indirect XObject dict: clone and update.
+        let mut dict = match file.get_object(xobjects_ref)? {
+            PdfObject::Value(PdfValue::Dictionary(dict)) => dict.clone(),
+            _ => {
+                return Err(PdfError::Corrupt(
+                    "page Resources.XObject reference does not point at a dictionary"
+                        .to_string(),
+                ));
+            }
+        };
+        dict.insert(name.to_string(), PdfValue::Reference(new_ref));
+        let new_xobjects_ref = file.allocate_object_ref();
+        file.objects
+            .insert(new_xobjects_ref, PdfObject::Value(PdfValue::Dictionary(dict)));
+        pages[page_index].resources.insert(
+            "XObject".to_string(),
+            PdfValue::Reference(new_xobjects_ref),
+        );
+    } else if let Some(PdfValue::Dictionary(dict)) = pages[page_index].resources.get_mut("XObject")
+    {
+        dict.insert(name.to_string(), PdfValue::Reference(new_ref));
+    }
+
+    // Mirror the change into the page object's /Resources so the
+    // writer emits the updated XObject pointer.
+    let page_ref = pages[page_index].page_ref;
+    let updated_resources = pages[page_index].resources.clone();
+    match file.get_object_mut(page_ref)? {
+        PdfObject::Value(PdfValue::Dictionary(page_dict)) => {
+            page_dict.insert(
+                "Resources".to_string(),
+                PdfValue::Dictionary(updated_resources),
+            );
+        }
+        _ => {
+            return Err(PdfError::Corrupt(format!(
+                "page {} {} is not a dictionary",
+                page_ref.object_number, page_ref.generation
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Rewrite the `Do` invocation that targets `name` to a no-op `n`.
+/// Used when a partial-mask attempt fails (unsupported format) and the
+/// caller falls back to whole-invocation neutralization.
+fn fallback_image_to_drop(operations: &mut [Operation], name: &str) {
+    for op in operations.iter_mut() {
+        if op.operator == "Do" {
+            if let Some(PdfValue::Name(operand_name)) = op.operands.first() {
+                if operand_name == name {
+                    op.operator = "n".to_string();
+                    op.operands.clear();
+                }
+            }
+        }
+    }
+}
+
 fn remove_neutralized_xobjects(
     file: &mut PdfFile,
     resources: &PdfDictionary,
@@ -431,7 +588,10 @@ fn load_xobjects(
             .and_then(PdfValue::as_name)
             .unwrap_or("");
         let kind = match subtype {
-            "Image" => XObjectKind::Image,
+            "Image" => XObjectKind::Image {
+                object_ref,
+                dict: stream.dict.clone(),
+            },
             "Form" => XObjectKind::Form {
                 bbox: parse_form_bbox(&stream.dict),
                 matrix: parse_form_matrix(&stream.dict),
@@ -518,10 +678,16 @@ fn parse_form_matrix(dict: &PdfDictionary) -> Matrix {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 enum XObjectKind {
-    Image,
-    Form { bbox: Rect, matrix: Matrix },
+    Image {
+        object_ref: ObjectRef,
+        dict: PdfDictionary,
+    },
+    Form {
+        bbox: Rect,
+        matrix: Matrix,
+    },
 }
 
 type GlyphRemovalMap = BTreeMap<usize, Vec<GlyphByteRef>>;
@@ -882,14 +1048,39 @@ fn neutralize_vector_operations_with_ctm(
     Ok(removed)
 }
 
-/// Returns (count_removed, list_of_neutralized_xobject_names).
+/// Outcome of the image-XObject neutralization pass on a single
+/// content stream. Whole-image drops use `n` rewriting and the
+/// underlying stream is removed by the caller; partial overlaps are
+/// recorded as [`PendingImageMask`] entries to be applied via
+/// copy-on-write so multi-page-shared images don't leak across pages.
+#[derive(Debug, Default)]
+struct NeutralizationOutcome {
+    /// Names of XObjects whose `Do` was replaced with `n` (full drop).
+    neutralized_names: Vec<String>,
+    /// Image XObjects whose underlying stream needs to be rewritten in
+    /// place with a masked copy (partial overlap).
+    partial_masks: Vec<PendingImageMask>,
+    /// Count of full-drop replacements.
+    removed_count: usize,
+    /// Count of partial-mask rewrites.
+    masked_count: usize,
+}
+
+#[derive(Debug)]
+struct PendingImageMask {
+    xobject_name: String,
+    original_ref: ObjectRef,
+    pixel_rect: crate::image_mask::ImagePixelRect,
+}
+
 fn neutralize_image_operations(
     operations: &mut [Operation],
     targets: &[&NormalizedPageTarget],
     page_transform: Matrix,
     xobjects: &BTreeMap<String, XObjectKind>,
     redacted_form_names: &BTreeSet<String>,
-) -> PdfResult<(usize, Vec<String>)> {
+    fill_color: Color,
+) -> PdfResult<NeutralizationOutcome> {
     neutralize_image_operations_with_ctm(
         operations,
         targets,
@@ -897,6 +1088,7 @@ fn neutralize_image_operations(
         xobjects,
         redacted_form_names,
         Matrix::identity(),
+        fill_color,
     )
 }
 
@@ -908,9 +1100,10 @@ fn neutralize_image_operations_with_ctm(
     xobjects: &BTreeMap<String, XObjectKind>,
     redacted_form_names: &BTreeSet<String>,
     base_ctm: Matrix,
-) -> PdfResult<(usize, Vec<String>)> {
-    let mut removed = 0usize;
-    let mut neutralized_names = Vec::new();
+    fill_color: Color,
+) -> PdfResult<NeutralizationOutcome> {
+    let _ = fill_color; // mask colour is consumed when the partial mask is applied
+    let mut outcome = NeutralizationOutcome::default();
     let mut ctm = base_ctm;
     let mut ctm_stack = Vec::new();
     for operation in operations.iter_mut() {
@@ -921,20 +1114,42 @@ fn neutralize_image_operations_with_ctm(
             "Do" => {
                 let name = operand_name(operation, 0)?;
                 match xobjects.get(name) {
-                    Some(XObjectKind::Image) => {
-                        let quad = Rect {
+                    Some(XObjectKind::Image { object_ref, dict }) => {
+                        let total_transform = ctm.multiply(page_transform);
+                        let image_quad = Rect {
                             x: 0.0,
                             y: 0.0,
                             width: 1.0,
                             height: 1.0,
                         }
                         .to_quad()
-                        .transform(ctm.multiply(page_transform));
-                        if targets.iter().any(|target| target.intersects_quad(&quad)) {
-                            neutralized_names.push(name.to_string());
-                            operation.operator = "n".to_string();
-                            operation.operands.clear();
-                            removed += 1;
+                        .transform(total_transform);
+                        if !targets.iter().any(|target| target.intersects_quad(&image_quad)) {
+                            // No overlap — leave the Do intact.
+                            continue;
+                        }
+                        // Determine whether overlap is partial or full
+                        // by mapping the union of intersecting target
+                        // quads back into image-space coordinates.
+                        match compute_image_pixel_rect(
+                            dict,
+                            total_transform,
+                            targets,
+                        ) {
+                            ImageOverlap::Full | ImageOverlap::Unsupported => {
+                                outcome.neutralized_names.push(name.to_string());
+                                operation.operator = "n".to_string();
+                                operation.operands.clear();
+                                outcome.removed_count += 1;
+                            }
+                            ImageOverlap::Partial(pixel_rect) => {
+                                outcome.partial_masks.push(PendingImageMask {
+                                    xobject_name: name.to_string(),
+                                    original_ref: *object_ref,
+                                    pixel_rect,
+                                });
+                                outcome.masked_count += 1;
+                            }
                         }
                     }
                     Some(XObjectKind::Form { bbox, matrix }) => {
@@ -966,7 +1181,129 @@ fn neutralize_image_operations_with_ctm(
             _ => {}
         }
     }
-    Ok((removed, neutralized_names))
+    Ok(outcome)
+}
+
+#[derive(Debug)]
+enum ImageOverlap {
+    Full,
+    Partial(crate::image_mask::ImagePixelRect),
+    /// Geometry can't be computed (degenerate CTM, unreadable dict).
+    /// Caller falls back to whole-invocation neutralization.
+    Unsupported,
+}
+
+fn compute_image_pixel_rect(
+    dict: &PdfDictionary,
+    total_transform: Matrix,
+    targets: &[&NormalizedPageTarget],
+) -> ImageOverlap {
+    let Some(width) = dict.get("Width").and_then(PdfValue::as_integer) else {
+        return ImageOverlap::Unsupported;
+    };
+    let Some(height) = dict.get("Height").and_then(PdfValue::as_integer) else {
+        return ImageOverlap::Unsupported;
+    };
+    if width <= 0 || height <= 0 {
+        return ImageOverlap::Unsupported;
+    }
+    let width = width as u32;
+    let height = height as u32;
+
+    let Some(inverse) = total_transform.inverse() else {
+        return ImageOverlap::Unsupported;
+    };
+
+    // Aggregate the union of all target hits in unit-square (u, v) space.
+    // Targets that don't overlap the image quad are skipped.
+    let mut u_min = f64::INFINITY;
+    let mut u_max = f64::NEG_INFINITY;
+    let mut v_min = f64::INFINITY;
+    let mut v_max = f64::NEG_INFINITY;
+
+    let image_quad = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 1.0,
+        height: 1.0,
+    }
+    .to_quad()
+    .transform(total_transform);
+    let image_rect = image_quad.bounding_rect();
+
+    for target in targets {
+        if !target.intersects_quad(&image_quad) {
+            continue;
+        }
+        for quad in &target.quads {
+            // Clip target quad to the image bounding rect (page-space
+            // AABB), then map all four corners back to (u, v).
+            let target_rect = quad.bounding_rect();
+            let clipped = match clip_rect(image_rect, target_rect) {
+                Some(rect) => rect,
+                None => continue,
+            };
+            for corner in clipped.to_quad().points {
+                let p = inverse.transform_point(corner);
+                u_min = u_min.min(p.x);
+                u_max = u_max.max(p.x);
+                v_min = v_min.min(p.y);
+                v_max = v_max.max(p.y);
+            }
+        }
+    }
+
+    if !u_min.is_finite() || !u_max.is_finite() {
+        return ImageOverlap::Unsupported;
+    }
+
+    let u_lo = u_min.clamp(0.0, 1.0);
+    let u_hi = u_max.clamp(0.0, 1.0);
+    let v_lo = v_min.clamp(0.0, 1.0);
+    let v_hi = v_max.clamp(0.0, 1.0);
+    if u_hi <= u_lo + 1e-9 || v_hi <= v_lo + 1e-9 {
+        return ImageOverlap::Unsupported;
+    }
+
+    // Full cover: target AABB contains the entire unit square.
+    let full_cover = u_lo <= 1e-6 && u_hi >= 1.0 - 1e-6
+        && v_lo <= 1e-6 && v_hi >= 1.0 - 1e-6;
+    if full_cover {
+        return ImageOverlap::Full;
+    }
+
+    // PDF Y-up → image Y-down: top of image = v=1, bottom = v=0.
+    let x_min = (u_lo * width as f64).floor().clamp(0.0, width as f64) as u32;
+    let x_max = (u_hi * width as f64).ceil().clamp(0.0, width as f64) as u32;
+    let y_min = ((1.0 - v_hi) * height as f64).floor().clamp(0.0, height as f64) as u32;
+    let y_max = ((1.0 - v_lo) * height as f64).ceil().clamp(0.0, height as f64) as u32;
+
+    if x_max <= x_min || y_max <= y_min {
+        return ImageOverlap::Unsupported;
+    }
+
+    ImageOverlap::Partial(crate::image_mask::ImagePixelRect {
+        x: x_min,
+        y: y_min,
+        w: x_max - x_min,
+        h: y_max - y_min,
+    })
+}
+
+fn clip_rect(a: Rect, b: Rect) -> Option<Rect> {
+    let x = a.x.max(b.x);
+    let y = a.y.max(b.y);
+    let max_x = a.max_x().min(b.max_x());
+    let max_y = a.max_y().min(b.max_y());
+    if max_x <= x || max_y <= y {
+        return None;
+    }
+    Some(Rect {
+        x,
+        y,
+        width: max_x - x,
+        height: max_y - y,
+    })
 }
 
 fn remove_annotations(
@@ -1450,14 +1787,38 @@ fn redact_form_xobject(
         form_invocation_ctm,
     )?;
     let redacted_inner_form_names: BTreeSet<String> = inner_overrides.keys().cloned().collect();
-    neutralize_image_operations_with_ctm(
+    // Inside Form XObjects we don't currently support partial pixel
+    // masks (each Form's Resources are nested and a per-Form COW would
+    // need a deeper rewrite). Whole-invocation neutralization is still
+    // the conservative behaviour here. The fill_color parameter is
+    // ignored on this branch and any partial_masks returned would be
+    // dropped; in practice the inner content rarely contains an Image
+    // whose target overlap is partial AND format-supported, but record
+    // a warning if that ever happens so the silent loss is visible.
+    let inner_outcome = neutralize_image_operations_with_ctm(
         &mut new_ops,
         targets,
         page_transform,
         &inner_xobjects,
         &redacted_inner_form_names,
         form_invocation_ctm,
+        Color::BLACK,
     )?;
+    if !inner_outcome.partial_masks.is_empty() {
+        // Force the partial-mask path to fall back to drop inside Forms.
+        for mask in inner_outcome.partial_masks {
+            for op in new_ops.iter_mut() {
+                if op.operator == "Do" {
+                    if let Some(PdfValue::Name(name)) = op.operands.first() {
+                        if *name == mask.xobject_name {
+                            op.operator = "n".to_string();
+                            op.operands.clear();
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     let serialized = serialize_operations(&new_ops);
     let (data, use_flate) = match pdf_objects::flate_encode(&serialized) {

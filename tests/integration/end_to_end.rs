@@ -1546,3 +1546,339 @@ fn lzw_compressed_content_stream_is_readable_and_redactable() {
     );
     assert!(extracted_after.text.contains("Keep alpha"));
 }
+
+// ---------------------------------------------------------------------
+// Partial Image XObject rewriting tests.
+//
+// Each test builds an Image XObject in-code (Flate-compressed RGB, raw
+// or DCT-encoded JPEG), assembles a minimal PDF that draws the image
+// at known page-space coordinates, applies a redaction target covering
+// part of the image, then inspects the saved bytes.
+// ---------------------------------------------------------------------
+
+fn build_partial_image_flate_pdf(width: u32, height: u32) -> Vec<u8> {
+    use flate2::Compression;
+    use flate2::write::ZlibEncoder;
+    use std::io::Write as _;
+
+    // 32x32 RGB gradient: each pixel's R, G, B is its (x, y, x^y) value.
+    let mut raw: Vec<u8> = Vec::with_capacity((width * height * 3) as usize);
+    for y in 0..height {
+        for x in 0..width {
+            raw.push((x * 8) as u8);
+            raw.push((y * 8) as u8);
+            raw.push((x as u8) ^ (y as u8));
+        }
+    }
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(&raw).unwrap();
+    let compressed = encoder.finish().unwrap();
+
+    // Image is drawn at user-space (72, 600)..(232, 760) via cm 160 0 0 160 72 600.
+    let content = "q\n160 0 0 160 72 600 cm\n/Im1 Do\nQ\nBT\n/F1 14 Tf\n72 760 Td\n(Above image) Tj\nET\n".to_string();
+
+    let mut pdf: Vec<u8> = Vec::new();
+    pdf.extend_from_slice(b"%PDF-1.7\n");
+    let catalog_offset = pdf.len();
+    pdf.extend_from_slice(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+    let pages_offset = pdf.len();
+    pdf.extend_from_slice(b"2 0 obj\n<< /Type /Pages /Count 1 /Kids [3 0 R] >>\nendobj\n");
+    let page_offset = pdf.len();
+    pdf.extend_from_slice(
+        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
+          /Resources << /Font << /F1 5 0 R >> /XObject << /Im1 6 0 R >> >> /Contents 4 0 R >>\nendobj\n",
+    );
+    let content_offset = pdf.len();
+    pdf.extend_from_slice(format!("4 0 obj\n<< /Length {} >>\nstream\n", content.len()).as_bytes());
+    pdf.extend_from_slice(content.as_bytes());
+    pdf.extend_from_slice(b"\nendstream\nendobj\n");
+    let font_offset = pdf.len();
+    pdf.extend_from_slice(
+        b"5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>\nendobj\n",
+    );
+    let image_offset = pdf.len();
+    pdf.extend_from_slice(format!(
+        "6 0 obj\n<< /Type /XObject /Subtype /Image /Width {width} /Height {height} \
+         /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /Length {} >>\nstream\n",
+        compressed.len()
+    ).as_bytes());
+    pdf.extend_from_slice(&compressed);
+    pdf.extend_from_slice(b"\nendstream\nendobj\n");
+
+    let xref_offset = pdf.len();
+    pdf.extend_from_slice(b"xref\n0 7\n");
+    pdf.extend_from_slice(b"0000000000 65535 f \n");
+    for offset in [
+        catalog_offset, pages_offset, page_offset, content_offset, font_offset, image_offset,
+    ] {
+        pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(b"trailer\n<< /Size 7 /Root 1 0 R >>\n");
+    pdf.extend_from_slice(format!("startxref\n{xref_offset}\n%%EOF\n").as_bytes());
+    pdf
+}
+
+fn build_partial_image_jpeg_pdf(width: u32, height: u32) -> Vec<u8> {
+    use jpeg_encoder::{ColorType, Encoder};
+
+    let mut raw: Vec<u8> = Vec::with_capacity((width * height * 3) as usize);
+    for y in 0..height {
+        for x in 0..width {
+            raw.push((x * 8) as u8);
+            raw.push((y * 8) as u8);
+            raw.push(((x as u8) ^ (y as u8)).wrapping_mul(2));
+        }
+    }
+    let mut jpeg_bytes: Vec<u8> = Vec::new();
+    {
+        let encoder = Encoder::new(&mut jpeg_bytes, 90);
+        encoder
+            .encode(&raw, width as u16, height as u16, ColorType::Rgb)
+            .unwrap();
+    }
+
+    let content = "q\n160 0 0 160 72 600 cm\n/Im1 Do\nQ\nBT\n/F1 14 Tf\n72 760 Td\n(Above image) Tj\nET\n";
+
+    let mut pdf: Vec<u8> = Vec::new();
+    pdf.extend_from_slice(b"%PDF-1.7\n");
+    let catalog_offset = pdf.len();
+    pdf.extend_from_slice(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+    let pages_offset = pdf.len();
+    pdf.extend_from_slice(b"2 0 obj\n<< /Type /Pages /Count 1 /Kids [3 0 R] >>\nendobj\n");
+    let page_offset = pdf.len();
+    pdf.extend_from_slice(
+        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
+          /Resources << /Font << /F1 5 0 R >> /XObject << /Im1 6 0 R >> >> /Contents 4 0 R >>\nendobj\n",
+    );
+    let content_offset = pdf.len();
+    pdf.extend_from_slice(format!("4 0 obj\n<< /Length {} >>\nstream\n", content.len()).as_bytes());
+    pdf.extend_from_slice(content.as_bytes());
+    pdf.extend_from_slice(b"\nendstream\nendobj\n");
+    let font_offset = pdf.len();
+    pdf.extend_from_slice(
+        b"5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>\nendobj\n",
+    );
+    let image_offset = pdf.len();
+    pdf.extend_from_slice(format!(
+        "6 0 obj\n<< /Type /XObject /Subtype /Image /Width {width} /Height {height} \
+         /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length {} >>\nstream\n",
+        jpeg_bytes.len()
+    ).as_bytes());
+    pdf.extend_from_slice(&jpeg_bytes);
+    pdf.extend_from_slice(b"\nendstream\nendobj\n");
+
+    let xref_offset = pdf.len();
+    pdf.extend_from_slice(b"xref\n0 7\n");
+    pdf.extend_from_slice(b"0000000000 65535 f \n");
+    for offset in [
+        catalog_offset, pages_offset, page_offset, content_offset, font_offset, image_offset,
+    ] {
+        pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(b"trailer\n<< /Size 7 /Root 1 0 R >>\n");
+    pdf.extend_from_slice(format!("startxref\n{xref_offset}\n%%EOF\n").as_bytes());
+    pdf
+}
+
+fn page_image_stream(
+    document: &pdf_objects::ParsedDocument,
+) -> &pdf_objects::PdfStream {
+    use pdf_objects::{PdfObject, PdfValue};
+    let page = &document.pages[0];
+    let xobjects_value = page
+        .resources
+        .get("XObject")
+        .expect("page resources have /XObject");
+    let xobjects = document
+        .file
+        .resolve_dict(xobjects_value)
+        .expect("XObject resolves to dict");
+    let im1 = xobjects.get("Im1").expect("Im1 entry present");
+    let image_ref = match im1 {
+        PdfValue::Reference(r) => *r,
+        _ => panic!("Im1 must be an indirect reference"),
+    };
+    match document.file.get_object(image_ref).expect("image obj") {
+        PdfObject::Stream(stream) => stream,
+        _ => panic!("Im1 should be a stream"),
+    }
+}
+
+fn decode_flate_image(saved: &[u8]) -> (u32, u32, Vec<u8>) {
+    let document = parse_pdf(saved).expect("saved PDF should reopen");
+    let stream = page_image_stream(&document);
+    let width = stream.dict.get("Width")
+        .and_then(|v| v.as_integer()).unwrap_or(0) as u32;
+    let height = stream.dict.get("Height")
+        .and_then(|v| v.as_integer()).unwrap_or(0) as u32;
+    let pixels = pdf_objects::decode_stream(stream).expect("decode image");
+    (width, height, pixels)
+}
+
+fn decode_jpeg_image(saved: &[u8]) -> (u32, u32, Vec<u8>) {
+    use jpeg_decoder::Decoder;
+    let document = parse_pdf(saved).expect("saved PDF should reopen");
+    let stream = page_image_stream(&document);
+    let width = stream.dict.get("Width")
+        .and_then(|v| v.as_integer()).unwrap_or(0) as u32;
+    let height = stream.dict.get("Height")
+        .and_then(|v| v.as_integer()).unwrap_or(0) as u32;
+    let mut decoder = Decoder::new(stream.data.as_slice());
+    let pixels = decoder.decode().expect("JPEG decode");
+    (width, height, pixels)
+}
+
+#[test]
+fn partial_image_flate_masks_pixels() {
+    let pdf = build_partial_image_flate_pdf(32, 32);
+    let mut document = PdfDocument::open(&pdf).expect("fixture should open");
+
+    // Image is drawn at user-space (72, 600)..(232, 760), 160pt wide × 160pt tall,
+    // rendering 32×32 px → 5 user-space pt per pixel.
+    // Redact the upper-right 80×80 pt region: page-space (152, 680)..(232, 760).
+    // Mapped to image space: top-right 16×16 pixels.
+    let report = document
+        .apply_redactions(RedactionPlan {
+            targets: vec![RedactionTarget::Rect {
+                page_index: 0,
+                x: 152.0,
+                y: 680.0,
+                width: 80.0,
+                height: 80.0,
+            }],
+            mode: None,
+            fill_color: None,
+            overlay_text: None,
+            remove_intersecting_annotations: Some(false),
+            strip_metadata: Some(false),
+            strip_attachments: Some(false),
+            sanitize_hidden_ocgs: None,
+        })
+        .expect("redaction should succeed");
+    assert_eq!(report.image_draws_masked, 1, "expected one partial mask");
+    assert_eq!(report.image_draws_removed, 0, "no whole-image drops");
+
+    let saved = document.save().expect("save");
+    let (width, height, pixels) = decode_flate_image(&saved);
+    assert_eq!(width, 32);
+    assert_eq!(height, 32);
+    assert_eq!(pixels.len(), 32 * 32 * 3);
+
+    // The redacted region is the top-right 16×16 px of the image.
+    // In image space (Y=0 at top), that's columns 16..32, rows 0..16.
+    for y in 0..32u32 {
+        for x in 0..32u32 {
+            let off = ((y * 32 + x) * 3) as usize;
+            let inside = (16..32).contains(&x) && (0..16).contains(&y);
+            if inside {
+                assert_eq!(pixels[off], 0, "pixel ({x},{y}) R should be 0");
+                assert_eq!(pixels[off + 1], 0, "pixel ({x},{y}) G should be 0");
+                assert_eq!(pixels[off + 2], 0, "pixel ({x},{y}) B should be 0");
+            } else {
+                // Outside the mask: original gradient values.
+                let expected_r = (x * 8) as u8;
+                let expected_g = (y * 8) as u8;
+                let expected_b = (x as u8) ^ (y as u8);
+                assert_eq!(
+                    pixels[off], expected_r,
+                    "unmasked pixel ({x},{y}) R drift"
+                );
+                assert_eq!(pixels[off + 1], expected_g);
+                assert_eq!(pixels[off + 2], expected_b);
+            }
+        }
+    }
+}
+
+#[test]
+fn partial_image_jpeg_masks_pixels() {
+    let pdf = build_partial_image_jpeg_pdf(32, 32);
+    let mut document = PdfDocument::open(&pdf).expect("fixture should open");
+
+    // Same target geometry as the Flate test.
+    let report = document
+        .apply_redactions(RedactionPlan {
+            targets: vec![RedactionTarget::Rect {
+                page_index: 0,
+                x: 152.0,
+                y: 680.0,
+                width: 80.0,
+                height: 80.0,
+            }],
+            mode: None,
+            fill_color: None,
+            overlay_text: None,
+            remove_intersecting_annotations: Some(false),
+            strip_metadata: Some(false),
+            strip_attachments: Some(false),
+            sanitize_hidden_ocgs: None,
+        })
+        .expect("redaction should succeed");
+    assert_eq!(report.image_draws_masked, 1, "expected one partial mask");
+    assert_eq!(report.image_draws_removed, 0);
+
+    let saved = document.save().expect("save");
+    let (width, height, pixels) = decode_jpeg_image(&saved);
+    assert_eq!(width, 32);
+    assert_eq!(height, 32);
+
+    // JPEG is lossy: assert the masked region is "near black" (sum of
+    // R+G+B per pixel below a tolerance) and the unmasked region still
+    // has measurable colour content.
+    let mut masked_sum = 0u32;
+    let mut masked_count = 0u32;
+    let mut unmasked_sum = 0u32;
+    let mut unmasked_count = 0u32;
+    for y in 0..32u32 {
+        for x in 0..32u32 {
+            let off = ((y * 32 + x) * 3) as usize;
+            let total = pixels[off] as u32 + pixels[off + 1] as u32 + pixels[off + 2] as u32;
+            let inside = (16..32).contains(&x) && (0..16).contains(&y);
+            if inside {
+                masked_sum += total;
+                masked_count += 1;
+            } else {
+                unmasked_sum += total;
+                unmasked_count += 1;
+            }
+        }
+    }
+    let masked_avg = masked_sum / masked_count;
+    let unmasked_avg = unmasked_sum / unmasked_count;
+    assert!(
+        masked_avg < 30,
+        "masked region should be near black, got avg sum {masked_avg}"
+    );
+    assert!(
+        unmasked_avg > 100,
+        "unmasked region should retain colour, got avg sum {unmasked_avg}"
+    );
+}
+
+#[test]
+fn full_cover_image_drops_to_n() {
+    let pdf = build_partial_image_flate_pdf(32, 32);
+    let mut document = PdfDocument::open(&pdf).expect("fixture should open");
+
+    // Cover the entire image (and then some).
+    let report = document
+        .apply_redactions(RedactionPlan {
+            targets: vec![RedactionTarget::Rect {
+                page_index: 0,
+                x: 50.0,
+                y: 580.0,
+                width: 200.0,
+                height: 200.0,
+            }],
+            mode: None,
+            fill_color: None,
+            overlay_text: None,
+            remove_intersecting_annotations: Some(false),
+            strip_metadata: Some(false),
+            strip_attachments: Some(false),
+            sanitize_hidden_ocgs: None,
+        })
+        .expect("redaction should succeed");
+    assert_eq!(report.image_draws_masked, 0);
+    assert_eq!(report.image_draws_removed, 1, "image should be fully dropped");
+}

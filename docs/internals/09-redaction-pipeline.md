@@ -65,7 +65,22 @@ Scans path construction and painting operators. If the accumulated path's boundi
 
 ### Step 8: `neutralize_image_operations`
 
-For each `Do` operator referencing an Image XObject, transforms the unit square `[0,0,1,1]` by the current CTM to find the image's page-space footprint. If the footprint intersects any target, replaces the `Do` with `n` and marks the XObject for deferred removal.
+For each `Do` operator referencing an Image XObject, transforms the unit square `[0,0,1,1]` by the current CTM to find the image's page-space footprint. The pass distinguishes three cases:
+
+1. **No overlap** — leave the `Do` intact.
+2. **Full cover** — the union of intersecting target AABBs (mapped back to image-unit-square space) contains the entire `[0,1] × [0,1]`. The `Do` is replaced with `n` and the XObject is marked for deferred removal (current behaviour, unchanged).
+3. **Partial overlap** — the targeted region maps to a strict sub-rectangle of the image. The pass records a `PendingImageMask` with the original `ObjectRef`, the image-space pixel rectangle, and the redaction's `fill_color`.
+
+After the per-page neutralization completes, each pending mask is applied via `apply_partial_mask`:
+
+1. Clone the original image stream.
+2. Pass through `image_mask::mask_image_region` which detects the format (raw / `FlateDecode` / `DCTDecode`), decodes pixels (via `decode_stream` or `jpeg_decoder`), paints the rectangular pixel region with the plan's `fill_color`, and re-encodes (Flate-compressed for raw / Flate input, DCT-encoded at quality 85 for JPEG input).
+3. Allocate a fresh `ObjectRef` for the masked stream; insert it into `file.objects`.
+4. Repoint the page's `Resources.XObject[name]` at the new ref via copy-on-write of any indirect XObject dictionary, so other pages that share the same image stream are unaffected.
+
+Unsupported image formats (`Indexed`, `ICCBased`, `JBIG2Decode`, `JPXDecode`, `CCITTFaxDecode`, non-8-bpc) and any decode error make `mask_image_region` return `PdfError::Unsupported`; in that case `apply_partial_mask` falls back to whole-invocation neutralization (the `Do` is rewritten to `n` and the original stream is queued for removal). The `ApplyReport.image_draws_masked` and `image_draws_removed` counters distinguish the two outcomes.
+
+Inside Form XObject content streams the same neutralization runs but partial masks always fall back to drop, since per-Form COW would require a deeper rewrite of nested Resources.
 
 ### Step 9: `remove_annotations`
 
