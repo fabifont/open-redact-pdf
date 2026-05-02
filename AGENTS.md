@@ -71,5 +71,19 @@ Core product rules:
 ## Commit guidance
 
 - Use short imperative commit messages.
+- Follow [Conventional Commits](https://www.conventionalcommits.org/) so the changelog generator can pick the right section: `feat`, `fix`, `perf`, `refactor`, `build`, `ops`, `chore`, `docs`, `style`, `test`, `revert`. The first three plus `revert` make it into `CHANGELOG.md`; `docs`, `style`, `test`, and `chore` are skipped.
 - Keep refactors, behavior fixes, and fixture updates together only when they are directly coupled.
 - After public API changes, update `README.md`, `AGENTS.md`, and the relevant docs pages in the same change.
+
+## Changelog
+
+- `CHANGELOG.md` is generated from the conventional-commit history by [git-cliff](https://git-cliff.org/) using `cliff.toml`.
+- Regenerate the full file before tagging a release:
+  ```
+  git-cliff -o CHANGELOG.md
+  ```
+  Or stage just the unreleased range when bumping to a new tag:
+  ```
+  git-cliff --unreleased --tag v<NEW> --prepend CHANGELOG.md
+  ```
+- Commit the regenerated `CHANGELOG.md` alongside the version bump.
