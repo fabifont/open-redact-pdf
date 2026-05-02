@@ -36,13 +36,11 @@ use crate::error::{PdfError, PdfResult};
 use crate::types::{PdfDictionary, PdfValue};
 
 /// RSA-PKCS1v15 (rsaEncryption).
-const OID_RSA_ENCRYPTION: ObjectIdentifier =
-    ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.1");
+const OID_RSA_ENCRYPTION: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.1");
 /// RSA-OAEP (id-RSAES-OAEP).
 const OID_RSA_OAEP: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.7");
 /// CMS EnvelopedData content type.
-const OID_ENVELOPED_DATA: ObjectIdentifier =
-    ObjectIdentifier::new_unwrap("1.2.840.113549.1.7.3");
+const OID_ENVELOPED_DATA: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.7.3");
 
 /// Caller-supplied X.509 credential pair. Both buffers are DER-encoded:
 /// the certificate is a standard X.509 v3 cert; the private key is a
@@ -256,12 +254,12 @@ fn try_unwrap_recipient(
             content_info.content_type
         )));
     }
-    let inner_der = content_info.content.to_der().map_err(|err| {
-        PdfError::Corrupt(format!("CMS inner re-encode failed: {err}"))
-    })?;
-    let enveloped = EnvelopedData::from_der(&inner_der).map_err(|err| {
-        PdfError::Corrupt(format!("CMS EnvelopedData decode failed: {err}"))
-    })?;
+    let inner_der = content_info
+        .content
+        .to_der()
+        .map_err(|err| PdfError::Corrupt(format!("CMS inner re-encode failed: {err}")))?;
+    let enveloped = EnvelopedData::from_der(&inner_der)
+        .map_err(|err| PdfError::Corrupt(format!("CMS EnvelopedData decode failed: {err}")))?;
 
     let mut content_encryption_key: Option<Vec<u8>> = None;
     for ri in enveloped.recip_infos.0.iter() {
@@ -296,9 +294,7 @@ fn try_unwrap_recipient(
         .encrypted_content
         .as_ref()
         .ok_or_else(|| {
-            PdfError::Corrupt(
-                "CMS EnvelopedData encryptedContent is missing".to_string(),
-            )
+            PdfError::Corrupt("CMS EnvelopedData encryptedContent is missing".to_string())
         })?
         .as_bytes();
     let iv_param = alg.parameters.as_ref().ok_or_else(|| {
@@ -359,9 +355,8 @@ fn decrypt_cms_inner(
                     $expected_key
                 )));
             }
-            let cipher = <$cipher>::new_from_slice(cek).map_err(|err| {
-                PdfError::Corrupt(format!("AES init failed: {err}"))
-            })?;
+            let cipher = <$cipher>::new_from_slice(cek)
+                .map_err(|err| PdfError::Corrupt(format!("AES init failed: {err}")))?;
             for chunk in ciphertext.chunks(16) {
                 let mut block = GenericArray::clone_from_slice(chunk);
                 cipher.decrypt_block(&mut block);

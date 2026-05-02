@@ -85,14 +85,8 @@ fn serialize_classic(file: &PdfFile) -> Vec<u8> {
 #[derive(Debug, Clone, Copy)]
 enum XrefRow {
     Free,
-    Direct {
-        offset: usize,
-        generation: u16,
-    },
-    InObjStm {
-        stream_objnum: u32,
-        index: u32,
-    },
+    Direct { offset: usize, generation: u16 },
+    InObjStm { stream_objnum: u32, index: u32 },
 }
 
 /// A freshly-built `Type /ObjStm` container. `members` records each
@@ -200,7 +194,15 @@ fn serialize_with_xref_stream(file: &PdfFile) -> Vec<u8> {
     //    rewrite ourselves).
     let mut xref_dict = file.trailer.clone();
     for key in [
-        "Prev", "XRefStm", "Encrypt", "Length", "Filter", "DecodeParms", "W", "Index", "Type",
+        "Prev",
+        "XRefStm",
+        "Encrypt",
+        "Length",
+        "Filter",
+        "DecodeParms",
+        "W",
+        "Index",
+        "Type",
     ] {
         xref_dict.remove(key);
     }
@@ -221,7 +223,8 @@ fn serialize_with_xref_stream(file: &PdfFile) -> Vec<u8> {
     );
 
     // Compress xref body with Flate to match what real producers emit.
-    let compressed_xref = flate_encode(&xref_data).expect("flate_encode is infallible for in-memory buffers");
+    let compressed_xref =
+        flate_encode(&xref_data).expect("flate_encode is infallible for in-memory buffers");
     xref_dict.insert(
         "Length".to_string(),
         PdfValue::Integer(compressed_xref.len() as i64),
@@ -229,9 +232,7 @@ fn serialize_with_xref_stream(file: &PdfFile) -> Vec<u8> {
 
     // 8. Emit xref stream as the final object; capture its offset.
     let startxref = output.len();
-    output.extend_from_slice(
-        format!("{} 0 obj\n", xref_stream_objnum).as_bytes(),
-    );
+    output.extend_from_slice(format!("{} 0 obj\n", xref_stream_objnum).as_bytes());
     output.extend_from_slice(serialize_dictionary(&xref_dict).as_bytes());
     output.extend_from_slice(b"\nstream\n");
     output.extend_from_slice(&compressed_xref);
@@ -244,7 +245,11 @@ fn serialize_with_xref_stream(file: &PdfFile) -> Vec<u8> {
 
 fn write_indirect_object(output: &mut Vec<u8>, object_ref: ObjectRef, object: &PdfObject) {
     output.extend_from_slice(
-        format!("{} {} obj\n", object_ref.object_number, object_ref.generation).as_bytes(),
+        format!(
+            "{} {} obj\n",
+            object_ref.object_number, object_ref.generation
+        )
+        .as_bytes(),
     );
     match object {
         PdfObject::Value(value) => {
@@ -303,12 +308,8 @@ fn pack_objstm_chunk(container_objnum: u32, chunk: &[(ObjectRef, &PdfValue)]) ->
     let mut members: Vec<(ObjectRef, u32)> = Vec::new();
     let mut running_offset = 0usize;
     for (index, (object_ref, value)) in chunk.iter().enumerate() {
-        write!(
-            header,
-            "{} {} ",
-            object_ref.object_number, running_offset
-        )
-        .expect("string writes should succeed");
+        write!(header, "{} {} ", object_ref.object_number, running_offset)
+            .expect("string writes should succeed");
         let serialized = serialize_value(value);
         body_text.push_str(&serialized);
         body_text.push(' ');
@@ -319,8 +320,8 @@ fn pack_objstm_chunk(container_objnum: u32, chunk: &[(ObjectRef, &PdfValue)]) ->
     let first = header_bytes.len();
     let mut decompressed = header_bytes;
     decompressed.extend_from_slice(body_text.as_bytes());
-    let body = flate_encode(&decompressed)
-        .expect("flate_encode is infallible for in-memory buffers");
+    let body =
+        flate_encode(&decompressed).expect("flate_encode is infallible for in-memory buffers");
     PackedObjStm {
         container_objnum,
         body,

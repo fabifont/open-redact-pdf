@@ -345,10 +345,7 @@ fn build_visual_lines(page: &ExtractedPageText) -> Vec<Vec<usize>> {
         let glyph_x = glyph.bbox.x;
 
         let target = clusters.iter_mut().find(|cluster| {
-            let last_x = cluster
-                .indices
-                .last()
-                .map(|i| page.glyphs[*i].bbox.x);
+            let last_x = cluster.indices.last().map(|i| page.glyphs[*i].bbox.x);
             glyph_fits_line(cluster, glyph_center, glyph_height, glyph_x, last_x)
         });
 
@@ -2102,21 +2099,17 @@ fn decode_composite_glyphs(font: &CompositeFont, bytes: &[u8]) -> PdfResult<Vec<
                     // High surrogate: must be followed by a low surrogate.
                     if byte_index + 4 > bytes.len() {
                         return Err(PdfError::Corrupt(
-                            "truncated UTF-16 surrogate pair in composite font string"
-                                .to_string(),
+                            "truncated UTF-16 surrogate pair in composite font string".to_string(),
                         ));
                     }
-                    let low =
-                        u16::from_be_bytes([bytes[byte_index + 2], bytes[byte_index + 3]]);
+                    let low = u16::from_be_bytes([bytes[byte_index + 2], bytes[byte_index + 3]]);
                     if !(0xDC00..=0xDFFF).contains(&low) {
                         return Err(PdfError::Corrupt(
-                            "invalid UTF-16 surrogate pair in composite font string"
-                                .to_string(),
+                            "invalid UTF-16 surrogate pair in composite font string".to_string(),
                         ));
                     }
-                    let scalar = 0x10000u32
-                        + ((u32::from(code) - 0xD800) << 10)
-                        + (u32::from(low) - 0xDC00);
+                    let scalar =
+                        0x10000u32 + ((u32::from(code) - 0xD800) << 10) + (u32::from(low) - 0xDC00);
                     let text = char::from_u32(scalar).unwrap_or('\u{FFFD}').to_string();
                     glyphs.push(DecodedGlyph {
                         text,
@@ -2388,7 +2381,8 @@ mod tests {
             w.insert(1, 1000.0);
             w.insert(2, 500.0);
             w
-        }).expect("identity-h with /W is supported");
+        })
+        .expect("identity-h with /W is supported");
         // Ucs2-H and Utf16H allowed only with empty /W: no way to look up
         // widths for non-CID-keyed encodings.
         reject_unsupported_widths(CompositeEncoding::Ucs2H, &BTreeMap::new())
@@ -2448,7 +2442,11 @@ mod tests {
         font.unicode_map.insert(0xD840, "WRONG".to_string());
         let bytes = [0xD8, 0x40, 0xDC, 0x00, 0x4E, 0x2D];
         let glyphs = decode_composite_glyphs(&font, &bytes).expect("decode");
-        assert_eq!(glyph_text(&glyphs[0]), "\u{20000}", "SMP must skip ToUnicode");
+        assert_eq!(
+            glyph_text(&glyphs[0]),
+            "\u{20000}",
+            "SMP must skip ToUnicode"
+        );
         assert_eq!(glyph_text(&glyphs[1]), "Z", "BMP must use ToUnicode");
     }
 
@@ -2557,7 +2555,10 @@ mod tests {
         let merged = coalesce_match_quads(&quads);
         assert_eq!(merged.len(), 2);
         let first = merged[0].bounding_rect();
-        assert_eq!(first.x, 10.0, "without padding, rect should start at exact glyph boundary");
+        assert_eq!(
+            first.x, 10.0,
+            "without padding, rect should start at exact glyph boundary"
+        );
         assert_eq!(first.max_x(), 18.5, "first two glyphs should be merged");
     }
 

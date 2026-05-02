@@ -22,7 +22,7 @@ type WasmModule = {
   openPdfWithCertificate(
     input: Uint8Array,
     certDer: Uint8Array,
-    privateKeyDer: Uint8Array,
+    privateKeyDer: Uint8Array
   ): PdfHandle;
   getPageCount(handle: PdfHandle): number;
   getPageSize(handle: PdfHandle, pageIndex: number): PageSize;
@@ -126,7 +126,7 @@ export function openPdfWithPassword(input: Uint8Array, password: string): PdfHan
 export function openPdfWithCertificate(
   input: Uint8Array,
   certDer: Uint8Array,
-  privateKeyDer: Uint8Array,
+  privateKeyDer: Uint8Array
 ): PdfHandle {
   return requireWasm().openPdfWithCertificate(input, certDer, privateKeyDer);
 }

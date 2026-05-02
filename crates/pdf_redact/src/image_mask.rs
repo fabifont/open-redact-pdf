@@ -21,7 +21,9 @@
 use jpeg_decoder::{Decoder as JpegDecoder, PixelFormat};
 use jpeg_encoder::{ColorType as JpegColorType, Encoder as JpegEncoder};
 use pdf_graphics::Color;
-use pdf_objects::{PdfDictionary, PdfError, PdfResult, PdfStream, PdfValue, decode_stream, flate_encode};
+use pdf_objects::{
+    PdfDictionary, PdfError, PdfResult, PdfStream, PdfValue, decode_stream, flate_encode,
+};
 
 /// Pixel-space rectangle. `(x, y)` is the top-left corner; `w` and `h`
 /// are the inclusive width and height in pixels. Always clipped to the
@@ -203,9 +205,7 @@ fn mask_raw_or_flate(
     let expected_len = (width as usize)
         .checked_mul(height as usize)
         .and_then(|n| n.checked_mul(components as usize))
-        .ok_or_else(|| {
-            PdfError::Corrupt("Image XObject pixel count overflow".to_string())
-        })?;
+        .ok_or_else(|| PdfError::Corrupt("Image XObject pixel count overflow".to_string()))?;
     if pixels.len() < expected_len {
         return Err(PdfError::Corrupt(format!(
             "Image XObject decoded length {} is less than expected {expected_len}",
@@ -218,7 +218,10 @@ fn mask_raw_or_flate(
     }
     let encoded = flate_encode(&pixels)?;
     let mut new_dict = stream.dict.clone();
-    new_dict.insert("Filter".to_string(), PdfValue::Name("FlateDecode".to_string()));
+    new_dict.insert(
+        "Filter".to_string(),
+        PdfValue::Name("FlateDecode".to_string()),
+    );
     // The new bytes are predictor-free raw pixels; drop any prior
     // /DecodeParms that referenced a predictor, /Columns, /Colors,
     // /BitsPerComponent (PNG/TIFF predictor knobs).
@@ -238,9 +241,9 @@ fn mask_jpeg(
     fill_color: Color,
 ) -> PdfResult<MaskedImage> {
     let mut decoder = JpegDecoder::new(stream.data.as_slice());
-    let mut pixels = decoder.decode().map_err(|err| {
-        PdfError::Unsupported(format!("DCTDecode JPEG decode failed: {err}"))
-    })?;
+    let mut pixels = decoder
+        .decode()
+        .map_err(|err| PdfError::Unsupported(format!("DCTDecode JPEG decode failed: {err}")))?;
     let info = decoder.info().ok_or_else(|| {
         PdfError::Corrupt("JPEG decoder produced bytes but no ImageInfo".to_string())
     })?;
@@ -264,9 +267,7 @@ fn mask_jpeg(
     let expected_len = (width as usize)
         .checked_mul(height as usize)
         .and_then(|n| n.checked_mul(components as usize))
-        .ok_or_else(|| {
-            PdfError::Corrupt("Image XObject pixel count overflow".to_string())
-        })?;
+        .ok_or_else(|| PdfError::Corrupt("Image XObject pixel count overflow".to_string()))?;
     if pixels.len() < expected_len {
         return Err(PdfError::Corrupt(format!(
             "JPEG decode produced {} bytes, expected {expected_len}",
@@ -341,8 +342,8 @@ fn pixel_template(components: u8, fill_color: Color) -> [u8; 4] {
     match components {
         1 => {
             // ITU-R BT.601 luminance.
-            let y = (0.299 * f64::from(r) + 0.587 * f64::from(g) + 0.114 * f64::from(b))
-                .round() as u8;
+            let y =
+                (0.299 * f64::from(r) + 0.587 * f64::from(g) + 0.114 * f64::from(b)).round() as u8;
             [y, 0, 0, 0]
         }
         3 => [r, g, b, 0],
@@ -395,10 +396,7 @@ mod tests {
                 let off = (y * 8 + x) * 3;
                 let inside = (2..6).contains(&x) && (2..6).contains(&y);
                 let expected = if inside { 0u8 } else { 255u8 };
-                assert_eq!(
-                    pixels[off], expected,
-                    "pixel ({x}, {y}) R channel"
-                );
+                assert_eq!(pixels[off], expected, "pixel ({x}, {y}) R channel");
                 assert_eq!(pixels[off + 1], expected);
                 assert_eq!(pixels[off + 2], expected);
             }

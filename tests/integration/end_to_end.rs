@@ -160,11 +160,7 @@ fn type0_ucs2_h_extracts_searches_redacts_cjk_text() {
     assert_eq!(matches.len(), 1, "exactly one match for '中'");
     assert_eq!(matches[0].quads.len(), 1, "match should be a single quad");
 
-    let quads: Vec<[Point; 4]> = matches[0]
-        .quads
-        .iter()
-        .map(|q| q.points)
-        .collect();
+    let quads: Vec<[Point; 4]> = matches[0].quads.iter().map(|q| q.points).collect();
     let report = document
         .apply_redactions(RedactionPlan {
             targets: vec![RedactionTarget::QuadGroup {
@@ -209,13 +205,13 @@ fn type0_utf16_h_handles_surrogate_pair_redaction() {
         .search_text(0, "\u{20000}")
         .expect("search should succeed");
     assert_eq!(matches.len(), 1, "exactly one match for the SMP scalar");
-    assert_eq!(matches[0].quads.len(), 1, "surrogate pair should be a single quad");
+    assert_eq!(
+        matches[0].quads.len(),
+        1,
+        "surrogate pair should be a single quad"
+    );
 
-    let quads: Vec<[Point; 4]> = matches[0]
-        .quads
-        .iter()
-        .map(|q| q.points)
-        .collect();
+    let quads: Vec<[Point; 4]> = matches[0].quads.iter().map(|q| q.points).collect();
     let report = document
         .apply_redactions(RedactionPlan {
             targets: vec![RedactionTarget::QuadGroup {
@@ -1090,8 +1086,8 @@ fn classic_xref_input_saves_as_classic_xref() {
     // Round-trip a classic-xref fixture and confirm the writer keeps
     // emitting a classic xref table (no regression introduced by the
     // new modern-shape path).
-    let document = PdfDocument::open(&fixture("simple-text.pdf"))
-        .expect("classic fixture should open");
+    let document =
+        PdfDocument::open(&fixture("simple-text.pdf")).expect("classic fixture should open");
     let saved = document.save().expect("save should succeed");
     assert!(
         contains_subslice(&saved, b"\nxref\n"),
@@ -1575,7 +1571,9 @@ fn build_partial_image_flate_pdf(width: u32, height: u32) -> Vec<u8> {
     let compressed = encoder.finish().unwrap();
 
     // Image is drawn at user-space (72, 600)..(232, 760) via cm 160 0 0 160 72 600.
-    let content = "q\n160 0 0 160 72 600 cm\n/Im1 Do\nQ\nBT\n/F1 14 Tf\n72 760 Td\n(Above image) Tj\nET\n".to_string();
+    let content =
+        "q\n160 0 0 160 72 600 cm\n/Im1 Do\nQ\nBT\n/F1 14 Tf\n72 760 Td\n(Above image) Tj\nET\n"
+            .to_string();
 
     let mut pdf: Vec<u8> = Vec::new();
     pdf.extend_from_slice(b"%PDF-1.7\n");
@@ -1597,11 +1595,14 @@ fn build_partial_image_flate_pdf(width: u32, height: u32) -> Vec<u8> {
         b"5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>\nendobj\n",
     );
     let image_offset = pdf.len();
-    pdf.extend_from_slice(format!(
-        "6 0 obj\n<< /Type /XObject /Subtype /Image /Width {width} /Height {height} \
+    pdf.extend_from_slice(
+        format!(
+            "6 0 obj\n<< /Type /XObject /Subtype /Image /Width {width} /Height {height} \
          /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /Length {} >>\nstream\n",
-        compressed.len()
-    ).as_bytes());
+            compressed.len()
+        )
+        .as_bytes(),
+    );
     pdf.extend_from_slice(&compressed);
     pdf.extend_from_slice(b"\nendstream\nendobj\n");
 
@@ -1609,7 +1610,12 @@ fn build_partial_image_flate_pdf(width: u32, height: u32) -> Vec<u8> {
     pdf.extend_from_slice(b"xref\n0 7\n");
     pdf.extend_from_slice(b"0000000000 65535 f \n");
     for offset in [
-        catalog_offset, pages_offset, page_offset, content_offset, font_offset, image_offset,
+        catalog_offset,
+        pages_offset,
+        page_offset,
+        content_offset,
+        font_offset,
+        image_offset,
     ] {
         pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
     }
@@ -1637,7 +1643,8 @@ fn build_partial_image_jpeg_pdf(width: u32, height: u32) -> Vec<u8> {
             .unwrap();
     }
 
-    let content = "q\n160 0 0 160 72 600 cm\n/Im1 Do\nQ\nBT\n/F1 14 Tf\n72 760 Td\n(Above image) Tj\nET\n";
+    let content =
+        "q\n160 0 0 160 72 600 cm\n/Im1 Do\nQ\nBT\n/F1 14 Tf\n72 760 Td\n(Above image) Tj\nET\n";
 
     let mut pdf: Vec<u8> = Vec::new();
     pdf.extend_from_slice(b"%PDF-1.7\n");
@@ -1659,11 +1666,14 @@ fn build_partial_image_jpeg_pdf(width: u32, height: u32) -> Vec<u8> {
         b"5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>\nendobj\n",
     );
     let image_offset = pdf.len();
-    pdf.extend_from_slice(format!(
-        "6 0 obj\n<< /Type /XObject /Subtype /Image /Width {width} /Height {height} \
+    pdf.extend_from_slice(
+        format!(
+            "6 0 obj\n<< /Type /XObject /Subtype /Image /Width {width} /Height {height} \
          /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length {} >>\nstream\n",
-        jpeg_bytes.len()
-    ).as_bytes());
+            jpeg_bytes.len()
+        )
+        .as_bytes(),
+    );
     pdf.extend_from_slice(&jpeg_bytes);
     pdf.extend_from_slice(b"\nendstream\nendobj\n");
 
@@ -1671,7 +1681,12 @@ fn build_partial_image_jpeg_pdf(width: u32, height: u32) -> Vec<u8> {
     pdf.extend_from_slice(b"xref\n0 7\n");
     pdf.extend_from_slice(b"0000000000 65535 f \n");
     for offset in [
-        catalog_offset, pages_offset, page_offset, content_offset, font_offset, image_offset,
+        catalog_offset,
+        pages_offset,
+        page_offset,
+        content_offset,
+        font_offset,
+        image_offset,
     ] {
         pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
     }
@@ -1680,9 +1695,7 @@ fn build_partial_image_jpeg_pdf(width: u32, height: u32) -> Vec<u8> {
     pdf
 }
 
-fn page_image_stream(
-    document: &pdf_objects::ParsedDocument,
-) -> &pdf_objects::PdfStream {
+fn page_image_stream(document: &pdf_objects::ParsedDocument) -> &pdf_objects::PdfStream {
     use pdf_objects::{PdfObject, PdfValue};
     let page = &document.pages[0];
     let xobjects_value = page
@@ -1707,10 +1720,16 @@ fn page_image_stream(
 fn decode_flate_image(saved: &[u8]) -> (u32, u32, Vec<u8>) {
     let document = parse_pdf(saved).expect("saved PDF should reopen");
     let stream = page_image_stream(&document);
-    let width = stream.dict.get("Width")
-        .and_then(|v| v.as_integer()).unwrap_or(0) as u32;
-    let height = stream.dict.get("Height")
-        .and_then(|v| v.as_integer()).unwrap_or(0) as u32;
+    let width = stream
+        .dict
+        .get("Width")
+        .and_then(|v| v.as_integer())
+        .unwrap_or(0) as u32;
+    let height = stream
+        .dict
+        .get("Height")
+        .and_then(|v| v.as_integer())
+        .unwrap_or(0) as u32;
     let pixels = pdf_objects::decode_stream(stream).expect("decode image");
     (width, height, pixels)
 }
@@ -1719,10 +1738,16 @@ fn decode_jpeg_image(saved: &[u8]) -> (u32, u32, Vec<u8>) {
     use jpeg_decoder::Decoder;
     let document = parse_pdf(saved).expect("saved PDF should reopen");
     let stream = page_image_stream(&document);
-    let width = stream.dict.get("Width")
-        .and_then(|v| v.as_integer()).unwrap_or(0) as u32;
-    let height = stream.dict.get("Height")
-        .and_then(|v| v.as_integer()).unwrap_or(0) as u32;
+    let width = stream
+        .dict
+        .get("Width")
+        .and_then(|v| v.as_integer())
+        .unwrap_or(0) as u32;
+    let height = stream
+        .dict
+        .get("Height")
+        .and_then(|v| v.as_integer())
+        .unwrap_or(0) as u32;
     let mut decoder = Decoder::new(stream.data.as_slice());
     let pixels = decoder.decode().expect("JPEG decode");
     (width, height, pixels)
@@ -1779,10 +1804,7 @@ fn partial_image_flate_masks_pixels() {
                 let expected_r = (x * 8) as u8;
                 let expected_g = (y * 8) as u8;
                 let expected_b = (x as u8) ^ (y as u8);
-                assert_eq!(
-                    pixels[off], expected_r,
-                    "unmasked pixel ({x},{y}) R drift"
-                );
+                assert_eq!(pixels[off], expected_r, "unmasked pixel ({x},{y}) R drift");
                 assert_eq!(pixels[off + 1], expected_g);
                 assert_eq!(pixels[off + 2], expected_b);
             }
@@ -1880,7 +1902,10 @@ fn full_cover_image_drops_to_n() {
         })
         .expect("redaction should succeed");
     assert_eq!(report.image_draws_masked, 0);
-    assert_eq!(report.image_draws_removed, 1, "image should be fully dropped");
+    assert_eq!(
+        report.image_draws_removed, 1,
+        "image should be fully dropped"
+    );
 }
 
 #[test]
@@ -1995,17 +2020,25 @@ fn partial_image_two_invocations_mask_both_rects() {
         b"5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>\nendobj\n",
     );
     let image_offset = pdf.len();
-    pdf.extend_from_slice(format!(
-        "6 0 obj\n<< /Type /XObject /Subtype /Image /Width {width} /Height {height} \
+    pdf.extend_from_slice(
+        format!(
+            "6 0 obj\n<< /Type /XObject /Subtype /Image /Width {width} /Height {height} \
          /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /Length {} >>\nstream\n",
-        compressed.len()
-    ).as_bytes());
+            compressed.len()
+        )
+        .as_bytes(),
+    );
     pdf.extend_from_slice(&compressed);
     pdf.extend_from_slice(b"\nendstream\nendobj\n");
     let xref_offset = pdf.len();
     pdf.extend_from_slice(b"xref\n0 7\n0000000000 65535 f \n");
     for offset in [
-        catalog_offset, pages_offset, page_offset, content_offset, font_offset, image_offset,
+        catalog_offset,
+        pages_offset,
+        page_offset,
+        content_offset,
+        font_offset,
+        image_offset,
     ] {
         pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
     }
@@ -2115,8 +2148,7 @@ fn form_xobject_redaction_and_partial_image_mask_compose_on_one_page() {
     // Page content: header text outside both targets (y=400, well
     // below the image at y∈[600,760] and far above the form at y≈150),
     // Form Do, image Do.
-    let page_content =
-        "BT\n/F1 18 Tf\n72 400 Td\n(Page Header) Tj\nET\n\
+    let page_content = "BT\n/F1 18 Tf\n72 400 Td\n(Page Header) Tj\nET\n\
          q\n1 0 0 1 50 50 cm\n/Fm1 Do\nQ\n\
          q\n160 0 0 160 72 600 cm\n/Im1 Do\nQ\n";
 
@@ -2143,20 +2175,26 @@ fn form_xobject_redaction_and_partial_image_mask_compose_on_one_page() {
         b"5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>\nendobj\n",
     );
     let form_offset = pdf.len();
-    pdf.extend_from_slice(format!(
-        "6 0 obj\n<< /Type /XObject /Subtype /Form /FormType 1 /BBox [0 0 400 200] \
+    pdf.extend_from_slice(
+        format!(
+            "6 0 obj\n<< /Type /XObject /Subtype /Form /FormType 1 /BBox [0 0 400 200] \
          /Matrix [1 0 0 1 0 100] /Resources << /Font << /F2 8 0 R >> >> \
          /Length {} >>\nstream\n",
-        form_content.len()
-    ).as_bytes());
+            form_content.len()
+        )
+        .as_bytes(),
+    );
     pdf.extend_from_slice(form_content.as_bytes());
     pdf.extend_from_slice(b"\nendstream\nendobj\n");
     let image_offset = pdf.len();
-    pdf.extend_from_slice(format!(
-        "7 0 obj\n<< /Type /XObject /Subtype /Image /Width {width} /Height {height} \
+    pdf.extend_from_slice(
+        format!(
+            "7 0 obj\n<< /Type /XObject /Subtype /Image /Width {width} /Height {height} \
          /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /Length {} >>\nstream\n",
-        compressed.len()
-    ).as_bytes());
+            compressed.len()
+        )
+        .as_bytes(),
+    );
     pdf.extend_from_slice(&compressed);
     pdf.extend_from_slice(b"\nendstream\nendobj\n");
     let form_font_offset = pdf.len();
@@ -2167,8 +2205,14 @@ fn form_xobject_redaction_and_partial_image_mask_compose_on_one_page() {
     let xref_offset = pdf.len();
     pdf.extend_from_slice(b"xref\n0 9\n0000000000 65535 f \n");
     for offset in [
-        catalog_offset, pages_offset, page_offset, content_offset, font_offset,
-        form_offset, image_offset, form_font_offset,
+        catalog_offset,
+        pages_offset,
+        page_offset,
+        content_offset,
+        font_offset,
+        form_offset,
+        image_offset,
+        form_font_offset,
     ] {
         pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
     }
@@ -2245,10 +2289,7 @@ fn form_xobject_redaction_and_partial_image_mask_compose_on_one_page() {
     let document = parse_pdf(&saved).expect("saved PDF should reopen");
     let stream = page_image_stream(&document);
     assert_eq!(
-        stream
-            .dict
-            .get("Subtype")
-            .and_then(|v| v.as_name()),
+        stream.dict.get("Subtype").and_then(|v| v.as_name()),
         Some("Image"),
         "Im1 should still be an Image XObject in the saved PDF"
     );
@@ -2299,7 +2340,13 @@ fn overlay_isolated_from_unbalanced_clipping_path() {
     );
     let xref_offset = pdf.len();
     pdf.extend_from_slice(b"xref\n0 6\n0000000000 65535 f \n");
-    for offset in [catalog_offset, pages_offset, page_offset, content_offset, font_offset] {
+    for offset in [
+        catalog_offset,
+        pages_offset,
+        page_offset,
+        content_offset,
+        font_offset,
+    ] {
         pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
     }
     pdf.extend_from_slice(b"trailer\n<< /Size 6 /Root 1 0 R >>\n");

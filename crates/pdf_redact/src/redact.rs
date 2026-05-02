@@ -175,10 +175,7 @@ pub fn apply_redactions(
         let mut partial_mask_fallback_names: Vec<String> = Vec::new();
         let mut grouped_masks: BTreeMap<
             ObjectRef,
-            (
-                Vec<crate::image_mask::ImagePixelRect>,
-                BTreeSet<String>,
-            ),
+            (Vec<crate::image_mask::ImagePixelRect>, BTreeSet<String>),
         > = BTreeMap::new();
         for mask in &outcome.partial_masks {
             let entry = grouped_masks.entry(mask.original_ref).or_default();
@@ -216,8 +213,7 @@ pub fn apply_redactions(
         let mut neutralized_names = outcome.neutralized_names;
         neutralized_names.extend(partial_mask_fallback_names);
         if !neutralized_names.is_empty() {
-            deferred_xobject_removals
-                .push((page.resources.clone(), neutralized_names));
+            deferred_xobject_removals.push((page.resources.clone(), neutralized_names));
         }
 
         let annotation_removed = if plan.remove_intersecting_annotations {
@@ -509,8 +505,7 @@ fn apply_partial_masks_for_image(
             )));
         }
     };
-    let masked =
-        crate::image_mask::mask_image_region_multi(&stream, pixel_rects, fill_color)?;
+    let masked = crate::image_mask::mask_image_region_multi(&stream, pixel_rects, fill_color)?;
     let new_stream = PdfStream {
         dict: masked.new_dict,
         data: masked.new_data,
@@ -544,8 +539,7 @@ fn rewire_page_xobject(
         .cloned()
         .ok_or_else(|| {
             PdfError::Corrupt(
-                "page resources missing /XObject when applying partial image mask"
-                    .to_string(),
+                "page resources missing /XObject when applying partial image mask".to_string(),
             )
         })?;
     let xobjects_ref = match resources_value {
@@ -564,19 +558,19 @@ fn rewire_page_xobject(
             PdfObject::Value(PdfValue::Dictionary(dict)) => dict.clone(),
             _ => {
                 return Err(PdfError::Corrupt(
-                    "page Resources.XObject reference does not point at a dictionary"
-                        .to_string(),
+                    "page Resources.XObject reference does not point at a dictionary".to_string(),
                 ));
             }
         };
         dict.insert(name.to_string(), PdfValue::Reference(new_ref));
         let new_xobjects_ref = file.allocate_object_ref();
-        file.objects
-            .insert(new_xobjects_ref, PdfObject::Value(PdfValue::Dictionary(dict)));
-        pages[page_index].resources.insert(
-            "XObject".to_string(),
-            PdfValue::Reference(new_xobjects_ref),
+        file.objects.insert(
+            new_xobjects_ref,
+            PdfObject::Value(PdfValue::Dictionary(dict)),
         );
+        pages[page_index]
+            .resources
+            .insert("XObject".to_string(), PdfValue::Reference(new_xobjects_ref));
     } else if let Some(PdfValue::Dictionary(dict)) = pages[page_index].resources.get_mut("XObject")
     {
         dict.insert(name.to_string(), PdfValue::Reference(new_ref));
@@ -1261,18 +1255,17 @@ fn neutralize_image_operations_with_ctm(
                         }
                         .to_quad()
                         .transform(total_transform);
-                        if !targets.iter().any(|target| target.intersects_quad(&image_quad)) {
+                        if !targets
+                            .iter()
+                            .any(|target| target.intersects_quad(&image_quad))
+                        {
                             // No overlap — leave the Do intact.
                             continue;
                         }
                         // Determine whether overlap is partial or full
                         // by mapping the union of intersecting target
                         // quads back into image-space coordinates.
-                        match compute_image_pixel_rect(
-                            dict,
-                            total_transform,
-                            targets,
-                        ) {
+                        match compute_image_pixel_rect(dict, total_transform, targets) {
                             ImageOverlap::Full | ImageOverlap::Unsupported => {
                                 outcome.neutralized_names.push(name.to_string());
                                 operation.operator = "n".to_string();
@@ -1403,8 +1396,7 @@ fn compute_image_pixel_rect(
     }
 
     // Full cover: target AABB contains the entire unit square.
-    let full_cover = u_lo <= 1e-6 && u_hi >= 1.0 - 1e-6
-        && v_lo <= 1e-6 && v_hi >= 1.0 - 1e-6;
+    let full_cover = u_lo <= 1e-6 && u_hi >= 1.0 - 1e-6 && v_lo <= 1e-6 && v_hi >= 1.0 - 1e-6;
     if full_cover {
         return ImageOverlap::Full;
     }
@@ -1412,8 +1404,12 @@ fn compute_image_pixel_rect(
     // PDF Y-up → image Y-down: top of image = v=1, bottom = v=0.
     let x_min = (u_lo * width as f64).floor().clamp(0.0, width as f64) as u32;
     let x_max = (u_hi * width as f64).ceil().clamp(0.0, width as f64) as u32;
-    let y_min = ((1.0 - v_hi) * height as f64).floor().clamp(0.0, height as f64) as u32;
-    let y_max = ((1.0 - v_lo) * height as f64).ceil().clamp(0.0, height as f64) as u32;
+    let y_min = ((1.0 - v_hi) * height as f64)
+        .floor()
+        .clamp(0.0, height as f64) as u32;
+    let y_max = ((1.0 - v_lo) * height as f64)
+        .ceil()
+        .clamp(0.0, height as f64) as u32;
 
     if x_max <= x_min || y_max <= y_min {
         return ImageOverlap::Unsupported;

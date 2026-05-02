@@ -1983,8 +1983,8 @@ mod tests {
             if let PdfObject::Value(PdfValue::Dictionary(dict)) = object {
                 let has_o = dict.contains_key("O");
                 let has_u = dict.contains_key("U");
-                let has_filter_standard = dict.get("Filter").and_then(PdfValue::as_name)
-                    == Some("Standard");
+                let has_filter_standard =
+                    dict.get("Filter").and_then(PdfValue::as_name) == Some("Standard");
                 assert!(
                     !(has_o && has_u && has_filter_standard),
                     "Encrypt dictionary at {} {} survived parse",
@@ -2052,17 +2052,16 @@ mod tests {
         use rsa::{RsaPrivateKey, RsaPublicKey};
         use sha2::Sha256;
         use spki::SubjectPublicKeyInfoOwned;
+        use std::time::Duration;
         use x509_cert::Certificate;
         use x509_cert::attr::AttributeTypeAndValue;
         use x509_cert::builder::{Builder, CertificateBuilder, Profile};
         use x509_cert::name::{Name, RdnSequence, RelativeDistinguishedName};
         use x509_cert::serial_number::SerialNumber;
         use x509_cert::time::Validity;
-        use std::time::Duration;
 
         let mut rng = ChaCha8Rng::from_seed([0x42u8; 32]);
-        let private_key =
-            RsaPrivateKey::new(&mut rng, 2048).expect("RSA-2048 keygen must succeed");
+        let private_key = RsaPrivateKey::new(&mut rng, 2048).expect("RSA-2048 keygen must succeed");
         let public_key = RsaPublicKey::from(&private_key);
         let private_key_der = private_key
             .to_pkcs8_der()
@@ -2077,23 +2076,17 @@ mod tests {
         let cn = AttributeTypeAndValue {
             oid: const_oid::db::rfc4519::CN,
             value: Any::from(
-                &PrintableString::new(b"open-redact-pdf-test-recipient")
-                    .expect("printable string"),
+                &PrintableString::new(b"open-redact-pdf-test-recipient").expect("printable string"),
             ),
         };
-        let rdn_set =
-            SetOfVec::try_from(vec![cn]).expect("rdn set");
+        let rdn_set = SetOfVec::try_from(vec![cn]).expect("rdn set");
         let mut subject = RdnSequence::default();
         subject.0.push(RelativeDistinguishedName::from(rdn_set));
-        let subject_name = Name::from_der(
-            &subject.to_der().expect("subject encode"),
-        )
-        .expect("subject re-decode");
+        let subject_name =
+            Name::from_der(&subject.to_der().expect("subject encode")).expect("subject re-decode");
 
         let signer: SigningKey<Sha256> = SigningKey::new(private_key.clone());
-        let pub_key_der = public_key
-            .to_public_key_der()
-            .expect("RSA public key DER");
+        let pub_key_der = public_key.to_public_key_der().expect("RSA public key DER");
         let pub_key_info =
             SubjectPublicKeyInfoOwned::try_from(pub_key_der.as_bytes()).expect("SPKI from DER");
         let cert_builder = CertificateBuilder::new(
@@ -2114,12 +2107,11 @@ mod tests {
         seed_and_perms[20..24].copy_from_slice(&[0xFFu8, 0xFF, 0xFF, 0xFF]);
 
         // CMS EnvelopedData wrapping (seed || perms) for the recipient.
-        let recipient_identifier = RecipientIdentifier::IssuerAndSerialNumber(
-            IssuerAndSerialNumber {
+        let recipient_identifier =
+            RecipientIdentifier::IssuerAndSerialNumber(IssuerAndSerialNumber {
                 issuer: certificate.tbs_certificate.issuer.clone(),
                 serial_number: certificate.tbs_certificate.serial_number.clone(),
-            },
-        );
+            });
         let recipient_info_builder = KeyTransRecipientInfoBuilder::new(
             recipient_identifier,
             KeyEncryptionInfo::Rsa(public_key.clone()),
@@ -2146,8 +2138,7 @@ mod tests {
             .expect("build_with_rng");
 
         // Wrap in ContentInfo (the outer ASN.1 structure).
-        const ID_ENVELOPED: ObjectIdentifier =
-            ObjectIdentifier::new_unwrap("1.2.840.113549.1.7.3");
+        const ID_ENVELOPED: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.7.3");
         let enveloped_der = enveloped_data.to_der().expect("envelope DER");
         let content_info = ContentInfo {
             content_type: ID_ENVELOPED,
@@ -2231,8 +2222,7 @@ mod tests {
         );
         let content_offset = pdf.len();
         pdf.extend_from_slice(
-            format!("4 0 obj\n<< /Length {} >>\nstream\n", content_cipher.len())
-                .as_bytes(),
+            format!("4 0 obj\n<< /Length {} >>\nstream\n", content_cipher.len()).as_bytes(),
         );
         pdf.extend_from_slice(&content_cipher);
         pdf.extend_from_slice(b"\nendstream\nendobj\n");
@@ -2244,24 +2234,30 @@ mod tests {
 
         let encrypt_offset = pdf.len();
         if v_value == 5 {
-            pdf.extend_from_slice(format!(
-                "6 0 obj\n<< /Filter /Adobe.PubSec /SubFilter /{sub_filter_str} \
+            pdf.extend_from_slice(
+                format!(
+                    "6 0 obj\n<< /Filter /Adobe.PubSec /SubFilter /{sub_filter_str} \
                  /V {v_value} /R {r_value} /Length {length_bits} \
                  /CF << /DefaultCryptFilter << /CFM /{cfm_name} /Length 32 \
                  /AuthEvent /DocOpen /Recipients [{blob_hex_string}] >> >> \
                  /StmF /DefaultCryptFilter /StrF /DefaultCryptFilter \
                  /EncryptMetadata true >>\nendobj\n"
-            ).as_bytes());
+                )
+                .as_bytes(),
+            );
         } else {
             // V=4 stores /Recipients at the top level, not per-CF.
-            pdf.extend_from_slice(format!(
-                "6 0 obj\n<< /Filter /Adobe.PubSec /SubFilter /{sub_filter_str} \
+            pdf.extend_from_slice(
+                format!(
+                    "6 0 obj\n<< /Filter /Adobe.PubSec /SubFilter /{sub_filter_str} \
                  /V {v_value} /R {r_value} /Length {length_bits} \
                  /CF << /DefaultCryptFilter << /CFM /{cfm_name} /Length 16 \
                  /AuthEvent /DocOpen >> >> \
                  /StmF /DefaultCryptFilter /StrF /DefaultCryptFilter \
                  /Recipients [{blob_hex_string}] /EncryptMetadata true >>\nendobj\n"
-            ).as_bytes());
+                )
+                .as_bytes(),
+            );
         }
 
         let xref_offset = pdf.len();
@@ -2329,28 +2325,27 @@ mod tests {
         // Build a fixture for one keypair, then attempt to open with a
         // different keypair's cert. The right blob is present in the
         // PDF but no recipient matches the supplied cert / key.
+        use der::asn1::{Any, PrintableString, SetOfVec};
+        use der::{Decode, Encode};
         use rand_chacha::ChaCha8Rng;
         use rand_core::SeedableRng;
+        use rsa::RsaPrivateKey;
         use rsa::pkcs1v15::SigningKey;
         use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey};
-        use rsa::RsaPrivateKey;
         use sha2::Sha256;
         use spki::SubjectPublicKeyInfoOwned;
+        use std::time::Duration;
         use x509_cert::attr::AttributeTypeAndValue;
         use x509_cert::builder::{Builder, CertificateBuilder, Profile};
         use x509_cert::name::{Name, RdnSequence, RelativeDistinguishedName};
         use x509_cert::serial_number::SerialNumber;
         use x509_cert::time::Validity;
-        use der::asn1::{Any, PrintableString, SetOfVec};
-        use der::{Decode, Encode};
-        use std::time::Duration;
 
         let fixture = build_pubsec_encrypted_pdf("adbe.pkcs7.s5");
 
         // Different seed → different keypair.
         let mut rng = ChaCha8Rng::from_seed([0x99u8; 32]);
-        let other_private =
-            RsaPrivateKey::new(&mut rng, 2048).expect("other RSA-2048 keygen");
+        let other_private = RsaPrivateKey::new(&mut rng, 2048).expect("other RSA-2048 keygen");
         let other_public = rsa::RsaPublicKey::from(&other_private);
         let other_pkcs8 = other_private
             .to_pkcs8_der()
@@ -2360,27 +2355,23 @@ mod tests {
 
         let cn = AttributeTypeAndValue {
             oid: const_oid::db::rfc4519::CN,
-            value: Any::from(
-                &PrintableString::new(b"unrelated-cert").expect("printable string"),
-            ),
+            value: Any::from(&PrintableString::new(b"unrelated-cert").expect("printable string")),
         };
         let rdn_set = SetOfVec::try_from(vec![cn]).expect("rdn set");
         let mut subject = RdnSequence::default();
         subject.0.push(RelativeDistinguishedName::from(rdn_set));
-        let subject_name = Name::from_der(&subject.to_der().expect("subject encode"))
-            .expect("subject re-decode");
+        let subject_name =
+            Name::from_der(&subject.to_der().expect("subject encode")).expect("subject re-decode");
         let signer: SigningKey<Sha256> = SigningKey::new(other_private.clone());
         let other_pub_der = other_public
             .to_public_key_der()
             .expect("RSA public key DER");
         let pub_key_info =
-            SubjectPublicKeyInfoOwned::try_from(other_pub_der.as_bytes())
-                .expect("SPKI from DER");
+            SubjectPublicKeyInfoOwned::try_from(other_pub_der.as_bytes()).expect("SPKI from DER");
         let cert_builder = CertificateBuilder::new(
             Profile::Root,
             SerialNumber::from(0x55u32),
-            Validity::from_now(Duration::from_secs(3600 * 24 * 30))
-                .expect("validity"),
+            Validity::from_now(Duration::from_secs(3600 * 24 * 30)).expect("validity"),
             subject_name,
             pub_key_info,
             &signer,
